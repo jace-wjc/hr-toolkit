@@ -702,34 +702,46 @@ def _append_sheet_rows(ws: Worksheet, rows: list[ChangeRow]) -> dict[str, int]:
     # ws.max_row 每次都要遍历全部单元格求最大行号，循环里反复取同样会退化成
     # O(行数²)；这里只在进入循环前取一次，之后按写入行数自行递增。
     sheet_max_row = ws.max_row
-    for row in rows:
-        row_key = _change_key_from_source(row, layout)
-        if row_key and row_key in existing:
-            if _merge_existing_change_row(ws, layout, existing[row_key], row):
-                updated_count += 1
-            else:
-                skipped_count += 1
-            continue
-        target_row, sheet_max_row = _next_summary_write_row(
-            ws, layout, search_from=blank_cursor, max_row=sheet_max_row
-        )
-        blank_cursor = target_row + 1
-        # 插入新行后，更新 layout 的 footer_start_row
-        if target_row >= layout.footer_start_row:
-            layout = ChangeSheetLayout(
-                sheet_name=layout.sheet_name,
-                header_row=layout.header_row,
-                data_start_row=layout.data_start_row,
-                footer_start_row=layout.footer_start_row + 1,
-                max_column=layout.max_column,
-                headers=layout.headers,
+    original_max_row = sheet_max_row
+    footer_start_row = layout.footer_start_row
+    # 表尾暂存后，新增行可以直接追加；最后按实际新增量只移动一次表尾。
+    # 不预估 len(rows)：更新、跳过和批内重复都必须继续走原有逐条判定。
+    footer_cells = {}
+    if footer_start_row <= sheet_max_row:
+        footer_cells = {key: cell for key, cell in ws._cells.items() if key[0] >= footer_start_row}
+        for key in footer_cells:
+            del ws._cells[key]
+        sheet_max_row = footer_start_row - 1
+    try:
+        for row in rows:
+            row_key = _change_key_from_source(row, layout)
+            if row_key and row_key in existing:
+                if _merge_existing_change_row(ws, layout, existing[row_key], row):
+                    updated_count += 1
+                else:
+                    skipped_count += 1
+                continue
+            target_row, sheet_max_row = _next_summary_write_row(
+                ws, layout, search_from=blank_cursor, max_row=sheet_max_row
             )
-        _write_change_row(ws, layout, target_row, row)
-        # 将新插入的行添加到 existing 索引中
-        new_key = _change_key_from_target(ws, layout, target_row, row.sheet_name)
-        if new_key:
-            existing[new_key] = target_row
-        inserted_count += 1
+            blank_cursor = target_row + 1
+            if target_row >= layout.footer_start_row:
+                layout = replace(layout, footer_start_row=layout.footer_start_row + 1)
+            _write_change_row(ws, layout, target_row, row)
+            # 将新插入的行添加到 existing 索引中
+            new_key = _change_key_from_target(ws, layout, target_row, row.sheet_name)
+            if new_key:
+                existing[new_key] = target_row
+            inserted_count += 1
+    finally:
+        # 与 insert_rows 一致：仅移动单元格，不另改公式引用、合并范围或行高。
+        # 即使写入失败，也不能让调用者持有的工作表丢失表尾。
+        if footer_cells:
+            offset = layout.footer_start_row - footer_start_row
+            for (row_index, col_index), cell in footer_cells.items():
+                cell.row = row_index + offset
+                ws._cells[(cell.row, col_index)] = cell
+            ws._current_row = original_max_row + offset
     _renumber_summary_sheet(ws, layout)
     return {"inserted_count": inserted_count, "updated_count": updated_count, "skipped_count": skipped_count}
 

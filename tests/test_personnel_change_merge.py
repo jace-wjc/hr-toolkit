@@ -4,13 +4,82 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 
 from hr_toolkit.tools.personnel_change_merge import merge_personnel_changes, update_roster_from_change_summaries
+from hr_toolkit.tools import personnel_change_merge as changes
 
 
 class PersonnelChangeMergeTest(unittest.TestCase):
+    def test_footer_moves_only_for_actual_overflow_after_duplicate_updates(self) -> None:
+        from openpyxl.comments import Comment
+        from openpyxl.styles import PatternFill
+        from hr_toolkit.common import excel
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "增员"
+        ws.append(["序号", "姓名", "身份证号码", "入职日期", "备注", "出生日期", "年龄"])
+        ws.append([1, "原有甲", "110101199001010001", "2026-04-01"])
+        ws.append([2])
+        ws.append([3, "原有乙", "110101199001010002", "2026-04-01", "原备注"])
+        ws.append(["制表人：测试"])
+        ws["H6"] = "=SUM(A2:A4)"
+        ws["H6"].comment = Comment("保留表尾批注", "测试")
+        ws["H6"].hyperlink = "https://example.com/footer"
+        ws.row_dimensions[5].height = 31
+        ws["B3"].fill = PatternFill("solid", fgColor="FF00FF00")
+        ws["B4"].fill = PatternFill("solid", fgColor="FF0000FF")
+
+        def row(index, remark=None):
+            return changes.ChangeRow("增员", "2026-04", {
+                "姓名": "原有甲" if index == 1 else f"新增{index}",
+                "身份证号码": f"11010119900101{index:04d}",
+                "入职日期": "2026-04-01", "备注": remark,
+            }, "测试.xlsx", index)
+
+        with patch.object(excel, "_shift_cells", wraps=excel._shift_cells) as shift:
+            result = changes._append_sheet_rows(ws, [
+                row(1, "补齐"), row(3), row(3, "补录"), row(4), row(4), row(5), row(1, "补齐"),
+            ])
+        self.assertEqual(result, {"inserted_count": 3, "updated_count": 2, "skipped_count": 2})
+        self.assertLessEqual(shift.call_count, 1, "表尾追加不能逐行扫描整表")
+        self.assertEqual([ws.cell(i, 2).value for i in range(2, 7)], ["原有甲", "新增3", "原有乙", "新增4", "新增5"])
+        self.assertEqual(ws["E2"].value, "补齐")
+        self.assertEqual(ws["E3"].value, "补录")
+        self.assertEqual(ws["B3"].fill.fgColor.rgb, "FF00FF00")
+        self.assertEqual(ws["B5"].fill.fgColor.rgb, "FF0000FF")
+        self.assertEqual(ws["B6"].fill.fgColor.rgb, "FF0000FF")
+        self.assertIn("C6", ws["F6"].value)
+        self.assertEqual(ws["A7"].value, "制表人：测试")
+        self.assertEqual(ws["H8"].value, "=SUM(A2:A4)")
+        self.assertEqual(ws["H8"].comment.text, "保留表尾批注")
+        self.assertEqual(ws["H8"].hyperlink.target, "https://example.com/footer")
+        # 原来的逐行插入会从上一数据行复制行高，并不移动表尾行高定义。
+        self.assertEqual(ws.row_dimensions[5].height, ws.row_dimensions[4].height)
+        self.assertNotIn(7, ws.row_dimensions)
+        ws.append(["追加检查"])
+        self.assertEqual(ws["A9"].value, "追加检查")
+        wb.close()
+
+    def test_failed_append_restores_footer_cells(self) -> None:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "增员"
+        ws.append(["序号", "姓名", "身份证号码"])
+        ws.append([1, "原有", "110101199001010001"])
+        ws.append(["制表人：测试"])
+        row = changes.ChangeRow("增员", "2026-04", {"姓名": "新增"}, "测试.xlsx", 2)
+        with patch.object(changes, "_write_change_row", side_effect=ValueError("无效单元格")):
+            with self.assertRaisesRegex(ValueError, "无效单元格"):
+                changes._append_sheet_rows(ws, [row])
+        self.assertEqual(ws["A4"].value, "制表人：测试")
+        ws.append(["追加检查"])
+        self.assertEqual(ws["A5"].value, "追加检查")
+        wb.close()
+
     def test_merge_multiple_project_change_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
