@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -37,9 +38,18 @@ class RunRequest:
     tool_name: str
     group_name: str
     description: str
-    function: Callable[..., Any]
+    function: Callable[..., Any] | None
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
+    function_module: str = ""
+    function_name: str = ""
+
+    def resolved(self) -> "RunRequest":
+        """Resolve heavy tool imports in the coordinator's worker thread."""
+        if self.function is not None:
+            return self
+        module = importlib.import_module(self.function_module)
+        return replace(self, function=getattr(module, self.function_name))
 
 
 @dataclass(frozen=True)
@@ -145,6 +155,7 @@ class ProjectRunCoordinator:
         cancel_event: threading.Event,
         callbacks: RunCallbacks,
     ) -> tuple[dict[str, Any], bool]:
+        request = request.resolved()
         call_kwargs = dict(kwargs)
         call_kwargs.pop("cancelled", None)
         call_kwargs.pop("progress_callback", None)
@@ -227,6 +238,11 @@ class ProjectRunCoordinator:
         started = False
         batch_id: str | None = None
         try:
+            if cancel_event.is_set():
+                raise BusinessProcessCancelled("本次处理已停止。")
+            request = request.resolved()
+            if cancel_event.is_set():
+                raise BusinessProcessCancelled("本次处理已停止。")
             sources, _parameters, _legacy_output = context_from_call(
                 request.function,
                 request.args,

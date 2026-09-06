@@ -7,6 +7,7 @@ import faulthandler
 import os
 from pathlib import Path
 import sys
+import tempfile
 import traceback
 
 from hr_toolkit.runtime_checks import CHECK_OUTPUT_ENV, _emit
@@ -39,6 +40,14 @@ def run() -> int:
         try:
             mark_stage("qt-import")
             from .main import main
+            from .controller import AppController
+
+            # A packaging check must not reopen the user's last project or
+            # rewrite their preferences. Use the same GUI with empty settings.
+            settings_root = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix="hr_qt_smoke_")))
+            original_settings = AppController.__dict__["_settings_path"]
+            AppController._settings_path = staticmethod(lambda: settings_root / "workspace-ui.json")
+            cleanup.callback(setattr, AppController, "_settings_path", original_settings)
 
             result = int(main())
         except Exception:

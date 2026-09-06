@@ -710,6 +710,37 @@ def _invalidate_changed_pdf_backend_entries(data: dict[str, Any]) -> int:
     return removed_count
 
 
+def _write_ocr_cache_json(handle, data: dict[str, Any]) -> None:
+    """Use the C JSON encoder per entry, without a second cache-sized string.
+
+    json.dump iterates in Python for every token. Encoding bounded entries
+    retains the exact compact JSON format and limits the write buffer to 64 KiB
+    plus one entry (the cache's existing text limit still applies).
+    """
+    encode = json.JSONEncoder(ensure_ascii=False, separators=(",", ":")).encode
+    handle.write("{")
+    for index, (key, value) in enumerate(data.items()):
+        handle.write(("," if index else "") + encode(key) + ":")
+        if key not in {"entries", "paths"} or not isinstance(value, dict):
+            handle.write(encode(value))
+            continue
+        handle.write("{")
+        chunks = []
+        buffered = 0
+        for item_index, (item_key, item_value) in enumerate(value.items()):
+            chunk = ("," if item_index else "") + encode(item_key) + ":" + encode(item_value)
+            chunks.append(chunk)
+            buffered += len(chunk)
+            if buffered >= 65536:
+                handle.write("".join(chunks))
+                chunks.clear()
+                buffered = 0
+        if chunks:
+            handle.write("".join(chunks))
+        handle.write("}")
+    handle.write("}\n")
+
+
 def _save_ocr_cache(cache_path: Path, data: dict[str, Any]) -> bool:
     """原子写缓存：tmp + os.replace；返回是否成功。
 
@@ -729,22 +760,28 @@ def _save_ocr_cache(cache_path: Path, data: dict[str, Any]) -> bool:
     tmp_path = cache_path.with_name(
         f".{cache_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
     )
+    temporary_created = False
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         if cache_path.parent.is_symlink():
             _clear_ocr_memory_cache(cache_path)
             return False
         with tmp_path.open("x", encoding="utf-8") as temp_file:
+            temporary_created = True
             # This is an internal machine cache rather than a user document.
             # Compact separators reduce repeated checkpoint I/O without
             # changing keys, values, migration, or atomic replacement.
-            json.dump(data, temp_file, ensure_ascii=False, separators=(",", ":"))
-            temp_file.write("\n")
+            _write_ocr_cache_json(temp_file, data)
         try:
             tmp_path.chmod(0o600)
         except OSError:
             pass
     except (FileExistsError, OSError):
+        if temporary_created:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         _clear_ocr_memory_cache(cache_path)
         return False
 
@@ -3313,19 +3350,28 @@ def _extract_flat_document_text(
     return ""
 
 
-def _classify_material_from_filename(filename: str, requested_types: list[str]) -> tuple[str | None, str]:
-    """正文无法判型时，仅用文件名补充材料类型；绝不以文件名判断人员。"""
-    stem = Path(filename).stem.casefold()
+@lru_cache(maxsize=64)
+def _filename_material_tokens(requested_types: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """Compile the existing ordered rules once per requested material set."""
     types = list(dict.fromkeys([*requested_types, *MATERIAL_SYNONYMS.keys()]))
     weak_tokens = {"id", "a面", "b面", "正", "反", "照片", "证件"}
+    tokens = []
     for material in sorted(types, key=len, reverse=True):
         synonyms = MATERIAL_SYNONYMS.get(material, [material])
         for synonym in sorted(synonyms, key=len, reverse=True):
             token = synonym.strip().casefold()
             if not token or token in weak_tokens or len(token) < 2:
                 continue
-            if token in stem:
-                return material, "filename_material_only"
+            tokens.append((material, token))
+    return tuple(tokens)
+
+
+def _classify_material_from_filename(filename: str, requested_types: list[str]) -> tuple[str | None, str]:
+    """正文无法判型时，仅用文件名补充材料类型；绝不以文件名判断人员。"""
+    stem = Path(filename).stem.casefold()
+    for material, token in _filename_material_tokens(tuple(requested_types)):
+        if token in stem:
+            return material, "filename_material_only"
     return None, ""
 
 

@@ -1,6 +1,8 @@
 """Collect only the Qt Quick modules used by HRToolkit's QML scene."""
 
 from PyInstaller.utils.hooks.qt import add_qt6_dependencies, pyside6_library_info
+from pathlib import Path
+import runpy
 
 
 def _required_qml_entry(entry):
@@ -23,6 +25,7 @@ def _required_qml_entry(entry):
 
 
 hiddenimports, binaries, datas = add_qt6_dependencies(__file__)
-_qml_binaries, _qml_datas = pyside6_library_info.collect_qtqml_files()
+_collect = runpy.run_path(str(Path(__file__).with_name("qml_payload.py")))["collect_required_qml_files"]
+_qml_binaries, _qml_datas = _collect(pyside6_library_info, _required_qml_entry)
 binaries += [entry for entry in _qml_binaries if _required_qml_entry(entry)]
 datas += [entry for entry in _qml_datas if _required_qml_entry(entry)]

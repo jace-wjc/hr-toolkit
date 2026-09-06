@@ -74,6 +74,7 @@ def ensure_build_dependencies() -> None:
 
 def _run(command: Sequence[str], *, cwd: Path = REPO_ROOT, capture: bool = False) -> subprocess.CompletedProcess:
     print("执行：" + " ".join(str(part) for part in command))
+    started = time.perf_counter()
     result = subprocess.run(
         list(command),
         cwd=str(cwd),
@@ -82,6 +83,7 @@ def _run(command: Sequence[str], *, cwd: Path = REPO_ROOT, capture: bool = False
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE if capture else None,
     )
+    print(f"步骤耗时：{time.perf_counter() - started:.3f} 秒")
     if result.returncode != 0:
         detail = ""
         if capture:
@@ -119,12 +121,12 @@ def _run_hdiutil_with_busy_retry(
     raise AssertionError("unreachable")
 
 
-def _safe_clean_directory(path: Path) -> None:
+def _safe_clean_directory(path: Path, *, clean: bool = True) -> None:
     resolved = path.resolve()
     allowed_root = (REPO_ROOT / "build").resolve()
     if resolved == allowed_root or allowed_root not in resolved.parents:
         raise MacBuildError(f"拒绝清理非 build 子目录：{resolved}")
-    if resolved.exists():
+    if clean and resolved.exists():
         shutil.rmtree(resolved)
     resolved.mkdir(parents=True, exist_ok=True)
 
@@ -210,6 +212,9 @@ a = Analysis(
     hookspath=[{str(QT_HOOKS_DIR)!r}],
     hooksconfig={{}},
     excludes=[
+        # PyInstaller 6.21 adds this to the same list during analysis. Supply
+        # its implicit exclusion up front so the next build's cache key matches.
+        "__main__",
         "pytest",
         "unittest",
         "test",
@@ -397,6 +402,7 @@ def build_macos(
     work_dir: Path,
     codesign_identity: Optional[str] = None,
     entitlements_file: Optional[Path] = None,
+    clean: bool = True,
 ) -> Path:
     if sys.platform != "darwin":
         raise MacBuildError("macOS .app/DMG 必须在 macOS 上构建")
@@ -424,7 +430,7 @@ def build_macos(
     if entitlements_file is not None and not entitlements_file.is_file():
         raise MacBuildError(f"签名 entitlements 文件不存在：{entitlements_file}")
 
-    _safe_clean_directory(work_dir)
+    _safe_clean_directory(work_dir, clean=clean)
     pyinstaller_build = work_dir / "pyinstaller-build"
     pyinstaller_dist = work_dir / "pyinstaller-dist"
     iconset_dir = work_dir / "HRToolkit.iconset"
@@ -447,7 +453,7 @@ def build_macos(
             "-m",
             "PyInstaller",
             "--noconfirm",
-            "--clean",
+            *(["--clean"] if clean else []),
             "--workpath",
             str(pyinstaller_build),
             "--distpath",
@@ -496,6 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--architecture", choices=ARCHITECTURES, default="universal2")
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "dist" / "release-assets")
     parser.add_argument("--work-dir", type=Path, help="必须位于仓库 build/ 下")
+    parser.add_argument("--incremental", action="store_true", help="本地重复构建复用 PyInstaller 缓存；发布默认仍为完整清理构建")
     parser.add_argument(
         "--codesign-identity",
         default=os.environ.get("MACOS_CODESIGN_IDENTITY") or None,
@@ -519,6 +526,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         work_dir=work_dir,
         codesign_identity=args.codesign_identity,
         entitlements_file=args.entitlements_file,
+        clean=not args.incremental,
     )
     print(f"已生成 macOS 安装包：{dmg_path}")
     return 0

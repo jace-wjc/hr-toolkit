@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import calendar
+from collections import deque
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -146,6 +147,9 @@ class AppController(QObject):
     _trashActionFinished = Signal(bool, str)
     _updateResult = Signal(str, object)
     _updateProgressIncoming = Signal(int, int)
+    _inputItemsReady = Signal(int, object)
+    _invocationReady = Signal(object, object, bool)
+    _startupReady = Signal(object, object, object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -157,6 +161,11 @@ class AppController(QObject):
         self._support_states: dict[tuple[str, str], str] = {}
         self._form_revision = 0
         self._input_model = InputFileModel(self)
+        self._input_generation = 0
+        self._input_metadata: dict[Path, dict[str, Any]] = {}
+        self._input_scan_lock = threading.Lock()
+        self._input_scan_pending = None
+        self._input_scan_running = False
         self._log_model = LogModel(self)
         self._log_buffer: list[dict[str, Any]] = []
         self._log_flush_timer = QTimer(self)
@@ -168,6 +177,13 @@ class AppController(QObject):
         self._trash_model = TrashModel(self)
         self._workspace_items: list[dict[str, Any]] = []
         self._workspace_child_loads: set[str] = set()
+        self._workspace_read_lock = threading.Lock()
+        self._workspace_read_jobs = deque()
+        self._workspace_read_workers = 0
+        try:
+            self._workspace_read_limit = max(1, min(4, int(os.environ.get("HR_TOOLKIT_SCAN_WORKERS", "2"))))
+        except ValueError:
+            self._workspace_read_limit = 2
         self._workspace_generation = 0
         self._workspace_scope = "all"
         self._workspace_search = ""
@@ -191,6 +207,8 @@ class AppController(QObject):
         self._run_progress_elapsed = 0
         self._run_progress_wait = 0
         self._run_progress_pending: tuple[int, int, str] | None = None
+        self._incoming_progress_lock = threading.Lock()
+        self._incoming_progress = None
         self._run_coordinator = ProjectRunCoordinator()
         self._preview_cancel_event: threading.Event | None = None
         self._pending_preview: dict[str, Any] | None = None
@@ -213,6 +231,8 @@ class AppController(QObject):
         self._last_run_by_key: dict[tuple[str, str], tuple[str, bool]] = {}
         self._original_switch_interval: float | None = None
         self._closed = False
+        self._startup_loading = False
+        self._startup_cancelled = False
         self._material_preferences = MaterialPreferences()
         self._material_preset_name = ""
         self._history_store: HistoryStore | None = None
@@ -268,6 +288,9 @@ class AppController(QObject):
         self._trashActionFinished.connect(self._apply_trash_action)
         self._updateResult.connect(self._apply_update_result)
         self._updateProgressIncoming.connect(self._apply_update_progress)
+        self._inputItemsReady.connect(self._apply_input_items)
+        self._invocationReady.connect(self._apply_invocation)
+        self._startupReady.connect(self._apply_startup)
 
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -282,6 +305,9 @@ class AppController(QObject):
         self._run_progress_flush_timer.setSingleShot(True)
         self._run_progress_flush_timer.setInterval(100)
         self._run_progress_flush_timer.timeout.connect(self._flush_material_progress)
+        self._incoming_progress_timer = QTimer(self)
+        self._incoming_progress_timer.setInterval(100)
+        self._incoming_progress_timer.timeout.connect(self._drain_run_progress)
 
     def _state_key(self) -> tuple[str, str]:
         return self._spec.nav_id, self._spec.variant
@@ -1016,19 +1042,65 @@ class AppController(QObject):
         self._sync_input_model()
 
     def _sync_input_model(self) -> None:
-        items = []
-        for path in self._input_states[self._state_key()]:
-            is_dir = path.is_dir()
-            detail = "文件夹" if is_dir else path.suffix.lower().lstrip(".").upper() or "文件"
-            items.append(
-                {
-                    "name": path.name or str(path),
-                    "path": str(path),
+        # A virtual view still freezes if its model calls stat() on the GUI
+        # thread. Show cached labels immediately and refresh disk metadata in
+        # one worker. Rapid tab switches replace the pending request.
+        paths = tuple(self._input_states[self._state_key()])
+        retained = {path for values in self._input_states.values() for path in values}
+        self._input_metadata = {path: item for path, item in self._input_metadata.items() if path in retained}
+        self._input_generation += 1
+        generation = self._input_generation
+        self._input_model.set_items(
+            self._input_metadata.get(path) or {
+                "name": path.name or str(path), "path": str(path),
+                "kind": "file", "detail": path.suffix.lstrip(".").upper() or "文件",
+            }
+            for path in paths
+        )
+        with self._input_scan_lock:
+            self._input_scan_pending = (generation, paths) if paths else None
+            if not paths or self._input_scan_running:
+                return
+            self._input_scan_running = True
+        threading.Thread(target=self._scan_input_metadata, daemon=True,
+                         name="HRToolkit-input-metadata").start()
+
+    def _scan_input_metadata(self) -> None:
+        while True:
+            with self._input_scan_lock:
+                request = self._input_scan_pending
+                self._input_scan_pending = None
+                if request is None or self._closed:
+                    self._input_scan_running = False
+                    return
+            generation, paths = request
+            items = []
+            for path in paths:
+                if self._closed or generation != self._input_generation:
+                    break
+                try:
+                    is_dir = path.is_dir()
+                except OSError:
+                    is_dir = False
+                items.append({
+                    "name": path.name or str(path), "path": str(path),
                     "kind": "folder" if is_dir else "file",
-                    "detail": detail,
-                }
-            )
-        self._input_model.set_items(items)
+                    "detail": "文件夹" if is_dir else path.suffix.lstrip(".").upper() or "文件",
+                })
+            else:
+                if not self._closed:
+                    self._inputItemsReady.emit(generation, items)
+
+    @Slot(int, object)
+    def _apply_input_items(self, generation: int, items: list[dict[str, Any]]) -> None:
+        if self._closed or generation != self._input_generation:
+            return
+        retained = {path for paths in self._input_states.values() for path in paths}
+        self._input_metadata = {path: item for path, item in self._input_metadata.items() if path in retained}
+        self._input_metadata.update((Path(item["path"]), item) for item in items)
+        # Avoid destroying/recreating visible delegates when labels are unchanged.
+        if items != self._input_model.items():
+            self._input_model.set_items(items)
 
     @Slot(int)
     def removeInput(self, index: int) -> None:
@@ -1224,6 +1296,15 @@ class AppController(QObject):
 
     @Slot()
     def start(self) -> None:
+        if self._startup_loading or self._closed:
+            return
+        self._startup_loading = True
+        self._startup_cancelled = False
+        self._set_busy(True)
+        threading.Thread(target=self._load_startup, daemon=True,
+                         name="HRToolkit-startup-settings").start()
+
+    def _load_startup(self) -> None:
         state: dict[str, Any] = {}
         path = self._settings_path()
         try:
@@ -1234,19 +1315,41 @@ class AppController(QObject):
         except Exception as exc:
             runlog.log_exception("读取项目界面设置失败", exc)
         recent = []
-        for value in state.get("recent_projects", []):
-            candidate = Path(str(value)).expanduser()
-            if candidate.is_dir() and candidate not in recent:
-                recent.append(candidate)
-        self._recent_projects = recent[:8]
+        candidates = state.get("recent_projects", [])
+        for value in candidates if isinstance(candidates, list) else []:
+            if self._closed or self._shutdown_requested or self._startup_cancelled:
+                break
+            try:
+                candidate = Path(str(value)).expanduser()
+                if candidate.is_dir() and candidate not in recent:
+                    recent.append(candidate)
+            except (OSError, ValueError):
+                continue
+        last_dir = None
         raw_last_dir = state.get("last_selected_dir")
-        if raw_last_dir:
+        if raw_last_dir and not self._startup_cancelled:
             try:
                 candidate = Path(str(raw_last_dir)).expanduser().absolute()
                 if candidate.is_dir():
-                    self._last_selected_dir = candidate
+                    last_dir = candidate
             except Exception:
                 pass
+        self._startupReady.emit(state, recent[:8], last_dir)
+
+    @Slot(object, object, object)
+    def _apply_startup(self, state: dict[str, Any], recent: list[Path], last_dir) -> None:
+        if self._closed or self._shutdown_requested:
+            self._set_busy(False)
+            return
+        self._startup_loading = False
+        self._set_busy(False)
+        self._recent_projects = recent
+        if self._startup_cancelled:
+            # A cancelled disk check must not discard unexamined history.
+            candidates = state.get("recent_projects", [])
+            if isinstance(candidates, list):
+                self._recent_projects = [Path(str(value)).expanduser() for value in candidates][:8]
+        self._last_selected_dir = last_dir
         self._material_preferences = MaterialPreferences.from_payload(
             state.get("material_preferences")
         )
@@ -1269,7 +1372,7 @@ class AppController(QObject):
         self.materialChanged.emit()
         self.projectChanged.emit()
         current = state.get("current_project")
-        if current:
+        if current and not self._startup_cancelled:
             self.openProject(str(current))
         threading.Thread(
             target=cleanup_stale_update_files,
@@ -1280,6 +1383,10 @@ class AppController(QObject):
             QTimer.singleShot(600, self.requestStartupUpdateCheck)
 
     def _save_workspace_preferences(self) -> bool:
+        # Closing while a disconnected recent path is being checked must not
+        # overwrite the unread settings with this controller's defaults.
+        if self._startup_loading:
+            return False
         path = self._settings_path()
         payload: dict[str, Any] = {}
         try:
@@ -1372,13 +1479,20 @@ class AppController(QObject):
         )
 
     @classmethod
-    def _scan_directory(cls, root: Path, *, depth: int = 0) -> list[dict[str, Any]]:
+    def _scan_directory(cls, root: Path, *, depth: int = 0, cancelled=None) -> list[dict[str, Any]]:
         records = []
         try:
             with os.scandir(root) as entries:
                 for entry in entries:
+                    if cancelled is not None and cancelled():
+                        return []
                     path = Path(entry.path)
-                    if cls._hide_workspace_path(path):
+                    # DirEntry already knows whether this is a symlink; do
+                    # not issue a separate lstat() for every directory item.
+                    name = entry.name
+                    if (name in WORKSPACE_HIDDEN_NAMES or name.startswith((".", "~$"))
+                            or name.casefold().endswith(WORKSPACE_HIDDEN_SUFFIXES)
+                            or entry.is_symlink()):
                         continue
                     try:
                         is_dir = entry.is_dir(follow_symlinks=False)
@@ -1421,7 +1535,7 @@ class AppController(QObject):
                     if cancelled is not None and cancelled():
                         return results
                     path = current / name
-                    if cls._hide_workspace_path(path) or query not in name.casefold():
+                    if query not in name.casefold() or cls._hide_workspace_path(path):
                         continue
                     try:
                         is_dir = path.is_dir()
@@ -1459,7 +1573,7 @@ class AppController(QObject):
         self._workspace_generation += 1
         self._workspace_child_loads.clear()
         generation = self._workspace_generation
-        if root is None or not root.is_dir():
+        if root is None:
             self._workspace_items = []
             self._workspace_selected_path = None
             self._workspace_selected_item = None
@@ -1472,13 +1586,43 @@ class AppController(QObject):
             items = (
                 self._search_workspace(root, query, cancelled=cancel_event.is_set)
                 if query
-                else self._scan_directory(root)
+                else self._scan_directory(root, cancelled=cancel_event.is_set)
             )
             if cancel_event.is_set():
                 return
             self._workspaceItemsReady.emit(generation, items)
 
-        threading.Thread(target=worker, daemon=True, name="HRToolkit-workspace-scan").start()
+        self._schedule_workspace_read(generation, worker)
+
+    def _schedule_workspace_read(self, generation: int, worker) -> None:
+        with self._workspace_read_lock:
+            if self._closed:
+                return
+            self._workspace_read_jobs = deque(
+                job for job in self._workspace_read_jobs if job[0] == self._workspace_generation
+            )
+            self._workspace_read_jobs.append((generation, worker))
+            if self._workspace_read_workers >= self._workspace_read_limit:
+                return
+            self._workspace_read_workers += 1
+        # Daemon workers let shutdown finish even if the OS is stuck in a
+        # disconnected share. No writer/project tasks use this read queue.
+        threading.Thread(target=self._run_workspace_reads, daemon=True,
+                         name="HRToolkit-workspace-scan").start()
+
+    def _run_workspace_reads(self) -> None:
+        while True:
+            with self._workspace_read_lock:
+                if self._closed or not self._workspace_read_jobs:
+                    self._workspace_read_workers -= 1
+                    return
+                generation, worker = self._workspace_read_jobs.popleft()
+            if generation != self._workspace_generation:
+                continue
+            try:
+                worker()
+            except Exception as exc:
+                runlog.log_exception("读取项目目录失败", exc)
 
     @Slot(int, object)
     def _apply_workspace_items(self, generation: int, items: list[dict[str, Any]]) -> None:
@@ -1525,15 +1669,23 @@ class AppController(QObject):
         self._workspace_child_loads.add(path_text)
 
         def worker() -> None:
-            children = self._scan_directory(path, depth=depth + 1)
+            children = self._scan_directory(path, depth=depth + 1,
+                                            cancelled=lambda: self._closed or generation != self._workspace_generation)
             self._workspaceChildrenReady.emit(generation, row, path_text, depth, children)
 
-        threading.Thread(target=worker, daemon=True, name="HRToolkit-workspace-children").start()
+        self._schedule_workspace_read(generation, worker)
 
     @Slot(int, int, str, int, object)
     def _apply_workspace_children(self, generation: int, row: int, path: str, depth: int, children) -> None:
+        if self._closed or generation != self._workspace_generation:
+            return
         self._workspace_child_loads.discard(path)
-        if generation != self._workspace_generation or row >= len(self._workspace_items):
+        # Another expanded folder can insert rows while this directory is
+        # loading. Locate the same folder again instead of dropping its result.
+        if row >= len(self._workspace_items) or str(self._workspace_items[row].get("path")) != path:
+            row = next((index for index, item in enumerate(self._workspace_items)
+                        if str(item.get("path")) == path), -1)
+        if row < 0:
             return
         item = self._workspace_items[row]
         if str(item.get("path")) != path or not item.get("expanded") or int(item.get("depth", 0)) != depth:
@@ -2364,6 +2516,8 @@ class AppController(QObject):
     @Slot()
     def runOrCancel(self) -> None:
         if self._busy:
+            if self._startup_loading:
+                self._startup_cancelled = True
             if self._preview_cancel_event is not None:
                 self._preview_cancel_event.set()
             self._run_coordinator.cancel()
@@ -2385,20 +2539,44 @@ class AppController(QObject):
         if not store.writable:
             self.notificationRequested.emit("当前项目只能查看", store.workspace.read_only_reason or "项目为只读状态。", "warning")
             return
-        try:
-            invocation = build_invocation(
-                self._spec,
-                input_paths=list(self._input_states[self._state_key()]),
-                support_text=self._support_states[self._state_key()],
-                values=dict(self._form_states[self._state_key()]),
-                output_dir=self._project_path,
-                preview=self._spec.tool_id == "folder_rename",
-            )
-        except FormValidationError as exc:
-            self.notificationRequested.emit(exc.title, exc.message, "warning")
+        self._prepare_invocation(preview=self._spec.tool_id == "folder_rename")
+
+    def _prepare_invocation(self, *, preview: bool, preview_result=None) -> None:
+        spec = self._spec
+        kwargs = dict(
+            input_paths=list(self._input_states[self._state_key()]),
+            support_text=self._support_states[self._state_key()],
+            values=dict(self._form_states[self._state_key()]),
+            output_dir=self._project_path, preview=preview, preview_result=preview_result,
+        )
+        force_dialog = self._salary_force_next
+        event = threading.Event()
+        self._preview_cancel_event = event
+        self._set_busy(True)
+
+        def worker() -> None:
+            try:
+                invocation = build_invocation(spec, **kwargs)
+            except Exception as exc:
+                self._invocationReady.emit(None, exc, force_dialog)
+            else:
+                self._invocationReady.emit(invocation, None, force_dialog)
+
+        threading.Thread(target=worker, daemon=True, name="HRToolkit-validate-inputs").start()
+
+    @Slot(object, object, bool)
+    def _apply_invocation(self, invocation, error, force_dialog: bool) -> None:
+        cancelled = self._preview_cancel_event is not None and self._preview_cancel_event.is_set()
+        self._preview_cancel_event = None
+        self._set_busy(False)
+        if self._closed or self._shutdown_requested or cancelled:
+            return
+        if error is not None:
+            title = error.title if isinstance(error, FormValidationError) else "无法准备处理"
+            self.notificationRequested.emit(title, str(error), "warning")
             return
         if invocation.tool_id == "salary_merge":
-            self._start_salary_inspection(invocation, force_dialog=self._salary_force_next)
+            self._start_salary_inspection(invocation, force_dialog=force_dialog)
         elif invocation.preview:
             self._start_preview(invocation)
         else:
@@ -2453,8 +2631,6 @@ class AppController(QObject):
         self._inspect_salary_in_background()
 
     def _inspect_salary_in_background(self) -> None:
-        from hr_toolkit.tools.salary_merge import inspect_salary_templates
-
         invocation = self._salary_pending
         if invocation is None:
             return
@@ -2466,7 +2642,8 @@ class AppController(QObject):
             "header_profiles": dict(self._salary_draft_profiles), "layout_hints": dict(self._salary_hints),
         }
         request = RunRequest("salary_merge", invocation.tool_name, invocation.group_name,
-                             invocation.description, inspect_salary_templates, (invocation.args[0],), kwargs)
+                             invocation.description, None, (invocation.args[0],), kwargs,
+                             "hr_toolkit.tools.salary_merge", "inspect_salary_templates")
         self._append_log("正在检查工资表列头；不会修改原表。", "info")
         self._flush_logs()
 
@@ -2774,22 +2951,8 @@ class AppController(QObject):
             return
         if action_name != "rename":
             return
-        try:
-            invocation = build_invocation(
-                self._spec,
-                input_paths=list(self._input_states[self._state_key()]),
-                support_text=self._support_states[self._state_key()],
-                values=dict(self._form_states[self._state_key()]),
-                output_dir=self._project_path,
-                preview=False,
-                preview_result=self._pending_preview,
-            )
-        except FormValidationError as exc:
-            self.notificationRequested.emit(exc.title, exc.message, "warning")
-            return
-        finally:
-            self._pending_preview = None
-        self._start_project_run(invocation)
+        self._prepare_invocation(preview=False, preview_result=self._pending_preview)
+        self._pending_preview = None
 
     def _start_project_run(self, invocation: ToolInvocation) -> None:
         store = self._project_store
@@ -2800,9 +2963,11 @@ class AppController(QObject):
             tool_name=invocation.tool_name,
             group_name=invocation.group_name,
             description=invocation.description,
-            function=invocation.resolve_function(),
+            function=None,
             args=invocation.args,
             kwargs=invocation.kwargs,
+            function_module=invocation.function_module,
+            function_name=invocation.function_name,
         )
         self._set_busy(True)
         self._run_progress_visible = invocation.tool_id == "material_collector"
@@ -2818,16 +2983,34 @@ class AppController(QObject):
         self._flush_logs()
         callbacks = RunCallbacks(
             log=lambda message: self._logIncoming.emit(str(message), "info"),
-            progress=lambda current, total, message: self._runProgress.emit(int(current), int(total), str(message)),
+            progress=self._queue_run_progress,
             success=lambda payload, result_dir, elapsed, isolated: self._runSuccess.emit(payload, str(result_dir), float(elapsed), bool(isolated)),
             error=lambda error: self._runError.emit(str(error)),
             stopped=self._runStopped.emit,
             finished=self._runFinished.emit,
         )
+        self._incoming_progress_timer.start()
         if not self._run_coordinator.start(store, request, callbacks):
+            self._incoming_progress_timer.stop()
             self._run_progress_timer.stop()
             self._set_busy(False)
             self.notificationRequested.emit("已有任务正在处理", "请等待当前任务结束。", "warning")
+
+    def _queue_run_progress(self, current: int, total: int, message: str) -> None:
+        # Even a throttled producer can emit thousands of phase completions.
+        # Coalesce BEFORE crossing into Qt, so its event queue stays bounded.
+        if self._closed:
+            return
+        with self._incoming_progress_lock:
+            self._incoming_progress = (int(current), int(total), str(message))
+
+    @Slot()
+    def _drain_run_progress(self) -> None:
+        with self._incoming_progress_lock:
+            payload = self._incoming_progress
+            self._incoming_progress = None
+        if payload is not None:
+            self._apply_run_progress(*payload)
 
     @Slot(int, int, str)
     def _apply_run_progress(self, current: int, total: int, message: str) -> None:
@@ -2856,6 +3039,7 @@ class AppController(QObject):
 
     @Slot(object, str, float, bool)
     def _apply_run_success(self, payload, result_dir: str, elapsed: float, isolated: bool) -> None:
+        self._drain_run_progress()
         self._flush_material_progress()
         if self._run_progress_visible:
             self._run_progress_message = "全部处理完成，结果已登记保存。"
@@ -2884,6 +3068,7 @@ class AppController(QObject):
 
     @Slot(str)
     def _apply_run_error(self, message: str) -> None:
+        self._drain_run_progress()
         self._flush_material_progress()
         if self._run_progress_visible:
             self._run_progress_message = "处理失败：" + message
@@ -2897,6 +3082,7 @@ class AppController(QObject):
 
     @Slot()
     def _apply_run_stopped(self) -> None:
+        self._drain_run_progress()
         self._flush_material_progress()
         if self._run_progress_visible:
             self._run_progress_message = "已停止，保留最后实际完成的进度。"
@@ -2908,6 +3094,8 @@ class AppController(QObject):
 
     @Slot()
     def _apply_run_finished(self) -> None:
+        self._incoming_progress_timer.stop()
+        self._drain_run_progress()
         self._flush_material_progress()
         self._refresh_run_progress_clock()
         self._run_progress_timer.stop()
@@ -3033,10 +3221,16 @@ class AppController(QObject):
     def close(self) -> None:
         if self._closed:
             return
+        self._incoming_progress_timer.stop()
+        self._search_timer.stop()
+        self._run_progress_timer.stop()
+        self._run_progress_flush_timer.stop()
         self._flush_logs()
         if hasattr(self, "_log_flush_timer") and self._log_flush_timer.isActive():
             self._log_flush_timer.stop()
         self._closed = True
+        with self._workspace_read_lock:
+            self._workspace_read_jobs.clear()
         if self._preview_cancel_event is not None:
             self._preview_cancel_event.set()
         self._run_coordinator.cancel()

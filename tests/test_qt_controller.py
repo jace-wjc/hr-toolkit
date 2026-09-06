@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from datetime import date
 from types import SimpleNamespace
@@ -446,6 +447,11 @@ class QtControllerTests(unittest.TestCase):
                 # New controller instance loads it on start()
                 controller2 = AppController()
                 controller2.start()
+                deadline = time.monotonic() + 3
+                while controller2._startup_loading and time.monotonic() < deadline:
+                    self.application.processEvents()
+                    time.sleep(0.001)
+                self.assertFalse(controller2._startup_loading)
                 self.assertEqual(controller2._last_selected_dir, chosen_dir)
                 self.assertEqual(controller2._file_dialog_initial_dir(), str(chosen_dir))
 

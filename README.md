@@ -583,3 +583,26 @@ Win7 与 Python 3.8 均已停止官方维护，因此兼容分支只加载程序
   - 运行日志统一输出至同级目录下的 `HRToolkit_app.log` 与 `HRToolkit_update.log`；
   - **仅记录工具启动、耗时、处理文件数量与错误堆栈，严禁记录任何真实表格内容（身份证号、手机号、薪资金额等敏感信息绝不上报与外显）**；
   - 日志设置自动滚动截断限制（最大 1MB），防止长期占用磁盘空间。
+
+## 性能复测
+
+项目目录读取默认最多使用 2 个后台线程；慢盘设备可在启动前设置 `HR_TOOLKIT_SCAN_WORKERS=1`，支持范围为 1–4。该参数只控制项目文件树读取，业务写入仍由原有单任务协调器执行。文件列表元数据、输入校验和首次业务模块导入均在后台处理；进度在进入 Qt 事件队列前合并，每 100 ms 刷新一次，并在完成或失败时刷新最后进度。
+
+压缩 Excel 根据 ZIP 目录记录的工作表 XML 体积选择进程隔离，达到 2 MiB 时使用独立业务进程，避免只看压缩后的文件大小漏掉重负载。工资拆分在完成快照和每份输出后释放不再使用的单元格，保留跨工作簿样式转换所需的样式表。
+
+以下命令只生成和处理独立的合成数据。使用同一个 Python/Qt 环境、同一份输入目录，串行运行优化前后版本，避免把不同运行时或同时运行的基准当成性能提升。
+
+```bash
+# 模拟 1000 个路径各有 5 ms 磁盘延迟，记录 GUI 心跳与切换耗时
+python scripts/benchmark_desktop_responsiveness.py --files 1000 --stat-delay-ms 5
+# 实际 Qt Quick 窗口中的 3 万行虚拟滚动
+python scripts/benchmark_qt_quick.py --files 30000 --workspace-files 30000 --mode scroll --scroll-target workspace --duration 4
+# 准备一次，再分别指定旧源码与当前源码；保留输入 SHA-256 和完整 Excel 包成员哈希
+python scripts/benchmark_business_pipeline.py --root outputs/business-benchmark --prepare
+python scripts/benchmark_business_pipeline.py --root outputs/business-benchmark --source-root /path/to/baseline --label before
+python scripts/benchmark_business_pipeline.py --root outputs/business-benchmark --label after
+```
+
+`benchmark_business_pipeline.py` 覆盖社保、商保、考勤、工资合并/拆分、异动、名册、档案导入/导出及目录重命名预览；`--profile` 可另外保存 cProfile 结果，不能与未启用 profiling 的耗时混比。输出哈希仅排除 Excel 创建/修改时间，仍包含所有业务 XML、公式、样式、合并区域和其他包成员。`benchmark_ocr_runtime.py --images /path/to/test-images --expected-text 测试姓名` 用真实图像验证 OCR 冷启动、连续识别耗时及 RSS；已有 `benchmark_material_search.py` 则衡量合成资料库的缓存命中路径，两者不能混用。
+
+Windows 与 macOS 构建脚本会打印各步骤耗时。默认仍完整清理构建；本地重复构建可给 `scripts/build_windows.py` 或 `scripts/build_macos.py` 追加 `--incremental` 复用 PyInstaller 缓存。增量模式保留相同的原生依赖、版本、架构和启动检查，不替代正式发布前的完整清理构建与目标系统验收。修改 Python、Qt、原生依赖或打包钩子后应重新进行完整清理构建。

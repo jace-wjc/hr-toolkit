@@ -13,6 +13,7 @@ import multiprocessing
 import queue
 import time
 import traceback
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -21,6 +22,9 @@ from .project_run import serializable
 
 
 PROCESS_FILE_THRESHOLD_BYTES = 8 * 1024 * 1024
+# A 3.9 MiB worksheet XML fixture expands into hundreds of MiB of Cell objects
+# during salary reconstruction. Compressed inputs need a lower worker cutoff.
+PROCESS_WORKSHEET_THRESHOLD_BYTES = 2 * 1024 * 1024
 PROCESS_INPUT_COUNT_THRESHOLD = 5
 PROCESS_CANCEL_GRACE_SECONDS = 2.0
 PROCESS_POLL_SECONDS = 0.025
@@ -84,6 +88,27 @@ def should_use_process(
                 return True
             if path.is_file() and path.stat().st_size >= PROCESS_FILE_THRESHOLD_BYTES:
                 return True
+            # XLSX is compressed: a sub-megabyte workbook can expand into
+            # tens of megabytes of XML/cells. Read only the ZIP directory,
+            # never worksheet contents, when choosing the bounded worker.
+            if path.suffix.lower() in {".xlsx", ".zip"} and path.is_file():
+                with zipfile.ZipFile(path) as archive:
+                    excel_files = 0
+                    worksheet_bytes = 0
+                    for entry in archive.infolist():
+                        name = entry.filename.lower()
+                        if name.endswith((".xlsx", ".xls")):
+                            excel_files += 1
+                        if name.startswith("xl/worksheets/") and name.endswith(".xml"):
+                            worksheet_bytes += entry.file_size
+                        if (excel_files >= PROCESS_INPUT_COUNT_THRESHOLD
+                                or worksheet_bytes >= PROCESS_WORKSHEET_THRESHOLD_BYTES):
+                            return True
+            elif path.suffix.lower() in {".rar", ".7z", ".tar", ".gz", ".tgz"}:
+                return True
+        except zipfile.BadZipFile:
+            # Conversion/format diagnosis remains the business function's job.
+            continue
         except OSError:
             # An unreadable input will be diagnosed by the original business
             # function; isolating that diagnosis is safer than blocking the UI.

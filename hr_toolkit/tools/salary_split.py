@@ -11,6 +11,7 @@ from typing import Any, Callable
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.merge import MergedCellRange
 from openpyxl.worksheet.worksheet import Worksheet
 
 from ..common.excel import (
@@ -228,7 +229,7 @@ def split_salary_by_company(
             )
             groups = _group_by_company(employees)
         finally:
-            workbook.close()
+            _release_workbook_cells(workbook)
 
         result = SalarySplitResult(input_path=input_path, output_dir=output_dir, dry_run=dry_run)
         for company, rows in groups.items():
@@ -271,6 +272,17 @@ def split_salary_by_company(
 def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
     if cancelled is not None and cancelled():
         raise RuntimeError("本次处理已停止。")
+
+
+def _release_workbook_cells(workbook) -> None:
+    # Normal-mode Workbook.close() closes archives, but retains every Cell.
+    # Once row snapshots are complete (or a company file has been saved), no
+    # caller reads these cells again. Keep the source workbook's style tables
+    # alive for snapshot style translation without retaining a second full
+    # worksheet while the next company workbook is being loaded.
+    workbook.close()
+    for worksheet in workbook.worksheets:
+        worksheet._cells.clear()
 
 
 def _find_detail_max_col(ws: Worksheet, header_row: int) -> int:
@@ -621,12 +633,44 @@ def _group_sections(rows: list[EmployeeRow]) -> OrderedDict[str, list[EmployeeRo
     return sections
 
 
+class _RowMergeWriter:
+    """Index rebuilt single-row merges without repeatedly scanning other rows.
+
+    Keep openpyxl's containment rule and border cleanup exactly as merge_cells
+    does. Existing header merges may span several rows, so check those too.
+    This index lives only for one rebuild; it never caches worksheet mutations.
+    """
+
+    def __init__(self, ws: Worksheet) -> None:
+        self.ws = ws
+        self.existing = tuple(ws.merged_cells.ranges)
+        self.by_row: dict[int, list[MergedCellRange]] = {}
+
+    def merge(self, row: int, min_col: int, max_col: int) -> None:
+        coordinate = f"{get_column_letter(min_col)}{row}:{get_column_letter(max_col)}{row}"
+        merged = MergedCellRange(self.ws, coordinate)
+        same_row = self.by_row.setdefault(row, [])
+        if not any(merged <= previous for previous in self.existing) and not any(
+            merged <= previous for previous in same_row
+        ):
+            self.ws.merged_cells.ranges.add(merged)
+            same_row.append(merged)
+        self.ws._clean_merge_range(merged)
+
+
 def _apply_row_merged_ranges(
     ws: Worksheet,
     target_row: int,
     source_merged_ranges: tuple[tuple[int, int], ...],
     default_end_col: int | None,
+    *,
+    merge_writer: _RowMergeWriter | None = None,
 ) -> None:
+    if merge_writer is not None:
+        ranges = source_merged_ranges or (((1, default_end_col),) if default_end_col is not None else ())
+        for min_col, max_col in ranges:
+            merge_writer.merge(target_row, min_col, max_col)
+        return
     if source_merged_ranges:
         for min_col, max_col in source_merged_ranges:
             ws.merge_cells(
@@ -674,7 +718,7 @@ def _write_company_workbook(
         _check_cancelled(cancelled)
         workbook.save(output_path)
     finally:
-        workbook.close()
+        _release_workbook_cells(workbook)
 
 
 def _rebuild_detail_sheet(
@@ -690,6 +734,7 @@ def _rebuild_detail_sheet(
     }
     unmerge_ranges_from_row(ws, layout.data_start_row)
     ws.delete_rows(layout.data_start_row, ws.max_row - layout.data_start_row + 1)
+    merge_writer = _RowMergeWriter(ws)
 
     current_row = layout.data_start_row
     employee_seq = 1
@@ -725,7 +770,7 @@ def _rebuild_detail_sheet(
                     apply_row_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
                     ws.cell(subtotal_row, 1).value = leaf.label
                     _write_detail_section_total_formulas(ws, layout, subtotal_row, data_start_row, data_end_row, preserve_rounding=leaf.inferred_subtotal)
-                    _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end)
+                    _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end, merge_writer=merge_writer)
                     if leaf.subtotal_row is not None:
                         row_map[leaf.subtotal_row] = subtotal_row
                     current_row += 1
@@ -749,7 +794,7 @@ def _rebuild_detail_sheet(
                 ws.cell(group_total_row, 1).value = cat.label
                 sub_rows = [l.new_subtotal_row for l in cat_rendered_leaves if l.new_subtotal_row is not None]
                 _write_detail_group_total_formulas(ws, layout, group_total_row, sub_rows)
-                _apply_row_merged_ranges(ws, group_total_row, cat.merged_ranges, default_merge_end)
+                _apply_row_merged_ranges(ws, group_total_row, cat.merged_ranges, default_merge_end, merge_writer=merge_writer)
                 row_map[cat.total_row] = group_total_row
                 rendered_groups.append(
                     RenderedGroup(
@@ -780,7 +825,7 @@ def _rebuild_detail_sheet(
                 apply_row_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
                 ws.cell(subtotal_row, 1).value = leaf.label
                 _write_detail_section_total_formulas(ws, layout, subtotal_row, data_start_row, data_end_row, preserve_rounding=leaf.inferred_subtotal)
-                _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end)
+                _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end, merge_writer=merge_writer)
                 if leaf.subtotal_row is not None:
                     row_map[leaf.subtotal_row] = subtotal_row
                 current_row += 1
@@ -814,7 +859,7 @@ def _rebuild_detail_sheet(
                 apply_row_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
                 ws.cell(subtotal_row, 1).value = leaf.label
                 _write_detail_section_total_formulas(ws, layout, subtotal_row, data_start_row, data_end_row, preserve_rounding=leaf.inferred_subtotal)
-                _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end)
+                _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end, merge_writer=merge_writer)
                 if leaf.subtotal_row is not None:
                     row_map[leaf.subtotal_row] = subtotal_row
                 current_row += 1
@@ -848,7 +893,7 @@ def _rebuild_detail_sheet(
             last_data = max(l.data_end_row for l in rendered_leaves)
             _write_detail_section_total_formulas(ws, layout, grand_total_row, first_data, last_data)
 
-        _apply_row_merged_ranges(ws, grand_total_row, hierarchy.grand_total.merged_ranges, default_merge_end)
+        _apply_row_merged_ranges(ws, grand_total_row, hierarchy.grand_total.merged_ranges, default_merge_end, merge_writer=merge_writer)
         row_map[hierarchy.grand_total.total_row] = grand_total_row
         rendered_grand_total_row = grand_total_row
         current_row += 1

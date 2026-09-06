@@ -10,6 +10,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -177,6 +178,9 @@ WIN7_COLLECT_ALL_MODULES = (
     "pypdfium2_raw",
 )
 EXCLUDED_MODULES = (
+    # PyInstaller 6.21 implicitly appends this to its exclusion list. Keeping
+    # the cache input stable avoids re-analysis on unchanged incremental builds.
+    "__main__",
     "pytest",
     "unittest",
     "test",
@@ -403,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="仅供诊断；跳过打包后可执行文件的无界面启动检查",
     )
+    parser.add_argument("--incremental", action="store_true", help="本地重复构建复用 PyInstaller 缓存；发布默认仍为完整清理构建")
     parser.add_argument(
         "--target",
         choices=WINDOWS_TARGETS,
@@ -445,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         seven_zip_dir=seven_zip_dir,
         ucrt_dir=ucrt_dir,
         vc_runtime_dir=vc_runtime_dir,
+        clean=not args.incremental,
     )
     verify_windows_payload(app_dir, target=target)
     verify_pe_x64(app_dir / f"{APP_NAME}.exe")
@@ -610,6 +616,7 @@ def build_windows_binaries(
     seven_zip_dir: Path | None = None,
     ucrt_dir: Path | None = None,
     vc_runtime_dir: Path | None = None,
+    clean: bool = True,
 ) -> tuple[Path, Path]:
     target = validate_windows_target(target)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -640,6 +647,7 @@ def build_windows_binaries(
         seven_zip_dir=seven_zip_dir,
         ucrt_dir=ucrt_dir,
         vc_runtime_dir=vc_runtime_dir,
+        clean=clean,
     )
     _run(main_command)
     if not app_dir.is_dir():
@@ -796,17 +804,14 @@ def stage_win7_app_local_runtimes(
     # also be available there, before any Python runtime hook can execute.
     # Keep identical pinned copies in both locations; do not restore a private
     # Qt/runner version or rely on the build host's system VC redistributable.
+    runtime_files = _payload_files_by_name(app_dir)
     for source_dir, names, label in (
         (ucrt_dir, WIN7_REQUIRED_UCRT_FILES, "app-local UCRT"),
         (vc_runtime_dir, WIN7_REQUIRED_VC_RUNTIME_FILES, "Visual C++ app-local runtime"),
     ):
         _require_files(source_dir, names, label=label)
         for name in names:
-            matches = sorted(
-                path
-                for path in app_dir.rglob("*")
-                if path.name.casefold() == name.casefold()
-            )
+            matches = runtime_files.get(name.casefold(), ())
             for path in matches:
                 if path.is_symlink() or not path.is_file():
                     raise RuntimeError(f"拒绝替换非普通 Win7 运行库文件：{path}")
@@ -833,12 +838,9 @@ def stage_modern_app_local_vc_runtimes(
     available_names = tuple(
         name for name in MODERN_VC_RUNTIME_FILES if (runtime_dir / name).is_file()
     )
+    runtime_files = _payload_files_by_name(app_dir)
     for name in available_names:
-        matches = sorted(
-            path
-            for path in app_dir.rglob("*")
-            if path.name.casefold() == name.casefold()
-        )
+        matches = runtime_files.get(name.casefold(), ())
         for path in matches:
             if path.is_symlink() or not path.is_file():
                 raise RuntimeError(f"拒绝替换非普通 modern VC 运行库文件：{path}")
@@ -890,6 +892,7 @@ def pyinstaller_commands(
     seven_zip_dir: Path | None = None,
     ucrt_dir: Path | None = None,
     vc_runtime_dir: Path | None = None,
+    clean: bool = True,
 ) -> tuple[list[str], list[str]]:
     validate_stable_semver(version)
     target = validate_windows_target(target)
@@ -912,7 +915,7 @@ def pyinstaller_commands(
         "-m",
         "PyInstaller",
         "--noconfirm",
-        "--clean",
+        *(["--clean"] if clean else []),
         "--distpath",
         str(output_dir),
         "--specpath",
@@ -984,7 +987,7 @@ def pyinstaller_commands(
         "-m",
         "PyInstaller",
         "--noconfirm",
-        "--clean",
+        *(["--clean"] if clean else []),
         "--distpath",
         str(output_dir),
         "--specpath",
@@ -1273,19 +1276,24 @@ def verify_win7_app_local_runtimes(app_dir: Path) -> None:
         )
 
 
+def _payload_files_by_name(app_dir: Path) -> dict[str, list[Path]]:
+    """Index once rather than rescanning the payload for each runtime DLL."""
+    files: dict[str, list[Path]] = {}
+    for path in sorted(app_dir.rglob("*")):
+        files.setdefault(path.name.casefold(), []).append(path)
+    return files
+
+
 def verify_modern_vc_runtime_payload(app_dir: Path) -> None:
     _require_files(
         app_dir,
         MODERN_REQUIRED_VC_RUNTIME_FILES,
         label="modern payload Visual C++ runtime",
     )
+    runtime_files = _payload_files_by_name(app_dir)
     for name in MODERN_VC_RUNTIME_FILES:
         root_runtime = app_dir / name
-        matches = sorted(
-            path
-            for path in app_dir.rglob("*")
-            if path.name.casefold() == name.casefold()
-        )
+        matches = runtime_files.get(name.casefold(), [])
         if root_runtime.is_file():
             if matches != [root_runtime]:
                 raise RuntimeError(
@@ -1742,7 +1750,11 @@ def _run(
     env: dict[str, str] | None = None,
 ) -> None:
     print("执行：" + subprocess.list2cmdline(command))
-    subprocess.run(command, cwd=REPO_ROOT, check=True, timeout=timeout, env=env)
+    started = time.perf_counter()
+    try:
+        subprocess.run(command, cwd=REPO_ROOT, check=True, timeout=timeout, env=env)
+    finally:
+        print(f"步骤耗时：{time.perf_counter() - started:.3f} 秒")
 
 
 def _module_exists(module: str) -> bool:
