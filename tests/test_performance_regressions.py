@@ -307,7 +307,7 @@ class GuiPerformanceTests(unittest.TestCase):
         finally:
             release.set()
         self.assertEqual(len({thread for _path, thread in calls}), 1)
-        self.assertEqual([item["path"] for item in self.controller._input_model.items()], ["/next-19"])
+        self.assertEqual([item["path"] for item in self.controller._input_model.items()], [str(Path("/next-19"))])
         self.assertEqual(self.controller._input_model.item_at(0)["kind"], "folder")
 
     def test_cancel_during_slow_validation_never_launches_business(self):
