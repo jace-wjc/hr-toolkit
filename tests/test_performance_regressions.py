@@ -418,7 +418,9 @@ class GuiPerformanceTests(unittest.TestCase):
         self.assertEqual(self.controller._workspace_items[-1]["path"], "/second/child")
 
     def test_packaging_smoke_never_reads_or_rewrites_user_settings(self):
-        from hr_toolkit.gui_qt import main, smoke
+        from importlib import import_module
+        from hr_toolkit.gui_qt import smoke
+        main = import_module("hr_toolkit.gui_qt.main")
         with tempfile.TemporaryDirectory() as temporary:
             user_settings = Path(temporary) / "settings.json"
             user_settings.write_text('{"current_project":"user-project"}', encoding="utf-8")
