@@ -11,7 +11,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("HR_TOOLKIT_SKIP_UPDATE", "1")
@@ -138,6 +138,47 @@ class PackagingPerformanceTests(unittest.TestCase):
             destination = str(Path("PySide6/Qt/qml/QtQuick"))
             self.assertEqual(binaries, [(str(root / "QtQuick/plugin.dll"), destination)])
             self.assertEqual(data, [(str(root / "QtQuick/qmldir"), destination)])
+
+
+class WindowsFileChangeTests(unittest.TestCase):
+    def tearDown(self):
+        mc._windows_file_change_reader.cache_clear()
+
+    def test_bindings_are_reused_but_each_file_change_is_queried(self):
+        import ctypes
+
+        tokens = iter([101, 202])
+        def query(_handle, _kind, info, _size):
+            info._obj.ChangeTime = next(tokens)
+            return 1
+        kernel = SimpleNamespace(CreateFileW=Mock(return_value=123),
+                                 GetFileInformationByHandleEx=Mock(side_effect=query),
+                                 CloseHandle=Mock(return_value=1))
+        source = Path("same-file.png")
+        mc._windows_file_change_reader.cache_clear()
+        with patch.object(ctypes, "WinDLL", return_value=kernel, create=True) as dll, patch.object(mc.os, "name", "nt"):
+            self.assertEqual(mc._windows_file_change_time(source), 101)
+            self.assertEqual(mc._windows_file_change_time(source), 202)
+        self.assertEqual(dll.call_count, 1)
+        self.assertEqual(kernel.CreateFileW.call_count, 2)
+        self.assertEqual(kernel.GetFileInformationByHandleEx.call_count, 2)
+        self.assertEqual(kernel.CloseHandle.call_count, 2)
+
+    def test_query_failures_close_handles_and_do_not_cache_file_results(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = SimpleNamespace(CreateFileW=Mock(side_effect=[wintypes.HANDLE(-1).value, 123, 124]),
+                                 GetFileInformationByHandleEx=Mock(side_effect=[0, OSError("无法查询")]),
+                                 CloseHandle=Mock(return_value=1))
+        source = Path("unreadable.png")
+        mc._windows_file_change_reader.cache_clear()
+        with patch.object(ctypes, "WinDLL", return_value=kernel, create=True), patch.object(mc.os, "name", "nt"):
+            for _ in range(3):
+                self.assertIsNone(mc._windows_file_change_time(source))
+        self.assertEqual(kernel.CreateFileW.call_count, 3)
+        self.assertEqual(kernel.GetFileInformationByHandleEx.call_count, 2)
+        self.assertEqual([call.args[0] for call in kernel.CloseHandle.call_args_list], [123, 124])
 
 
 class CachePerformanceTests(unittest.TestCase):

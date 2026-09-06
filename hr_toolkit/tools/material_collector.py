@@ -383,16 +383,9 @@ def _compute_file_fingerprint(file_path: Path) -> tuple[int, float, str] | None:
     return (size, mtime, sha.hexdigest())
 
 
-def _windows_file_change_time(file_path: Path) -> int | None:
-    """Return the Windows file change time, not ``stat().st_ctime``.
-
-    Python 3.12 still exposes file creation time through ``st_ctime`` on
-    Windows.  Creation time does not change when an existing file is
-    overwritten, so it cannot safely guard the metadata-only cache fast path.
-    ``FILE_BASIC_INFO.ChangeTime`` is the NT file change token we need here.
-    """
-    if os.name != "nt":
-        return None
+@lru_cache(maxsize=1)
+def _windows_file_change_reader() -> Callable[[Path], int | None] | None:
+    """Reuse ctypes types/bindings, but open and inspect each file afresh."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -435,6 +428,10 @@ def _windows_file_change_time(file_path: Path) -> int | None:
         open_existing = 3
         file_attribute_normal = 0x0080
         invalid_handle = wintypes.HANDLE(-1).value
+    except (OSError, AttributeError):  # pragma: no cover - unavailable platform API
+        return None
+
+    def read(file_path: Path) -> int | None:
         handle = create_file(
             os.path.abspath(os.fspath(file_path)),
             file_read_attributes,
@@ -460,6 +457,23 @@ def _windows_file_change_time(file_path: Path) -> int | None:
             return change_time if change_time > 0 else None
         finally:
             close_handle(handle)
+
+    return read
+
+
+def _windows_file_change_time(file_path: Path) -> int | None:
+    """Return the Windows file change time, not ``stat().st_ctime``.
+
+    Python 3.12 still exposes file creation time through ``st_ctime`` on
+    Windows. Creation time does not change when an existing file is
+    overwritten, so it cannot safely guard the metadata-only cache fast path.
+    ``FILE_BASIC_INFO.ChangeTime`` is the NT file change token we need here.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        read = _windows_file_change_reader()
+        return read(file_path) if read is not None else None
     except Exception:  # pragma: no cover - platform API failure must degrade safely
         # FAT/network shares or restricted handles may not expose ChangeTime.
         # Callers treat None as unsafe for metadata-only reuse and hash instead.
