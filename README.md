@@ -605,6 +605,6 @@ python scripts/benchmark_business_pipeline.py --root outputs/business-benchmark 
 
 `benchmark_business_pipeline.py` 覆盖社保、商保、考勤、工资合并/拆分、异动、名册、档案导入/导出及目录重命名预览；`--profile` 可另外保存 cProfile 结果，不能与未启用 profiling 的耗时混比。输出哈希仅排除 Excel 创建/修改时间，仍包含所有业务 XML、公式、样式、合并区域和其他包成员。`benchmark_ocr_runtime.py --images /path/to/test-images --expected-text 测试姓名` 用真实图像验证 OCR 冷启动、连续识别耗时及 RSS；已有 `benchmark_material_search.py` 则衡量合成资料库的缓存命中路径，两者不能混用。
 
-异动汇总保持逐条去重和补齐规则，将表尾按实际新增行数一次性移回；资料索引复用 Windows API 绑定，但每个文件仍重新查询 ChangeTime，无可靠变更标记时仍计算内容哈希。
+异动汇总保持逐条去重和补齐规则，将表尾按实际新增行数一次性移回；资料索引复用 Windows API 绑定，但每个文件仍重新查询 ChangeTime，无可靠变更标记时仍计算内容哈希。缓存清理在单次检查点内复用最多 256 个时间戳解析结果，保持原有过期规则、保存频率和 JSON 格式。
 
 Windows 与 macOS 构建脚本会打印各步骤耗时。默认仍完整清理构建；本地重复构建可给 `scripts/build_windows.py` 或 `scripts/build_macos.py` 追加 `--incremental` 复用 PyInstaller 缓存。增量模式保留相同的原生依赖、版本、架构和启动检查，不替代正式发布前的完整清理构建与目标系统验收。修改 Python、Qt、原生依赖或打包钩子后应重新进行完整清理构建。

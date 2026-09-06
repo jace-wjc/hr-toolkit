@@ -829,6 +829,9 @@ def _trim_cache_by_age_and_size(data: dict[str, Any]) -> None:
     now = datetime.now(tz=_BEIJING_TZ)
     cutoff = now - timedelta(days=_OCR_CACHE_ENTRY_MAX_AGE_DAYS)
 
+    # 同一秒写入的条目共享 verified_at；在每个检查点内复用相同时间戳。
+    # 缓存限制在本次治理内，避免跨检查点复用无效时间戳的 now 回退值。
+    @lru_cache(maxsize=256)
     def _parse_ts(ts: str) -> datetime:
         try:
             return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_BEIJING_TZ)
@@ -845,7 +848,7 @@ def _trim_cache_by_age_and_size(data: dict[str, Any]) -> None:
         if not ts_str:
             stale_keys.append(key)
             continue
-        ts = _parse_ts(ts_str)
+        ts = _parse_ts(ts_str) if isinstance(ts_str, str) else now
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=_BEIJING_TZ)
         if ts < cutoff:

@@ -182,6 +182,27 @@ class WindowsFileChangeTests(unittest.TestCase):
 
 
 class CachePerformanceTests(unittest.TestCase):
+    def test_checkpoint_timestamp_reuse_preserves_expiry_and_invalid_value_fallback(self):
+        from datetime import datetime, timedelta
+        now = datetime.now(tz=mc._BEIJING_TZ)
+        fresh = now.strftime("%Y-%m-%d %H:%M:%S")
+        old = (now - timedelta(days=91)).strftime("%Y-%m-%d %H:%M:%S")
+        data = mc._new_ocr_cache()
+        data["entries"] = {str(index): {"verified_at": fresh} for index in range(1000)}
+        data["entries"].update({
+            "expired": {"verified_at": old},
+            "expired_iso": {"verified_at": (now - timedelta(days=91)).isoformat()},
+            "fresh_iso": {"verified_at": now.isoformat()},
+            "invalid_string": {"verified_at": "无效时间"},
+            "invalid_list": {"verified_at": [fresh]},
+            "missing": {},
+        })
+        data["paths"] = {key + ".jpg": {"cache_key": key} for key in data["entries"]}
+        expected = set(data["entries"]) - {"expired", "expired_iso", "missing"}
+        mc._trim_cache_by_age_and_size(data)
+        self.assertEqual(set(data["entries"]), expected)
+        self.assertEqual(set(data["paths"]), {key + ".jpg" for key in expected})
+
     def test_chunked_cache_json_is_byte_identical_to_original_serializer(self):
         data = {"version": 5, "entries": {
             f"员工-{index}": {"ocr_text": '姓名：“测试”\n\\', "score": 0.123, "flag": True, "names": [None, "张三"]}
