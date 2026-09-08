@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 from hr_toolkit.common.inputs import SUPPORTED_ARCHIVE_SUFFIX_SET
+from hr_toolkit.common.paths import user_app_data_dir, user_home_dir
 
 
 DATA_DIR_ENV = "HR_TOOLKIT_DATA_DIR"
@@ -171,13 +172,7 @@ def default_history_root() -> Path:
     override = os.environ.get(DATA_DIR_ENV, "").strip()
     if override:
         return Path(override).expanduser()
-    if sys.platform.startswith("win"):
-        base = Path(os.environ.get("LOCALAPPDATA", "").strip() or (Path.home() / "AppData" / "Local"))
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path(os.environ.get("XDG_DATA_HOME", "").strip() or (Path.home() / ".local" / "share"))
-    return base / "HRToolkit" / "Data"
+    return user_app_data_dir("data") / "HRToolkit" / "Data"
 
 
 class HistoryStore:
@@ -2183,7 +2178,7 @@ def _validate_data_root(path: Path) -> Path:
     if path.exists() and _is_link_like(path):
         raise HistoryStoreError("资料库位置不能是链接目录。")
     resolved = path.resolve()
-    home = Path.home().resolve()
+    home = user_home_dir().resolve()
     if resolved == Path(resolved.anchor) or resolved == home:
         raise HistoryStoreError("资料库位置过于宽泛，请选择专用文件夹。")
     if getattr(sys, "frozen", False):
@@ -2432,7 +2427,7 @@ def _is_owned_staging_name(name: str) -> bool:
 
 def _source_context_parts(parent: Path, limit: int) -> tuple[str, ...]:
     generic_parts = {
-        Path.home().name.casefold(),
+        user_home_dir().name.casefold(),
         "users",
         "home",
         "downloads",

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union
 
 from hr_toolkit import runlog
+from hr_toolkit.common.paths import path_text_error, user_home_dir
 
 
 def default_workspace_project_name(today_value: Optional[date] = None) -> str:
@@ -21,7 +22,7 @@ def default_workspace_project_name(today_value: Optional[date] = None) -> str:
 
 
 def desktop_dir() -> Path:
-    home = Path.home()
+    home = user_home_dir()
     desktop = home / "Desktop"
     if desktop.is_dir():
         return desktop
@@ -80,11 +81,17 @@ def workspace_project_creation_target(
     name_value: str,
 ) -> Tuple[Optional[Path], Optional[str]]:
     name_error = workspace_project_name_error(name_value)
-    parent_text = str(parent_value).strip()
+    parent_text = parent_value.strip() if isinstance(parent_value, str) else ""
     if not parent_text:
         return None, name_error or "请选择保存位置。"
 
-    parent_dir = Path(parent_text).expanduser().absolute()
+    path_error = path_text_error(parent_text)
+    if path_error:
+        return None, name_error or path_error
+    try:
+        parent_dir = Path(parent_text).expanduser().absolute()
+    except (OSError, RuntimeError, ValueError):
+        return None, name_error or "保存位置已不可用，请重新选择。"
     project_name = str(name_value).strip()
     project_root = parent_dir / project_name if project_name else None
     if name_error:
@@ -97,7 +104,7 @@ def workspace_project_creation_target(
                 return project_root, "同名位置已被文件占用，请修改项目名称。"
             if next(project_root.iterdir(), None) is not None:
                 return project_root, "这里已有同名文件夹，请修改项目名称；如需继续以前的工作，请打开已有项目。"
-    except OSError:
+    except (OSError, ValueError):
         return project_root, "暂时无法读取这个保存位置，请重新选择。"
     return project_root, None
 

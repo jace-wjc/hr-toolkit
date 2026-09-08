@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from hr_toolkit import __version__, runlog
+from hr_toolkit.common.paths import absolute_path_hint, path_text_error, user_app_data_dir, user_home_dir
 from hr_toolkit.app_update import (
     UpdateCancelledError,
     UpdateInfo,
@@ -195,6 +196,7 @@ class AppController(QObject):
         self._project_store: ProjectStore | None = None
         self._project_path: Path | None = None
         self._project_opening = False
+        self._project_operation = "打开"
         self._project_generation = 0
         self._recent_projects: list[Path] = []
         self._busy = False
@@ -628,8 +630,9 @@ class AppController(QObject):
     def defaultProjectParent(self) -> str:
         if self._recent_projects:
             return str(self._recent_projects[0].parent)
-        documents = Path.home() / "Documents"
-        return str(documents if documents.is_dir() else Path.home())
+        home = user_home_dir()
+        documents = home / "Documents"
+        return str(documents if documents.is_dir() else home)
 
     @Property("QVariantList", notify=projectChanged)
     def recentProjects(self):
@@ -971,12 +974,14 @@ class AppController(QObject):
             except Exception:
                 pass
         try:
-            fallback = desktop_dir() or Path.home()
+            fallback = desktop_dir()
             if fallback and Path(fallback).is_dir():
                 return str(Path(fallback).expanduser().absolute())
         except Exception:
             pass
-        return str(Path.home())
+        # An empty initial directory lets the native chooser use its own
+        # default if every optional remembered/system location is unavailable.
+        return ""
 
     def _remember_file_dialog_path(
         self, selected: str | Path | list[str | Path] | tuple[str | Path, ...] | None
@@ -986,8 +991,10 @@ class AppController(QObject):
         item = selected[0] if isinstance(selected, (list, tuple)) else selected
         if not item:
             return
+        path = absolute_path_hint(item)
+        if path is None:
+            return
         try:
-            path = Path(item).expanduser().absolute()
             folder = path if path.is_dir() else path.parent
             if folder.is_dir():
                 self._last_selected_dir = folder
@@ -1155,11 +1162,15 @@ class AppController(QObject):
     @Slot(result=str)
     @Slot(str, result=str)
     def chooseProjectParent(self, current: str = "") -> str:
-        current_dir = Path(str(current or "").strip())
-        if current_dir.is_dir():
-            initial = str(current_dir.resolve())
-        else:
-            initial = self._file_dialog_initial_dir("new_project")
+        initial = ""
+        current_dir = absolute_path_hint(current)
+        try:
+            if current_dir is not None and current_dir.is_dir():
+                initial = str(current_dir.resolve())
+        except (OSError, RuntimeError, ValueError):
+            pass
+        if not initial:
+            initial = self._file_dialog_initial_dir(role="new_project")
         selected = QFileDialog.getExistingDirectory(
             self._dialog_parent(), "选择项目保存位置", initial
         )
@@ -1192,11 +1203,13 @@ class AppController(QObject):
         self._project_generation += 1
         generation = self._project_generation
         self._project_opening = True
+        self._project_operation = "创建"
 
         def worker() -> None:
             try:
                 store = ProjectStore.create(target, str(name).strip())
             except Exception as exc:
+                runlog.log_exception("创建工作项目失败", exc)
                 self._projectOpenFailed.emit(generation, workspace_project_create_error_message(exc))
                 return
             self._projectOpened.emit(generation, store, str(target))
@@ -1225,9 +1238,18 @@ class AppController(QObject):
     def openProject(self, path: str) -> None:
         if self._busy or self._workspace_busy or self._project_opening:
             return
+        error = path_text_error(path)
+        if error:
+            self.notificationRequested.emit("无法打开项目", error, "error")
+            return
         if self._workspace_recovery_blocked:
-            target_path = Path(path).resolve()
-            current_path = self._project_path.resolve() if self._project_path else None
+            try:
+                target_path = Path(path).resolve()
+                current_path = self._project_path.resolve() if self._project_path else None
+            except (OSError, RuntimeError, ValueError) as exc:
+                runlog.log_exception("校验待恢复项目位置失败", exc)
+                self.notificationRequested.emit("无法打开项目", "项目位置不可用，请重新选择原项目文件夹。", "error")
+                return
             if target_path != current_path:
                 self.notificationRequested.emit(
                     "项目未安全恢复",
@@ -1235,14 +1257,20 @@ class AppController(QObject):
                     "error",
                 )
                 return
+        target = absolute_path_hint(path)
+        if target is None:
+            self.notificationRequested.emit("无法打开项目", "项目位置不完整，请通过“打开项目”重新选择文件夹。", "error")
+            return
         self._project_generation += 1
         generation = self._project_generation
         self._project_opening = True
+        self._project_operation = "打开"
 
         def worker() -> None:
             try:
-                store = ProjectStore.open(Path(path), writable=True, read_only_fallback=True)
+                store = ProjectStore.open(target, writable=True, read_only_fallback=True)
             except Exception as exc:
+                runlog.log_exception("打开工作项目失败", exc)
                 self._projectOpenFailed.emit(generation, str(exc))
                 return
             self._projectOpened.emit(generation, store, str(path))
@@ -1279,20 +1307,14 @@ class AppController(QObject):
         if generation != self._project_generation:
             return
         self._project_opening = False
-        self.notificationRequested.emit("无法打开项目", message, "error")
+        self.notificationRequested.emit(f"无法{self._project_operation}项目", message, "error")
 
     def _remember_project(self, path: Path) -> None:
         self._recent_projects = [path, *(item for item in self._recent_projects if item != path)][:8]
 
     @staticmethod
     def _settings_path() -> Path:
-        if sys.platform.startswith("win"):
-            base = Path(os.environ.get("LOCALAPPDATA", "").strip() or (Path.home() / "AppData" / "Local"))
-        elif sys.platform == "darwin":
-            base = Path.home() / "Library" / "Application Support"
-        else:
-            base = Path(os.environ.get("XDG_CONFIG_HOME", "").strip() or (Path.home() / ".config"))
-        return base / "HRToolkit" / "workspace-ui.json"
+        return user_app_data_dir("config") / "HRToolkit" / "workspace-ui.json"
 
     @Slot()
     def start(self) -> None:
@@ -1306,8 +1328,8 @@ class AppController(QObject):
 
     def _load_startup(self) -> None:
         state: dict[str, Any] = {}
-        path = self._settings_path()
         try:
+            path = self._settings_path()
             if path.is_file():
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(payload, dict):
@@ -1320,8 +1342,8 @@ class AppController(QObject):
             if self._closed or self._shutdown_requested or self._startup_cancelled:
                 break
             try:
-                candidate = Path(str(value)).expanduser()
-                if candidate.is_dir() and candidate not in recent:
+                candidate = absolute_path_hint(value)
+                if candidate is not None and candidate.is_dir() and candidate not in recent:
                     recent.append(candidate)
             except (OSError, ValueError):
                 continue
@@ -1329,8 +1351,8 @@ class AppController(QObject):
         raw_last_dir = state.get("last_selected_dir")
         if raw_last_dir and not self._startup_cancelled:
             try:
-                candidate = Path(str(raw_last_dir)).expanduser().absolute()
-                if candidate.is_dir():
+                candidate = absolute_path_hint(raw_last_dir)
+                if candidate is not None and candidate.is_dir():
                     last_dir = candidate
             except Exception:
                 pass
@@ -1348,7 +1370,7 @@ class AppController(QObject):
             # A cancelled disk check must not discard unexamined history.
             candidates = state.get("recent_projects", [])
             if isinstance(candidates, list):
-                self._recent_projects = [Path(str(value)).expanduser() for value in candidates][:8]
+                self._recent_projects = [path for value in candidates if (path := absolute_path_hint(value)) is not None][:8]
         self._last_selected_dir = last_dir
         self._material_preferences = MaterialPreferences.from_payload(
             state.get("material_preferences")
@@ -1373,7 +1395,11 @@ class AppController(QObject):
         self.projectChanged.emit()
         current = state.get("current_project")
         if current and not self._startup_cancelled:
-            self.openProject(str(current))
+            path = absolute_path_hint(current)
+            if path is not None:
+                self.openProject(str(path))
+            else:
+                self.notificationRequested.emit("请重新选择工作项目", "上次记录的项目位置无效，请通过“打开项目”重新选择。", "warning")
         threading.Thread(
             target=cleanup_stale_update_files,
             daemon=True,
@@ -1387,7 +1413,11 @@ class AppController(QObject):
         # overwrite the unread settings with this controller's defaults.
         if self._startup_loading:
             return False
-        path = self._settings_path()
+        try:
+            path = self._settings_path()
+        except (OSError, RuntimeError, ValueError) as exc:
+            runlog.log_exception("读取项目界面设置位置失败", exc)
+            return False
         payload: dict[str, Any] = {}
         try:
             if path.is_file():

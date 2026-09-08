@@ -426,6 +426,9 @@ class QtControllerTests(unittest.TestCase):
             self.assertEqual(controller._last_selected_dir, other_dir)
             controller._remember_file_dialog_path(None)
             self.assertEqual(controller._last_selected_dir, other_dir)
+            for invalid in ("relative", "Ř<", "bad\x00path", True, {"path": str(other_dir)}):
+                controller._remember_file_dialog_path(invalid)
+                self.assertEqual(controller._last_selected_dir, other_dir)
 
             controller.close()
 
@@ -734,6 +737,84 @@ class QtControllerTests(unittest.TestCase):
                 self.assertEqual(controller._last_selected_dir, dir_b)
 
             controller.close()
+
+    def test_project_parent_chooser_recovers_empty_missing_and_corrupt_initial_paths(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            fallback = str(Path(tmp).resolve())
+            for current in ("", str(Path(tmp) / "missing"), "Ř<", "bad\x00path"):
+                with self.subTest(current=repr(current)), patch.object(controller, "_file_dialog_initial_dir", return_value=fallback) as initial, patch("hr_toolkit.gui_qt.controller.QFileDialog.getExistingDirectory", return_value="") as chooser:
+                    self.assertEqual(controller.chooseProjectParent(current), "")
+                    initial.assert_called_once_with(role="new_project")
+                    self.assertEqual(chooser.call_args.args[2], fallback)
+
+    def test_system_directory_recovery_is_shared_by_settings_logs_history_and_dialogs(self) -> None:
+        from hr_toolkit import runlog
+        from hr_toolkit.common import paths
+        from hr_toolkit.desktop_helpers import desktop_dir
+        from hr_toolkit.history_store import default_history_root
+
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp).resolve() / "系统用户目录"
+            profile.mkdir()
+            local_data = profile / "AppData" / "Local"
+            with patch.object(paths.sys, "platform", "win32"), patch.dict(os.environ, {"LOCALAPPDATA": "Ř<", "HR_TOOLKIT_DATA_DIR": ""}), patch.object(Path, "home", return_value=Path("Ř<")), patch.object(paths, "_windows_profile_dir", return_value=profile), patch.object(paths, "_windows_shell_folder", return_value=local_data):
+                self.assertEqual(controller._settings_path(), local_data / "HRToolkit" / "workspace-ui.json")
+                self.assertEqual(runlog.user_log_dir(), local_data / "HRToolkit" / "logs")
+                self.assertEqual(default_history_root(), local_data / "HRToolkit" / "Data")
+                self.assertEqual(desktop_dir(), profile)
+                self.assertEqual(controller.defaultProjectParent, str(profile))
+                self.assertEqual(controller._file_dialog_initial_dir(), str(profile))
+
+    def test_corrupt_startup_paths_never_open_cwd_or_leave_startup_busy(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        notifications = []
+        controller.notificationRequested.connect(lambda *args: notifications.append(args))
+        with patch.object(controller, "_settings_path", side_effect=OSError("bad settings location")), patch("hr_toolkit.gui_qt.controller.cleanup_stale_update_files"), patch("hr_toolkit.gui_qt.controller.runlog.log_exception"):
+            controller._startup_loading = True
+            controller._set_busy(True)
+            controller._load_startup()
+            self.assertFalse(controller.busy)
+            self.assertFalse(controller._startup_loading)
+            self.assertFalse(AppController._save_workspace_preferences(controller))
+        state = {"current_project": "Ř<", "recent_projects": [None, {}, "relative", "bad\x00path"]}
+        with patch.object(controller, "openProject") as opened, patch("hr_toolkit.gui_qt.controller.cleanup_stale_update_files"):
+            controller._startup_cancelled = False
+            controller._apply_startup(state, [], None)
+            opened.assert_not_called()
+            self.assertEqual(notifications[-1][0], "请重新选择工作项目")
+            controller._startup_cancelled = True
+            controller._apply_startup(state, [], None)
+            self.assertEqual(controller.recentProjects, [])
+
+    def test_project_worker_errors_are_logged_and_identify_create_or_open(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        notifications = []
+        controller.notificationRequested.connect(lambda *args: notifications.append(args))
+        with patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread:
+            for invalid in ("", "relative", "Ř<", "bad\x00path", "C:relative"):
+                controller.openProject(invalid)
+                self.assertFalse(controller._project_opening)
+                self.assertEqual(notifications[-1][0], "无法打开项目")
+            thread.assert_not_called()
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread, patch("hr_toolkit.gui_qt.controller.ProjectStore.create", side_effect=OSError("creation failure")), patch("hr_toolkit.gui_qt.controller.runlog.log_exception") as logged:
+                controller.createProject("新项目", tmp)
+                thread.call_args.kwargs["target"]()
+                self.assertFalse(controller._project_opening)
+                self.assertEqual(notifications[-1][0], "无法创建项目")
+                logged.assert_called_once()
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread, patch("hr_toolkit.gui_qt.controller.ProjectStore.open", side_effect=OSError("opening failure")), patch("hr_toolkit.gui_qt.controller.runlog.log_exception") as logged:
+                controller.openProject(tmp)
+                thread.call_args.kwargs["target"]()
+                self.assertFalse(controller._project_opening)
+                self.assertEqual(notifications[-1][0], "无法打开项目")
+                logged.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -98,6 +98,7 @@ class RunLogTests(unittest.TestCase):
     def test_frozen_macos_log_uses_writable_user_log_directory(self) -> None:
         os.environ.pop(runlog.RUN_LOG_ENV, None)
         user_home = Path(self._tmp.name) / "user"
+        user_home.mkdir()
         with patch.object(runlog.sys, "frozen", True, create=True), patch.object(
             runlog.sys, "platform", "darwin"
         ), patch.object(runlog.Path, "home", return_value=user_home):

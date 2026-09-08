@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from hr_toolkit import __version__
+from hr_toolkit.common.paths import user_home_dir
 
 
 UPDATE_LOG_FILE = "HRToolkit_update.log"
@@ -372,7 +373,7 @@ def _validate_launcher_name(launcher: str) -> None:
 
 
 def _validate_app_dir(app_dir: Path) -> None:
-    if app_dir == Path(app_dir.anchor) or app_dir == Path.home().resolve() or not app_dir.name:
+    if app_dir == Path(app_dir.anchor) or app_dir == user_home_dir().resolve() or not app_dir.name:
         raise RuntimeError("程序目录范围过大，已拒绝执行更新。")
 
 

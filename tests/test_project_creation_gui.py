@@ -127,6 +127,17 @@ class ProjectCreationValidationTests(unittest.TestCase):
             "共享盘不能作为活动项目位置",
         )
 
+    def test_corrupt_parent_values_are_reported_without_escaping_validation(self) -> None:
+        for value in (None, True, {}, "", "\x00", "/tmp/资料\n目录"):
+            with self.subTest(value=repr(value)):
+                target, error = workspace_project_creation_target(value, "新项目")
+                self.assertIsNone(target)
+                self.assertTrue(error)
+        with patch.object(Path, "expanduser", side_effect=RuntimeError("Cannot determine home")):
+            target, error = workspace_project_creation_target("~/项目", "新项目")
+        self.assertIsNone(target)
+        self.assertIn("重新选择", error)
+
 
 if __name__ == "__main__":
     unittest.main()

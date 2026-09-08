@@ -20,6 +20,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from hr_toolkit.common.paths import user_app_data_dir
+
 RUN_LOG_FILE = "HRToolkit_app.log"
 RUN_LOG_ENV = "HR_TOOLKIT_APP_LOG"
 RUN_LOG_JSON_ENV = "HR_TOOLKIT_LOG_JSON"
@@ -38,14 +40,9 @@ def current_app_dir() -> Path:
 def user_log_dir() -> Path:
     """Return a writable per-user log directory on every supported desktop."""
 
-    if sys.platform.startswith("win"):
-        base_text = os.environ.get("LOCALAPPDATA", "").strip()
-        base = Path(base_text) if base_text else Path.home() / "AppData" / "Local"
-        return base / "HRToolkit" / "logs"
+    base = user_app_data_dir("state")
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Logs" / "HRToolkit"
-    state_text = os.environ.get("XDG_STATE_HOME", "").strip()
-    base = Path(state_text) if state_text else Path.home() / ".local" / "state"
+        return base / "HRToolkit"
     return base / "HRToolkit" / "logs"
 
 

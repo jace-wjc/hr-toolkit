@@ -172,9 +172,38 @@ class ProjectStoreTests(unittest.TestCase):
 
         self.assertIn("同步盘", reason or "")
 
+    def test_corrupt_home_hint_cannot_block_create_open_or_history(self) -> None:
+        from hr_toolkit.common import paths
+        from hr_toolkit.history_store import HistoryStore, HistoryStoreError
+
+        home = self.base / "系统用户目录"
+        home.mkdir()
+        target = self.base / "正常中文项目 (9月)"
+        with patch.object(Path, "home", return_value=Path("Ř<")), patch.object(paths, "_system_home_dir", return_value=home):
+            created = ProjectStore.create(target, target.name)
+            marker = target / PROJECT_METADATA_DIR / PROJECT_FILE_NAME
+            original_marker = marker.read_bytes()
+            created.close()
+            reopened = ProjectStore.open(target)
+            try:
+                self.assertTrue(reopened.writable)
+                self.assertTrue(reopened.integrity_check())
+                self.assertEqual(marker.read_bytes(), original_marker)
+            finally:
+                reopened.close()
+            history = HistoryStore(self.base / "历史资料")
+            self.assertTrue(history.integrity_check())
+            # Recovering the actual home must keep the original safety guards.
+            with self.assertRaisesRegex(ProjectStoreError, "过于宽泛"):
+                ProjectStore.create(home, "不能占用用户目录")
+            with self.assertRaisesRegex(HistoryStoreError, "过于宽泛"):
+                HistoryStore(home)
+
     @unittest.skipUnless(os.name == "nt", "Windows 路径语义回归")
-    def test_windows_project_creation_survives_invalid_sync_hint(self) -> None:
+    def test_windows_create_and_open_survive_invalid_system_and_sync_hints(self) -> None:
         environment = {
+            "USERPROFILE": "Ř<",
+            "LOCALAPPDATA": "Ř<",
             "OneDrive": "R?",
             "OneDriveCommercial": "",
             "OneDriveConsumer": "",
@@ -183,6 +212,8 @@ class ProjectStoreTests(unittest.TestCase):
         with patch.dict(os.environ, environment):
             project_root = self.base / "Windows本机项目"
             store = ProjectStore.create(project_root, "Windows本机项目")
+            store.close()
+            store = ProjectStore.open(project_root)
         try:
             visible = sorted(
                 path.name

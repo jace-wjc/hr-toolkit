@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Literal, Sequence
 
+from hr_toolkit.common.paths import absolute_path_hint, path_text_error, user_home_dir
+
 try:
     from zoneinfo import ZoneInfo
 
@@ -2877,6 +2879,9 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _validate_project_location(path: Path, *, for_write: bool) -> Path:
+    error = path_text_error(str(path))
+    if error:
+        raise ProjectStoreError(error)
     absolute = path.absolute()
     # Preserve the path the user actually chose long enough to inspect every
     # existing parent.  Resolving first would erase a linked parent and could
@@ -2890,7 +2895,7 @@ def _validate_project_location(path: Path, *, for_write: bool) -> Path:
     resolved = absolute.resolve()
     _assert_existing_ancestors_are_real(resolved)
     anchor = Path(resolved.anchor)
-    home = Path.home().resolve()
+    home = user_home_dir().resolve()
     if resolved == anchor or resolved == home:
         raise ProjectStoreError("项目位置过于宽泛，请选择专用子文件夹。")
     for ancestor in (resolved, *resolved.parents):
@@ -2937,12 +2942,9 @@ def _unsafe_active_location_reason(path: Path) -> str | None:
             sync_root = _optional_sync_root(value)
             if sync_root is not None:
                 known_sync_roots.append(sync_root)
-    known_sync_roots.extend(
-        (
-            Path.home() / "Library" / "CloudStorage",
-            Path.home() / "Library" / "Mobile Documents",
-        )
-    )
+    if sys.platform == "darwin":
+        home = user_home_dir()
+        known_sync_roots.extend((home / "Library" / "CloudStorage", home / "Library" / "Mobile Documents"))
     for root in known_sync_roots:
         try:
             if root.exists() and _is_inside(path, root):
@@ -2959,8 +2961,8 @@ def _optional_sync_root(value: str) -> Path | None:
     """Resolve a trustworthy absolute cloud-root hint, or ignore the hint."""
 
     try:
-        candidate = Path(value).expanduser()
-        if not candidate.is_absolute():
+        candidate = absolute_path_hint(value)
+        if candidate is None:
             return None
         return candidate.resolve()
     except (OSError, RuntimeError, ValueError):
