@@ -887,7 +887,10 @@ class WindowsPackagingTests(unittest.TestCase):
         for workflow_path in workflow_paths:
             workflow = workflow_path.read_text(encoding="utf-8")
             action_lines.extend(
-                line.strip() for line in workflow.splitlines() if "uses: actions/" in line
+                line.strip()
+                for line in workflow.splitlines()
+                # 暂停的构建任务保留为整行注释，不属于当前生效的 Action 配置。
+                if "uses: actions/" in line and not line.lstrip().startswith("#")
             )
         self.assertTrue(action_lines)
         for line in action_lines:
