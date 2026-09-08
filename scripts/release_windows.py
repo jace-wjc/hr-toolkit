@@ -57,6 +57,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inno-compiler", help="ISCC.exe 路径或命令名")
     parser.add_argument("--wix-executable", help="WiX v4 wix.exe 路径或命令名")
     parser.add_argument(
+        "--exe-only", action="store_true", help="暂时只生成 EXE；移除此参数即可恢复 MSI"
+    )
+    parser.add_argument(
         "--target",
         choices=WINDOWS_TARGETS,
         default=WINDOWS_TARGET_MODERN,
@@ -83,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         inno_compiler=args.inno_compiler,
         wix_executable=args.wix_executable,
         skip_install_smoke=args.skip_install_smoke,
+        exe_only=args.exe_only,
         target=args.target,
         seven_zip_dir=args.seven_zip_dir,
         ucrt_dir=args.ucrt_dir,
@@ -96,15 +100,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"=== {label} 完成，用时 {elapsed:.1f} 秒 ===", flush=True)
 
     exe_name, msi_name = installer_asset_names(version, args.target)
-    expected = (
-        args.output_dir.resolve() / exe_name,
-        args.output_dir.resolve() / msi_name,
+    installer_names = (exe_name,) if args.exe_only else (exe_name, msi_name)
+    installers = tuple(args.output_dir.resolve() / name for name in installer_names)
+    expected = installers + (
         args.output_dir.resolve() / legacy_manifest_name(args.target),
     )
     missing = [path for path in expected if not path.is_file()]
     if missing:
         raise RuntimeError(f"Windows 三阶段完成后缺少产物：{missing}")
-    require_release_assets_under_limit(expected[:2])
+    require_release_assets_under_limit(installers)
     print("\nWindows 发布资产已完成：")
     for path in expected:
         print(f"- {path}")
@@ -122,6 +126,7 @@ def stage_commands(
     inno_compiler: str | None = None,
     wix_executable: str | None = None,
     skip_install_smoke: bool = False,
+    exe_only: bool = False,
     target: str = WINDOWS_TARGET_MODERN,
     seven_zip_dir: Path | None = None,
     ucrt_dir: Path | None = None,
@@ -171,6 +176,8 @@ def stage_commands(
         installers.extend(["--wix-executable", wix_executable])
     if skip_install_smoke:
         installers.append("--skip-install-smoke")
+    if exe_only:
+        installers.append("--exe-only")
 
     update_assets = [
         python,
@@ -194,7 +201,7 @@ def stage_commands(
 
     return (
         ("1/3 PyInstaller 纯构建", build),
-        ("2/3 EXE/MSI 安装器", installers),
+        ("2/3 EXE 安装器" if exe_only else "2/3 EXE/MSI 安装器", installers),
         ("3/3 旧服务器桥接更新资产", update_assets),
     )
 

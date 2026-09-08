@@ -58,6 +58,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inno-compiler", help=f"ISCC.exe；也可设置 {INNO_ENV}")
     parser.add_argument("--wix-executable", help=f"WiX v4+ wix.exe；也可设置 {WIX_ENV}")
     parser.add_argument(
+        "--exe-only", action="store_true", help="暂时跳过 WiX/MSI；移除此参数即可恢复"
+    )
+    parser.add_argument(
         "--target",
         choices=WINDOWS_TARGETS,
         default=WINDOWS_TARGET_MODERN,
@@ -82,13 +85,15 @@ def main(argv: list[str] | None = None) -> int:
         updater=args.updater.resolve(),
         output_dir=args.output_dir.resolve(),
         inno_compiler=resolve_inno_compiler(args.inno_compiler),
-        wix_executable=resolve_wix_executable(args.wix_executable),
+        wix_executable=None if args.exe_only else resolve_wix_executable(args.wix_executable),
+        exe_only=args.exe_only,
         install_smoke=not args.skip_install_smoke,
         inno_sign_tool_name=args.inno_sign_tool_name,
         target=args.target,
     )
     print(f"Windows EXE 安装器：{exe_path}")
-    print(f"Windows MSI 安装器：{msi_path}")
+    if msi_path is not None:
+        print(f"Windows MSI 安装器：{msi_path}")
     return 0
 
 
@@ -120,14 +125,17 @@ def build_windows_installers(
     updater: Path,
     output_dir: Path,
     inno_compiler: str,
-    wix_executable: str,
+    wix_executable: str | None,
+    exe_only: bool = False,
     install_smoke: bool = True,
     inno_sign_tool_name: str | None = None,
     target: str = WINDOWS_TARGET_MODERN,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path | None]:
     validate_build_version(version)
     target = validate_windows_target(target)
-    validate_installer_definitions()
+    if not exe_only and not wix_executable:
+        raise RuntimeError("生成 MSI 需要 WiX；仅生成 EXE 时请使用 --exe-only。")
+    validate_installer_definitions(exe_only=exe_only)
     # Python 3.8 on Windows may leave a non-existent path relative after
     # Path.resolve(). Inno interprets a relative OutputDir from the .iss file's
     # directory, so normalize it without requiring the directory to exist.
@@ -135,9 +143,10 @@ def build_windows_installers(
     output_dir.mkdir(parents=True, exist_ok=True)
     exe_name, msi_name = installer_asset_names(version, target)
     exe_path = output_dir / exe_name
-    msi_path = output_dir / msi_name
+    msi_path = None if exe_only else output_dir / msi_name
     exe_path.unlink(missing_ok=True)
-    msi_path.unlink(missing_ok=True)
+    if msi_path is not None:
+        msi_path.unlink(missing_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="hr_toolkit_windows_installers_") as tmp:
         temp_dir = Path(tmp)
@@ -148,9 +157,6 @@ def build_windows_installers(
             target_dir=payload_dir,
             target=target,
         )
-        wix_fragment = temp_dir / "HRToolkitPayload.wxs"
-        generate_wix_payload_fragment(payload_dir, wix_fragment, target=target)
-
         _run(
             inno_compile_command(
                 compiler=inno_compiler,
@@ -161,18 +167,22 @@ def build_windows_installers(
                 target=target,
             )
         )
-        _run(
-            wix_build_command(
-                wix_executable=wix_executable,
-                version=version,
-                payload_fragment=wix_fragment,
-                output_path=msi_path,
-                target=target,
+        # GitHub 暂停 MSI 时使用 --exe-only；保留完整 WiX 构建路径供以后恢复。
+        if msi_path is not None:
+            wix_fragment = temp_dir / "HRToolkitPayload.wxs"
+            generate_wix_payload_fragment(payload_dir, wix_fragment, target=target)
+            _run(
+                wix_build_command(
+                    wix_executable=wix_executable,
+                    version=version,
+                    payload_fragment=wix_fragment,
+                    output_path=msi_path,
+                    target=target,
+                )
             )
-        )
 
     verify_installer_outputs(exe_path, msi_path)
-    require_release_assets_under_limit((exe_path, msi_path))
+    require_release_assets_under_limit((exe_path,) if msi_path is None else (exe_path, msi_path))
     if install_smoke:
         smoke_test_installers(exe_path, msi_path, target=target)
     return exe_path, msi_path
@@ -311,7 +321,7 @@ def _indent_xml(tree: ET.ElementTree) -> None:
     apply(tree.getroot())
 
 
-def validate_installer_definitions() -> None:
+def validate_installer_definitions(*, exe_only: bool = False) -> None:
     if not INNO_LANGUAGE_FILE.is_file():
         raise RuntimeError(f"缺少固定的 Inno 简体中文语言文件：{INNO_LANGUAGE_FILE}")
     language_sha256 = hashlib.sha256(INNO_LANGUAGE_FILE.read_bytes()).hexdigest()
@@ -340,6 +350,9 @@ def validate_installer_definitions() -> None:
     if missing_iss:
         raise RuntimeError(f"Inno Setup 配置缺少权限/布局约束：{missing_iss}")
 
+    if exe_only:
+        return
+
     wix = WIX_SOURCE.read_text(encoding="utf-8")
     required_wix = (
         'Scope="perUser"',
@@ -356,31 +369,33 @@ def validate_installer_definitions() -> None:
         raise RuntimeError(f"WiX 配置缺少权限/布局约束：{missing_wix}")
 
 
-def verify_installer_outputs(exe_path: Path, msi_path: Path) -> None:
+def verify_installer_outputs(exe_path: Path, msi_path: Path | None) -> None:
     if not exe_path.is_file() or _read_prefix(exe_path, 2) != b"MZ":
         raise RuntimeError(f"EXE 安装器无效：{exe_path}")
-    if not msi_path.is_file() or _read_prefix(msi_path, 8) != MSI_MAGIC:
+    if msi_path is not None and (not msi_path.is_file() or _read_prefix(msi_path, 8) != MSI_MAGIC):
         raise RuntimeError(f"MSI 安装器无效：{msi_path}")
 
 
 def smoke_test_installers(
     exe_path: Path,
-    msi_path: Path,
+    msi_path: Path | None,
     *,
     target: str = WINDOWS_TARGET_MODERN,
 ) -> None:
     target = validate_windows_target(target)
     ensure_windows_runtime()
     if target == WINDOWS_TARGET_WIN7 and not _supports_win7_installer_smoke():
+        formats = "EXE" if msi_path is None else "EXE/MSI"
         print(
-            "跳过 Win7 EXE/MSI 安装冒烟：当前 Windows 不在安装器支持的 "
+            f"跳过 Win7 {formats} 安装冒烟：当前 Windows 不在安装器支持的 "
             "Windows 7 SP1/Windows 8 范围内；真实验收由干净 Win7 SP1 环境完成。"
         )
         return
     with tempfile.TemporaryDirectory(prefix="hr_toolkit_installer_smoke_") as tmp:
         root = Path(tmp)
         _smoke_test_inno(exe_path, root / "inno", target=target)
-        _smoke_test_msi(msi_path, root / "msi", target=target)
+        if msi_path is not None:
+            _smoke_test_msi(msi_path, root / "msi", target=target)
 
 
 def _supports_win7_installer_smoke() -> bool:

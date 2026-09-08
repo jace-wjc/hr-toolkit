@@ -87,6 +87,12 @@ def validate_release_identity(version: str, tag: str, project_version: str) -> N
 
 def release_asset_names(version: str, *, mac_variant: str) -> tuple[str, ...]:
     validate_version(version)
+    # 临时 Windows EXE 发布模式；默认的 MSI/macOS 完整资产名单保留供恢复。
+    if mac_variant == "windows-exe-only":
+        return (
+            f"HRToolkit_{version}_x64-setup.exe",
+            f"HRToolkit_{version}_win7_x64-setup.exe",
+        )
     windows = (
         f"HRToolkit_{version}_x64-setup.exe",
         f"HRToolkit_{version}_x64.msi",
@@ -264,7 +270,7 @@ def build_latest_manifest(
             primary_download_max_bytes=primary_download_max_bytes,
             primary_download_asset_names=primary_asset_names,
         )
-    else:
+    elif mac_variant == "split":
         for platform_key, suffix in (("macos-arm64", "arm64"), ("macos-x64", "x64")):
             mac_name = f"HRToolkit_{version}_{suffix}.dmg"
             platforms[platform_key] = _asset_payload(
@@ -278,6 +284,8 @@ def build_latest_manifest(
                 primary_download_max_bytes=primary_download_max_bytes,
                 primary_download_asset_names=primary_asset_names,
             )
+    elif mac_variant != "windows-exe-only":
+        raise ReleaseMetadataError(f"未知 macOS 资产模式：{mac_variant}")
 
     return {
         "version": version,
@@ -321,6 +329,7 @@ def generate_release_metadata(
     project_version: str,
     notes: Optional[Sequence[str]] = None,
     mandatory: bool = True,
+    windows_exe_only: bool = False,
     download_base_url: str | None = None,
     release_url: str | None = None,
     fallback_download_base_url: str | None = None,
@@ -330,7 +339,7 @@ def generate_release_metadata(
     validate_release_identity(version, tag, project_version)
     if not REPOSITORY_PATTERN.fullmatch(repository):
         raise ReleaseMetadataError(f"仓库名必须是 owner/repo：{repository!r}")
-    mac_variant = detect_mac_variant(assets_dir, version)
+    mac_variant = "windows-exe-only" if windows_exe_only else detect_mac_variant(assets_dir, version)
     asset_names = release_asset_names(version, mac_variant=mac_variant)
     _validate_asset_directory(assets_dir, asset_names)
     require_release_assets_under_limit(assets_dir / name for name in asset_names)
@@ -396,6 +405,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="允许使用主下载源的平台资产名；可重复指定",
     )
     parser.add_argument("--optional", action="store_true", help="将更新标记为非强制")
+    parser.add_argument(
+        "--windows-exe-only",
+        action="store_true",
+        help="暂时仅发布现代 Windows/Win7 两个 EXE；恢复 MSI/macOS 后移除此参数",
+    )
     parser.add_argument("--check-only", action="store_true", help="只检查 Tag 与项目版本，不读取资产")
     return parser
 
@@ -418,6 +432,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         project_version=project_version,
         notes=args.notes,
         mandatory=not args.optional,
+        windows_exe_only=args.windows_exe_only,
         download_base_url=args.download_base_url,
         release_url=args.release_url,
         fallback_download_base_url=args.fallback_download_base_url,

@@ -1,3 +1,11 @@
+# 2026-09-08 临时暂停非必需安装包：当前只需要 Win10/Win11 x64 EXE 和 Win7 x64 EXE。
+# MSI、macOS DMG、便携 ZIP 的配置保留在注释中，后续仅在用户明确要求时恢复。
+# 恢复 MSI：取消 WiX 安装和 MSI 上传项的注释，移除 Windows 构建命令的 --exe-only；
+# release.yml 中还需恢复 MSI 必需资产项及 EXE 行末逗号。
+# 恢复 macOS：取消 build-macos 整段注释，并恢复发布依赖/条件或测试平台选项。
+# MSI 与 macOS 均恢复后，移除 release.yml 元数据命令的 --windows-exe-only。
+# 部分恢复时需同步调整元数据资产名单；保留 latest.json、校验文件和桥接清单用于更新。
+
 name: Test Build (测试打包)
 
 on:
@@ -15,8 +23,9 @@ on:
           - "windows"
           - "windows-win7"
           - "windows-all"
-          - "macos"
-          - "all"
+          # 暂停 macOS 选项；恢复 build-macos 后取消以下注释。
+          # - "macos"
+          # - "all"
       run_tests:
         description: "打包前是否运行单元测试 (Run unit tests before packaging)"
         required: true
@@ -70,7 +79,7 @@ jobs:
           echo "Target: ${TARGET_PLATFORM}; tests: ${RUN_TESTS}"
 
   build-windows:
-    name: Build Windows (EXE & Portable ZIP)
+    name: Build Windows x64 EXE
     needs: prepare
     if: needs.prepare.outputs.target_platform == 'windows' || needs.prepare.outputs.target_platform == 'windows-all' || needs.prepare.outputs.target_platform == 'all'
     runs-on: windows-latest
@@ -105,12 +114,13 @@ jobs:
           python -c
           "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test; ocr_runtime_smoke_test()"
 
-      - name: Install Inno Setup and WiX
+      - name: Install Inno Setup
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          dotnet tool install --global wix --version 5.0.2
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # 暂停 MSI 专用依赖；恢复 MSI 时取消以下两行注释。
+          # dotnet tool install --global wix --version 5.0.2
+          # "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Run unit tests (Optional)
         if: needs.prepare.outputs.run_tests == 'true'
@@ -121,16 +131,18 @@ jobs:
       - name: Build Windows Application and Installers
         run: >-
           python scripts/release_windows.py
+          --exe-only
           --version "${{ env.VERSION }}"
           --build-dir dist/windows
           --output-dir artifacts/windows
 
-      - name: Create Portable Zip (免安装绿色包)
-        shell: pwsh
-        run: |
-          $zipPath = "artifacts/windows/HRToolkit_${env:VERSION}_test_${env:SHORT_SHA}_portable.zip"
-          Compress-Archive -Path dist/windows/HRToolkit -DestinationPath $zipPath -Force
-          Write-Host "Portable zip created at $zipPath"
+      # 暂停便携 ZIP：当前只需要 EXE，恢复时取消本步骤及对应上传路径的注释。
+      # - name: Create Portable Zip (免安装绿色包)
+      #   shell: pwsh
+      #   run: |
+      #     $zipPath = "artifacts/windows/HRToolkit_${env:VERSION}_test_${env:SHORT_SHA}_portable.zip"
+      #     Compress-Archive -Path dist/windows/HRToolkit -DestinationPath $zipPath -Force
+      #     Write-Host "Portable zip created at $zipPath"
 
       - name: Upload Windows test artifacts
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
@@ -138,14 +150,14 @@ jobs:
           name: HRToolkit-Windows-Test-${{ env.VERSION }}-${{ env.SHORT_SHA }}
           path: |
             artifacts/windows/HRToolkit_${{ env.VERSION }}_x64-setup.exe
-            artifacts/windows/HRToolkit_${{ env.VERSION }}_x64.msi
-            artifacts/windows/HRToolkit_${{ env.VERSION }}_test_${{ env.SHORT_SHA }}_portable.zip
+          #   artifacts/windows/HRToolkit_${{ env.VERSION }}_x64.msi
+          #   artifacts/windows/HRToolkit_${{ env.VERSION }}_test_${{ env.SHORT_SHA }}_portable.zip
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
 
   build-windows-win7:
-    name: Build Windows 7 SP1 compatibility package
+    name: Build Windows 7 SP1 compatibility x64 EXE
     needs: prepare
     if: needs.prepare.outputs.target_platform == 'windows-win7' || needs.prepare.outputs.target_platform == 'windows-all' || needs.prepare.outputs.target_platform == 'all'
     runs-on: windows-2022
@@ -184,12 +196,13 @@ jobs:
           python -c
           "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test, smoke_test; ocr_runtime_smoke_test(); smoke_test()"
 
-      - name: Install Inno Setup and WiX
+      - name: Install Inno Setup
         shell: pwsh
         run: |
           choco install innosetup --version=6.7.1 --no-progress -y
-          dotnet tool install --global wix --version 5.0.2
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # 暂停 MSI 专用依赖；恢复 MSI 时取消以下两行注释。
+          # dotnet tool install --global wix --version 5.0.2
+          # "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Run Python 3.8-compatible core tests (Optional)
         if: needs.prepare.outputs.run_tests == 'true'
@@ -216,6 +229,7 @@ jobs:
       - name: Build Win7 application and installers
         run: >-
           python scripts/release_windows.py
+          --exe-only
           --version "${{ env.VERSION }}"
           --target win7
           --seven-zip-dir build/win7-runtime/7zip
@@ -225,11 +239,12 @@ jobs:
           --work-dir build/windows-win7
           --output-dir artifacts/windows-win7
 
-      - name: Create Win7 portable zip
-        shell: pwsh
-        run: |
-          $zipPath = "artifacts/windows-win7/HRToolkit_${env:VERSION}_win7_test_${env:SHORT_SHA}_portable.zip"
-          Compress-Archive -Path dist/windows-win7/HRToolkit -DestinationPath $zipPath -Force
+      # 暂停便携 ZIP：当前只需要 EXE，恢复时取消本步骤及对应上传路径的注释。
+      # - name: Create Win7 portable zip
+      #   shell: pwsh
+      #   run: |
+      #     $zipPath = "artifacts/windows-win7/HRToolkit_${env:VERSION}_win7_test_${env:SHORT_SHA}_portable.zip"
+      #     Compress-Archive -Path dist/windows-win7/HRToolkit -DestinationPath $zipPath -Force
 
       - name: Upload Win7 test artifacts
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
@@ -237,86 +252,88 @@ jobs:
           name: HRToolkit-Windows7-Test-${{ env.VERSION }}-${{ env.SHORT_SHA }}
           path: |
             artifacts/windows-win7/HRToolkit_${{ env.VERSION }}_win7_x64-setup.exe
-            artifacts/windows-win7/HRToolkit_${{ env.VERSION }}_win7_x64.msi
-            artifacts/windows-win7/HRToolkit_${{ env.VERSION }}_win7_test_${{ env.SHORT_SHA }}_portable.zip
+          #   artifacts/windows-win7/HRToolkit_${{ env.VERSION }}_win7_x64.msi
+          #   artifacts/windows-win7/HRToolkit_${{ env.VERSION }}_win7_test_${{ env.SHORT_SHA }}_portable.zip
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
 
-  build-macos:
-    name: Build macOS ${{ matrix.asset_suffix }} DMG
-    needs: prepare
-    if: needs.prepare.outputs.target_platform == 'macos' || needs.prepare.outputs.target_platform == 'all'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-intel
-            architecture: x86_64
-            asset_suffix: x64
-          - runner: macos-15
-            architecture: arm64
-            asset_suffix: arm64
-    runs-on: ${{ matrix.runner }}
-    env:
-      VERSION: ${{ needs.prepare.outputs.version }}
-      SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
-    steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+  # 暂停 macOS Intel/Apple Silicon DMG：当前无需求，避免启动两个 macOS runner。
+  # 恢复时取消下方整个任务的注释，并按文件顶部说明恢复调用关系。
+  # build-macos:
+  #   name: Build macOS ${{ matrix.asset_suffix }} DMG
+  #   needs: prepare
+  #   if: needs.prepare.outputs.target_platform == 'macos' || needs.prepare.outputs.target_platform == 'all'
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - runner: macos-15-intel
+  #           architecture: x86_64
+  #           asset_suffix: x64
+  #         - runner: macos-15
+  #           architecture: arm64
+  #           asset_suffix: arm64
+  #   runs-on: ${{ matrix.runner }}
+  #   env:
+  #     VERSION: ${{ needs.prepare.outputs.version }}
+  #     SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+  #   steps:
+  #     - name: Check out source
+  #       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-build.txt
-            requirements-gui.txt
-            constraints/python312-production.txt
+  #     - name: Set up Python
+  #       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+  #       with:
+  #         python-version: "3.12"
+  #         cache: pip
+  #         cache-dependency-path: |
+  #           requirements.txt
+  #           requirements-build.txt
+  #           requirements-gui.txt
+  #           constraints/python312-production.txt
 
-      - name: Confirm native runner architecture
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = "${{ matrix.architecture }}"
+  #     - name: Confirm native runner architecture
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         test "$(uname -m)" = "${{ matrix.architecture }}"
 
-      - name: Install macOS build dependencies
-        run: |
-          python -m pip install --disable-pip-version-check --upgrade -c constraints/python312-production.txt pip
-          python -m pip install --disable-pip-version-check -r requirements.txt -r requirements-build.txt -c constraints/python312-production.txt
-          python -m pip check
+  #     - name: Install macOS build dependencies
+  #       run: |
+  #         python -m pip install --disable-pip-version-check --upgrade -c constraints/python312-production.txt pip
+  #         python -m pip install --disable-pip-version-check -r requirements.txt -r requirements-build.txt -c constraints/python312-production.txt
+  #         python -m pip check
 
-      - name: Prepare compact Intel macOS runtime
-        if: matrix.architecture == 'x86_64'
-        run: python scripts/prepare_macos_x64_runtime.py
+  #     - name: Prepare compact Intel macOS runtime
+  #       if: matrix.architecture == 'x86_64'
+  #       run: python scripts/prepare_macos_x64_runtime.py
 
-      - name: Exercise local OCR models and inference
-        run: >-
-          python -c
-          "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test; ocr_runtime_smoke_test()"
+  #     - name: Exercise local OCR models and inference
+  #       run: >-
+  #         python -c
+  #         "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test; ocr_runtime_smoke_test()"
 
-      - name: Run unit tests (Optional)
-        if: needs.prepare.outputs.run_tests == 'true'
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -v
+  #     - name: Run unit tests (Optional)
+  #       if: needs.prepare.outputs.run_tests == 'true'
+  #       env:
+  #         PYTHONDONTWRITEBYTECODE: "1"
+  #       run: python -m unittest discover -s tests -v
 
-      - name: Build macOS DMG
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/build_macos.py \
-            --version "${VERSION}" \
-            --architecture "${{ matrix.architecture }}" \
-            --output-dir artifacts/macos
+  #     - name: Build macOS DMG
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         python scripts/build_macos.py \
+  #           --version "${VERSION}" \
+  #           --architecture "${{ matrix.architecture }}" \
+  #           --output-dir artifacts/macos
 
-      - name: Upload macOS test artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        with:
-          name: HRToolkit-macOS-${{ matrix.asset_suffix }}-Test-${{ env.VERSION }}-${{ env.SHORT_SHA }}
-          path: artifacts/macos/HRToolkit_${{ env.VERSION }}_${{ matrix.asset_suffix }}.dmg
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
+  #     - name: Upload macOS test artifacts
+  #       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+  #       with:
+  #         name: HRToolkit-macOS-${{ matrix.asset_suffix }}-Test-${{ env.VERSION }}-${{ env.SHORT_SHA }}
+  #         path: artifacts/macos/HRToolkit_${{ env.VERSION }}_${{ matrix.asset_suffix }}.dmg
+  #         if-no-files-found: error
+  #         retention-days: 14
+  #         compression-level: 0
