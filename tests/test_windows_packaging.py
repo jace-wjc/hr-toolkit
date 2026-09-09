@@ -991,6 +991,36 @@ class WindowsPackagingTests(unittest.TestCase):
         self.assertIn("runs-on: windows-latest", modern_job)
         self.assertIn("runs-on: windows-2022", win7_job)
 
+    def test_release_windows_tests_run_in_parallel_but_still_gate_publication(self) -> None:
+        workflow = (
+            build_windows.REPO_ROOT / ".github" / "workflows" / "release.yml"
+        ).read_text(encoding="utf-8")
+        validation = workflow.split("\n  validate-windows:", 1)[1].split(
+            "\n  build-windows:", 1
+        )[0]
+        configuration = validation.split("\n    steps:", 1)[0]
+        self.assertIn("runs-on: windows-latest", configuration)
+        self.assertNotIn("needs:", configuration)
+        self.assertIn("python -m unittest discover -s tests -v", validation)
+        self.assertIn("-r requirements-build.txt -c constraints/python312-production.txt", validation)
+        modern_build = workflow.split("\n  build-windows:", 1)[1].split(
+            "\n  build-windows-win7:", 1
+        )[0]
+        self.assertNotIn("python -m unittest", modern_build)
+        self.assertIn("ocr_runtime_smoke_test", modern_build)
+        self.assertIn("python scripts/release_windows.py", modern_build)
+        win7_build = workflow.split("\n  build-windows-win7:", 1)[1].split(
+            "\n  publish:", 1
+        )[0]
+        self.assertIn("Run Python 3.8-compatible core tests", win7_build)
+        publication = workflow.split("\n  publish:", 1)[1].split(
+            "\n    steps:", 1
+        )[0]
+        self.assertIn("      - validate-windows\n", publication)
+        self.assertIn("needs.validate-windows.result == 'success'", publication)
+        self.assertIn("needs.build-windows.result == 'success'", publication)
+        self.assertIn("needs.build-windows-win7.result == 'success'", publication)
+
     def test_release_and_test_build_use_real_parallel_macos_architectures(self) -> None:
         workflow_dir = build_windows.REPO_ROOT / ".github" / "workflows"
         release = (workflow_dir / "release.yml").read_text(encoding="utf-8")

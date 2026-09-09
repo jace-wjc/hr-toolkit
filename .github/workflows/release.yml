@@ -81,6 +81,39 @@ jobs:
             git diff --check
           fi
 
+  # Windows 与 Ubuntu 的运行环境不同，保留完整平台测试。
+  # 从构建任务移出后，与 validate/构建并行；publish 仍须等待本任务成功。
+  validate-windows:
+    name: Validate Windows source
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+            requirements-gui.txt
+            constraints/python312-production.txt
+
+      - name: Install Python test dependencies matching the build
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade -c constraints/python312-production.txt pip
+          python -m pip install --disable-pip-version-check -r requirements.txt -r requirements-build.txt -c constraints/python312-production.txt
+          python -m pip check
+
+      - name: Run complete Windows unit test suite
+        run: python -m unittest discover -s tests -v
+
   build-windows:
     name: Build Windows x64 EXE
     needs: validate
@@ -115,18 +148,22 @@ jobs:
           python -c
           "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test; ocr_runtime_smoke_test()"
 
-      - name: Install Inno Setup
+      - name: Reuse or install Inno Setup
         shell: pwsh
         run: |
-          choco install innosetup --no-progress -y
+          # runner 已预装 Inno Setup；避免重复调用 Chocolatey 查询仓库。
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup installation failed: $LASTEXITCODE" }
+          }
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw "Inno Setup compiler is missing: $compiler"
+          }
+          Write-Host "Using Inno Setup $((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion)"
           # 暂停 MSI 专用依赖；恢复 MSI 时取消以下两行注释。
           # dotnet tool install --global wix --version 5.0.2
           # "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Run Windows tests
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -v
 
       - name: Build application, installers, and update assets
         run: >-
@@ -211,10 +248,24 @@ jobs:
           python -c
           "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test, smoke_test; ocr_runtime_smoke_test(); smoke_test()"
 
-      - name: Install Inno Setup
+      - name: Reuse or install pinned Inno Setup
         shell: pwsh
         run: |
-          choco install innosetup --version=6.7.1 --no-progress -y
+          # Win7 编译器版本仍固定为 6.7.1，不因 runner 预装版本变化而放宽。
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $matchesPinnedVersion = (Test-Path -LiteralPath $compiler -PathType Leaf) -and
+            ((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion -match '^6\.7\.1(?:\D|$)')
+          if (-not $matchesPinnedVersion) {
+            choco install innosetup --version=6.7.1 --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup 6.7.1 installation failed: $LASTEXITCODE" }
+          }
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw "Inno Setup compiler is missing: $compiler"
+          }
+          if ((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion -notmatch '^6\.7\.1(?:\D|$)') {
+            throw "Win7 requires Inno Setup 6.7.1: $compiler"
+          }
+          Write-Host "Using Inno Setup $((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion)"
           # 暂停 MSI 专用依赖；恢复 MSI 时取消以下两行注释。
           # dotnet tool install --global wix --version 5.0.2
           # "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -365,12 +416,14 @@ jobs:
     name: Publish GitHub Release direct assets
     needs:
       - validate
+      - validate-windows
       - build-windows
       - build-windows-win7
       # - build-macos  # 恢复 macOS 任务时一并恢复依赖。
     if: >-
       always() &&
       needs.validate.result == 'success' &&
+      needs.validate-windows.result == 'success' &&
       needs.build-windows.result == 'success' &&
       needs.build-windows-win7.result == 'success'
     # 恢复 macOS 时，在上行末补回 &&，并将以下条件恢复到 if 表达式中。
