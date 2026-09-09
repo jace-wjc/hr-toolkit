@@ -292,15 +292,27 @@ class ProjectRunCoordinator:
                     text = f"正在检查项目资料：已发现 {scanned} 个文件"
                 callbacks.progress(completed, int(total or 0), text)
 
+            # Only the explicitly selected existing change summary opts into
+            # a current-version snapshot. Other tools/inputs keep strict reuse.
+            current_version_roles = (
+                frozenset({"template_path"})
+                if request.tool_id == "personnel_change_merge"
+                and getattr(request.function, "__module__", "") == "hr_toolkit.tools.personnel_change_merge"
+                and getattr(request.function, "__name__", "") == "merge_personnel_changes"
+                else frozenset()
+            )
             replacements = import_project_run_sources(
                 store,
                 batch_id,
                 sources,
                 cancel_event,
                 on_progress=import_progress,
+                current_version_roles=current_version_roles,
             )
             if cancel_event.is_set():
                 raise BusinessProcessCancelled("本次处理已停止。")
+            if current_version_roles and replacements.get("template_path"):
+                callbacks.log("已使用当前选择的汇总表，并保存本次处理副本。")
             old_upload_root = draft.directories["uploads"]
             running = store.start_batch(batch_id)
             started = True

@@ -244,6 +244,8 @@ class _ExternalSourceItem:
     relative_parts: tuple[str, ...]
     expected_size_bytes: int | None = None
     expected_sha256: str | None = None
+    source_batch_id: str | None = None
+    source_file_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -672,6 +674,7 @@ class ProjectStore:
         *,
         category: str = CATEGORY_UPLOADS,
         role: str = "main",
+        use_current_version: bool = False,
         cancelled: Callable[[], bool] | None = None,
         progress: Callable[[int, int, str], None] | None = None,
         on_progress: Callable[[ImportProgress], None] | None = None,
@@ -681,6 +684,8 @@ class ProjectStore:
         Sources may come from common material, another batch's uploads or
         supplements, or the registered results of a successfully completed
         batch.  The destination receives an independent, hashed copy.
+        Explicit append inputs may opt into the currently selected version;
+        the original registration is retained as provenance, never updated.
         """
 
         return self._copy_sources_to_batch(
@@ -690,6 +695,7 @@ class ProjectStore:
             role=role,
             project_sources=True,
             preserve_directories=False,
+            use_current_version=use_current_version,
             cancelled=cancelled,
             progress=progress,
             on_progress=on_progress,
@@ -763,6 +769,7 @@ class ProjectStore:
         cancelled: Callable[[], bool] | None,
         progress: Callable[[int, int, str], None] | None,
         on_progress: Callable[[ImportProgress], None] | None,
+        use_current_version: bool = False,
     ) -> _BatchCopyResult:
         """Stage, hash, declare and publish files into a batch."""
 
@@ -798,6 +805,7 @@ class ProjectStore:
                     raw_sources,
                     target_batch_root=destination_root.parent,
                     allow_empty=bool(source_directories),
+                    use_current_version=use_current_version,
                     cancelled=cancelled,
                     on_progress=on_progress,
                 )
@@ -937,7 +945,8 @@ class ProjectStore:
                         ),
                     )
                     if (
-                        source_item.expected_size_bytes is not None
+                        not use_current_version
+                        and source_item.expected_size_bytes is not None
                         and source_item.expected_sha256 is not None
                         and (
                             int(metadata["size_bytes"]) != source_item.expected_size_bytes
@@ -973,6 +982,27 @@ class ProjectStore:
                             "modified_ns": int(metadata["modified_ns"]),
                         }
                     )
+                    if project_sources and use_current_version:
+                        # Keep the original evidence alongside this new snapshot.
+                        # Its own size/hash above always describe the bytes copied.
+                        pending_items[-1]["source_version"] = {
+                            "project_id": self.workspace.project_id,
+                            "batch_id": source_item.source_batch_id,
+                            "file_id": source_item.source_file_id,
+                            "relative_path": source_item.path.relative_to(self.root).as_posix(),
+                            "registered_size_bytes": source_item.expected_size_bytes,
+                            "registered_sha256": source_item.expected_sha256,
+                            "status": (
+                                "unregistered"
+                                if source_item.expected_sha256 is None
+                                else "unchanged"
+                                if (
+                                    int(metadata["size_bytes"]) == source_item.expected_size_bytes
+                                    and str(metadata["sha256"]) == source_item.expected_sha256
+                                )
+                                else "modified"
+                            ),
+                        }
                 if preserve_directories:
                     current_directories = self._collect_source_directories(
                         raw_sources,
@@ -1919,6 +1949,7 @@ class ProjectStore:
         *,
         target_batch_root: Path,
         allow_empty: bool = False,
+        use_current_version: bool = False,
         cancelled: Callable[[], bool] | None = None,
         on_progress: Callable[[ImportProgress], None] | None = None,
     ) -> list[_ExternalSourceItem]:
@@ -1975,6 +2006,11 @@ class ProjectStore:
             if not matches:
                 raise ProjectStoreError("只能复用共用资料或批次中的上传、补充、已完成结果。")
             source_root, source_kind, source_manifest = max(matches, key=lambda rule: len(rule[0].parts))
+            source_batch_id = (
+                _summary_from_manifest(source_manifest).id
+                if source_manifest is not None
+                else None
+            )
             registered_by_path: dict[Path, dict[str, Any]] = {}
             if source_manifest is not None:
                 for registered_item in _file_objects(source_manifest):
@@ -1998,7 +2034,7 @@ class ProjectStore:
                     continue
                 _reject_forbidden_import_file(resolved)
                 registered_item = registered_by_path.get(resolved)
-                if source_manifest is not None and registered_item is None:
+                if source_manifest is not None and registered_item is None and not use_current_version:
                     raise ProjectStoreError("只能复用清单中已登记且未改动的项目文件。")
                 items.append(
                     _ExternalSourceItem(
@@ -2017,6 +2053,8 @@ class ProjectStore:
                             if registered_item is not None
                             else None
                         ),
+                        source_batch_id=source_batch_id,
+                        source_file_id=str(registered_item["id"]) if registered_item is not None else None,
                     )
                 )
                 _report_checking_progress(on_progress, items, resolved.name)
@@ -2029,7 +2067,7 @@ class ProjectStore:
                         cancelled=cancelled,
                     )
                 )
-                if source_manifest is not None:
+                if source_manifest is not None and not use_current_version:
                     actual_paths: set[Path] = set()
                     for child, _relative_parts in walked:
                         _raise_if_cancelled(cancelled)
@@ -2066,6 +2104,8 @@ class ProjectStore:
                                 if registered_item is not None
                                 else None
                             ),
+                            source_batch_id=source_batch_id,
+                            source_file_id=str(registered_item["id"]) if registered_item is not None else None,
                         )
                     )
                     _report_checking_progress(on_progress, items, child.name)

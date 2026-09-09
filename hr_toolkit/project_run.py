@@ -153,6 +153,7 @@ def import_project_run_sources(
     cancel_event: Any,
     *,
     on_progress: Callable[[Any], None] | None = None,
+    current_version_roles: frozenset[str] = frozenset(),
 ) -> dict[str, list[Path]]:
     """Copy a run's sources into the project without resolving link targets."""
 
@@ -174,6 +175,11 @@ def import_project_run_sources(
     while source_index < len(source_items):
         source = source_items[source_index]
         source_path, source_was_file, is_project_source = source_location(source)
+        copy_options = (
+            {"use_current_version": True}
+            if is_project_source and source.role in current_version_roles
+            else {}
+        )
 
         # A multi-file picker can easily provide hundreds of files with the
         # same role.  Store those files in one journalled transaction instead
@@ -216,6 +222,7 @@ def import_project_run_sources(
                     role=source.role,
                     cancelled=cancel_event.is_set,
                     on_progress=on_progress,
+                    **copy_options,
                 )
             )
             if len(records) != len(grouped_sources):
@@ -267,6 +274,7 @@ def import_project_run_sources(
                 role=source.role,
                 cancelled=cancel_event.is_set,
                 on_progress=on_progress,
+                **copy_options,
             )
             replacement = project_source_replacement(
                 store,
