@@ -248,24 +248,17 @@ jobs:
           python -c
           "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test, smoke_test; ocr_runtime_smoke_test(); smoke_test()"
 
-      - name: Reuse or install pinned Inno Setup
+      - name: Install pinned Inno Setup
         shell: pwsh
         run: |
-          # Win7 编译器版本仍固定为 6.7.1，不因 runner 预装版本变化而放宽。
+          # 由 Chocolatey 固定并确认 6.7.1；不以 ISCC 的 ProductVersion 字段判断安装版本。
+          choco install innosetup --version=6.7.1 --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup 6.7.1 installation failed: $LASTEXITCODE" }
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          $matchesPinnedVersion = (Test-Path -LiteralPath $compiler -PathType Leaf) -and
-            ((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion -match '^6\.7\.1(?:\D|$)')
-          if (-not $matchesPinnedVersion) {
-            choco install innosetup --version=6.7.1 --no-progress -y
-            if ($LASTEXITCODE -ne 0) { throw "Inno Setup 6.7.1 installation failed: $LASTEXITCODE" }
-          }
           if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
             throw "Inno Setup compiler is missing: $compiler"
           }
-          if ((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion -notmatch '^6\.7\.1(?:\D|$)') {
-            throw "Win7 requires Inno Setup 6.7.1: $compiler"
-          }
-          Write-Host "Using Inno Setup $((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion)"
+          Write-Host "Using pinned Inno Setup 6.7.1: $compiler"
           # 暂停 MSI 专用依赖；恢复 MSI 时取消以下两行注释。
           # dotnet tool install --global wix --version 5.0.2
           # "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append

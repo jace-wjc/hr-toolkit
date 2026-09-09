@@ -31,7 +31,7 @@ Linux `validate` 共 55 秒，其中完整测试步骤约 30 秒。Win7 运行�
 - 从 `build-windows` 移出完整测试步骤，保留原有 OCR、PyInstaller、安装器及产物检查。
 - `publish.needs` 和成功条件均加入 `validate-windows`。测试失败或取消时不发布，即使构建已完成也不能绕过此条件。
 - Win7 测试保留在原构建任务内；其 27 秒耗时不值得再增加一次 runner 初始化和依赖安装。
-- 两个构建任务优先复用预装 Inno Setup，缺失时才执行原安装命令；Win7 还核对固定的 6.7.1 版本。未新增 PyInstaller 缓存或增量发布参数。
+- Win10 优先复用预装 Inno Setup，缺失时才执行原安装命令；Win7 由 Chocolatey 确认固定的 6.7.1 版本，保留安装失败和编译器文件缺失检查，不再用 ISCC 的 ProductVersion 字段判断安装版本，避免错误阻断构建。未新增 PyInstaller 缓存或增量发布参数。
 - 添加发布依赖关系的回归用例，防止后续误删 Windows 测试或发布条件。本次仅检查该测试文件的语法，未运行用例。
 
 仅修改 Release 的任务安排和 Inno 准备步骤；日常 CI、安装器压缩参数、业务代码和已暂停的 MSI/DMG/ZIP 不变。
