@@ -47,6 +47,46 @@ def absolute_path_hint(value: object) -> Path | None:
     return path if path.is_absolute() else None
 
 
+def _windows_executable_path() -> Path | None:
+    """Read the current process image from Windows, independently of Python/Qt."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        query = ctypes.WinDLL("kernel32", use_last_error=True).GetModuleFileNameW
+        query.argtypes = (wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD)
+        query.restype = wintypes.DWORD
+        capacity = 260
+        while True:
+            buffer = ctypes.create_unicode_buffer(capacity)
+            length = query(None, buffer, capacity)
+            if length == 0:
+                return None
+            if length < capacity:
+                return absolute_path_hint(buffer.value)
+            # nSize means truncation, not a usable path. Grow up to the Windows
+            # Unicode path limit; this API is available on Windows 7 as well.
+            if capacity == 32768:
+                return None
+            capacity = min(capacity * 2, 32768)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def current_executable_path() -> Path:
+    """Return the real launcher path without turning a corrupt hint into cwd."""
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        # A reported Win7 failure contained sys.executable == 'Ř<'. Resolve the
+        # OS process image instead; argv[0], cwd and _MEIPASS are not reliable
+        # substitutes for the install location or the executable to relaunch.
+        candidate = _windows_executable_path()
+    else:
+        candidate = absolute_path_hint(sys.executable)
+    if candidate is None:
+        raise RuntimeError("无法读取当前程序的实际安装位置，请关闭后从安装目录重新启动。")
+    return candidate.resolve()
+
+
 def _windows_shell_folder(csidl: int) -> Path | None:
     # SHGetFolderPathW is available on the frozen Windows 7 stack. Use the
     # current user's Shell folder when inherited environment hints are broken.

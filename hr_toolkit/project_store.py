@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Literal, Sequence
 
-from hr_toolkit.common.paths import absolute_path_hint, path_text_error, user_home_dir
+from hr_toolkit.common.paths import absolute_path_hint, current_executable_path, path_text_error, user_home_dir
 
 try:
     from zoneinfo import ZoneInfo
@@ -2903,7 +2903,7 @@ def _validate_project_location(path: Path, *, for_write: bool) -> Path:
         if ancestor != resolved and marker.is_file() and not _is_link_like(marker):
             raise ProjectStoreError("不能在另一个 HRToolkit 项目中创建子项目。")
     if getattr(sys, "frozen", False):
-        app_dir = Path(sys.executable).resolve().parent
+        app_dir = current_executable_path().parent
         if resolved == app_dir or _is_inside(resolved, app_dir):
             raise ProjectStoreError("项目不能放在程序安装目录。")
     if for_write:

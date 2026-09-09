@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from hr_toolkit.common.paths import current_executable_path
+
 
 GITEE_REPOSITORY = "optimistic-little-sunspot/hr-toolkit"
 GITEE_LATEST_RELEASE_API_URL = f"https://gitee.com/api/v5/repos/{GITEE_REPOSITORY}/releases/latest"
@@ -669,12 +671,12 @@ def _ensure_disk_space(dest_dir: Path, download_size: int) -> None:
 
 def current_app_dir() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        return current_executable_path().parent
     return Path.cwd().resolve()
 
 
 def current_launcher_path() -> Path:
-    return Path(sys.executable).resolve()
+    return current_executable_path()
 
 
 def _read_update_url_file() -> str | None:
@@ -696,7 +698,7 @@ def _read_update_url_files() -> tuple[str, ...]:
 def _update_url_search_dirs() -> tuple[Path, ...]:
     dirs = [current_app_dir()]
     if getattr(sys, "frozen", False):
-        dirs.append(Path(sys.executable).resolve().parent)
+        dirs.append(current_executable_path().parent)
     else:
         dirs.append(Path.cwd().resolve())
     unique: list[Path] = []

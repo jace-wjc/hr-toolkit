@@ -7,6 +7,7 @@ import os
 import sys
 from typing import Sequence
 
+from hr_toolkit.common.paths import current_executable_path
 from hr_toolkit.runtime_checks import run_headless_command
 
 
@@ -66,6 +67,16 @@ def _apply_software_rendering_flags(args: Sequence[str]) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        # multiprocessing can cache sys.executable before the GUI starts.
+        # Both the parent and frozen children must use the real process image.
+        executable = str(current_executable_path())
+        if sys.executable != executable:
+            from hr_toolkit import runlog
+
+            runlog.log_line("已按 Windows 进程信息校正启动路径（GetModuleFileNameW）。")
+        sys.executable = executable
+        multiprocessing.set_executable(executable)
     multiprocessing.freeze_support()
     raw_args = list(sys.argv[1:] if argv is None else argv)
     filtered_args = _apply_software_rendering_flags(raw_args)

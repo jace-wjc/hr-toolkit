@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 from hr_toolkit.common.inputs import SUPPORTED_ARCHIVE_SUFFIX_SET
-from hr_toolkit.common.paths import user_app_data_dir, user_home_dir
+from hr_toolkit.common.paths import current_executable_path, user_app_data_dir, user_home_dir
 
 
 DATA_DIR_ENV = "HR_TOOLKIT_DATA_DIR"
@@ -2182,7 +2182,7 @@ def _validate_data_root(path: Path) -> Path:
     if resolved == Path(resolved.anchor) or resolved == home:
         raise HistoryStoreError("资料库位置过于宽泛，请选择专用文件夹。")
     if getattr(sys, "frozen", False):
-        app_dir = Path(sys.executable).resolve().parent
+        app_dir = current_executable_path().parent
         if resolved == app_dir or _is_within(resolved, app_dir):
             raise HistoryStoreError("资料库不能放在程序安装目录内。")
     return resolved

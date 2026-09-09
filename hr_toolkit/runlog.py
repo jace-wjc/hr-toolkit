@@ -20,7 +20,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from hr_toolkit.common.paths import user_app_data_dir
+from hr_toolkit.common.paths import current_executable_path, user_app_data_dir
 
 RUN_LOG_FILE = "HRToolkit_app.log"
 RUN_LOG_ENV = "HR_TOOLKIT_APP_LOG"
@@ -33,7 +33,7 @@ _write_lock = threading.Lock()
 
 def current_app_dir() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        return current_executable_path().parent
     return Path.cwd().resolve()
 
 

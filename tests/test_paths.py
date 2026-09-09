@@ -46,6 +46,88 @@ class PathCompatibilityTests(unittest.TestCase):
                 self.assertIsNone(paths.absolute_path_hint(value))
         self.assertEqual(paths.absolute_path_hint(Path.cwd()), Path.cwd())
 
+    def test_windows_process_image_query_preserves_unicode_and_retries_truncation(self) -> None:
+        from ctypes import wintypes
+
+        expected = str(Path.cwd() / ("中文路径" * 80) / "HRToolkit.exe")
+
+        def read_image(module, buffer, capacity):
+            self.assertIsNone(module)
+            if len(expected) >= capacity:
+                buffer.value = expected[:capacity - 1]
+                return capacity
+            buffer.value = expected
+            return len(expected)
+
+        query = Mock(side_effect=read_image)
+        dll = SimpleNamespace(GetModuleFileNameW=query)
+        with patch.object(ctypes, "WinDLL", return_value=dll, create=True):
+            self.assertEqual(paths._windows_executable_path(), Path(expected))
+        self.assertGreater(query.call_count, 1)
+        self.assertEqual(query.argtypes, (wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD))
+        self.assertIs(query.restype, wintypes.DWORD)
+
+    def test_windows_process_image_query_rejects_failure_and_permanent_truncation(self) -> None:
+        query = Mock(return_value=0)
+        dll = SimpleNamespace(GetModuleFileNameW=query)
+        with patch.object(ctypes, "WinDLL", return_value=dll, create=True):
+            self.assertIsNone(paths._windows_executable_path())
+            query.side_effect = lambda _module, _buffer, capacity: capacity
+            self.assertIsNone(paths._windows_executable_path())
+        self.assertEqual(query.call_args.args[2], 32768)
+
+    def test_frozen_windows_executable_comes_from_process_image_not_python_hint(self) -> None:
+        expected = Path(sys.executable).resolve()
+        with patch.object(sys, "platform", "win32"), patch.object(sys, "frozen", True, create=True):
+            for reported in ("Ř<", "", str(expected.parent / "wrong.exe")):
+                with self.subTest(reported=reported), patch.object(sys, "executable", reported):
+                    with patch.object(paths, "_windows_executable_path", return_value=expected):
+                        self.assertEqual(paths.current_executable_path(), expected)
+                    with patch.object(paths, "_windows_executable_path", return_value=None):
+                        with self.assertRaisesRegex(RuntimeError, "实际安装位置"):
+                            paths.current_executable_path()
+
+    def test_corrupt_frozen_executable_allows_project_lifecycle_and_preserves_install_guard(self) -> None:
+        from hr_toolkit import app_update, history_store, project_store, runlog
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            executable = base / "程序 中文" / "HRToolkit.exe"
+            executable.parent.mkdir()
+            executable.write_bytes(b"MZ")
+            project_root = base / "人事项目"
+            with patch.object(sys, "platform", "win32"), patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", "Ř<"), patch.object(paths, "_windows_executable_path", return_value=executable):
+                with project_store.ProjectStore.create(project_root, "人事项目") as created:
+                    project_id = created.workspace.project_id
+                with project_store.ProjectStore.open(project_root) as reopened:
+                    self.assertEqual(reopened.workspace.project_id, project_id)
+                    self.assertTrue(reopened.writable)
+                with self.assertRaisesRegex(project_store.ProjectStoreError, "安装目录"):
+                    project_store.ProjectStore.create(executable.parent / "禁止的项目", "禁止的项目")
+                with self.assertRaisesRegex(history_store.HistoryStoreError, "安装目录"):
+                    history_store._validate_data_root(executable.parent / "禁止的资料库")
+                self.assertEqual(history_store._validate_data_root(base / "资料库"), base / "资料库")
+                self.assertEqual(app_update.current_launcher_path(), executable)
+                self.assertEqual(app_update.current_app_dir(), executable.parent)
+                self.assertEqual(app_update._update_url_search_dirs(), (executable.parent,))
+                self.assertEqual(runlog.current_app_dir(), executable.parent)
+            self.assertFalse((executable.parent / "禁止的项目").exists())
+
+    def test_frozen_launcher_repairs_child_executable_before_freeze_support(self) -> None:
+        from hr_toolkit import launcher, runlog
+
+        expected = Path(sys.executable).resolve()
+        calls = []
+
+        def freeze_support():
+            self.assertEqual(sys.executable, str(expected))
+            self.assertEqual(calls, [str(expected)])
+
+        with patch.object(sys, "platform", "win32"), patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", "Ř<"), patch.object(paths, "_windows_executable_path", return_value=expected):
+            with patch.object(launcher.multiprocessing, "set_executable", side_effect=calls.append), patch.object(launcher.multiprocessing, "freeze_support", side_effect=freeze_support) as freeze, patch.object(launcher, "run_headless_command", return_value=0), patch.object(runlog, "log_line"):
+                self.assertEqual(launcher.main(["--version"]), 0)
+                freeze.assert_called_once_with()
+
     def test_invalid_or_unavailable_home_uses_system_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fallback = Path(tmp).resolve()

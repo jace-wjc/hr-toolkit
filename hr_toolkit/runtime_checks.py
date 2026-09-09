@@ -15,6 +15,7 @@ from pathlib import Path
 
 from hr_toolkit import __version__
 from hr_toolkit.common.inputs import extract_archive_excel_files
+from hr_toolkit.common.paths import current_executable_path
 from hr_toolkit.common.resources import open_template_resource
 
 
@@ -224,7 +225,7 @@ def smoke_test() -> None:
 
     if getattr(sys, "frozen", False):
         _mark_smoke_stage("readme")
-        bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        bundle_root = Path(getattr(sys, "_MEIPASS", None) or current_executable_path().parent)
         if not (bundle_root / "README.md").is_file():
             raise RuntimeError("打包程序缺少 README.md。")
 
