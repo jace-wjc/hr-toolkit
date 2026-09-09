@@ -6,6 +6,14 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      full_tests:
+        description: "运行全量测试（默认仅检查变更及相关调用方）"
+        type: boolean
+        default: false
+
+# 日常提交按 scripts/ci_scope.py 选择测试；仅手动勾选 full_tests 才全量运行。
+# 发布标签的全量验证仍由 release.yml 保留，本工作流不构建安装包。
 
 permissions:
   contents: read
@@ -15,8 +23,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    name: Select checks for changed files
+    runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.select.outputs.scope }}
+      run: ${{ steps.select.outputs.run }}
+      tests: ${{ steps.select.outputs.tests }}
+      win7_tests: ${{ steps.select.outputs.win7_tests }}
+      audit: ${{ steps.select.outputs.audit }}
+      qt_smoke: ${{ steps.select.outputs.qt_smoke }}
+      ocr_smoke: ${{ steps.select.outputs.ocr_smoke }}
+    steps:
+      - name: Check out source and complete change history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up scope planner
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Select related tests and changed Python sources
+        id: select
+        run: python scripts/ci_scope.py plan
+
   dependency-audit:
     name: Python 3.12 dependency audit
+    needs: scope
+    if: needs.scope.outputs.audit == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -41,7 +77,11 @@ jobs:
 
   test:
     name: Python ${{ matrix.python-version }}
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     runs-on: ubuntu-latest
+    env:
+      CI_SCOPE: ${{ needs.scope.outputs.scope }}
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +101,7 @@ jobs:
           cache: pip
 
       - name: Install runtime dependencies
+        if: needs.scope.outputs.tests == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -77,35 +118,24 @@ jobs:
           fi
 
       - name: Verify dependency consistency
+        if: needs.scope.outputs.tests == 'true'
         run: python -m pip check
 
-      - name: Run unit tests
+      - name: Run selected unit tests
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -v
+        run: python scripts/ci_scope.py test
 
-      - name: Compile Python sources
-        env:
-          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/hr-toolkit-pycache
-        run: python -m compileall -q -f hr_toolkit scripts tests hr_toolkit_app.py hr_toolkit_qt_app.py hr_toolkit_updater.py
-
-      - name: Check whitespace errors
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${BASE_SHA}" ]]; then
-            git diff --check "${BASE_SHA}...HEAD"
-          elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-            git diff --check HEAD^ HEAD
-          else
-            git diff --check
-          fi
+      - name: Check syntax of changed Python sources
+        run: python scripts/ci_scope.py compile
 
   windows-test:
     name: Windows Python 3.12
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     runs-on: windows-latest
+    env:
+      CI_SCOPE: ${{ needs.scope.outputs.scope }}
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -117,40 +147,46 @@ jobs:
           cache: pip
 
       - name: Install runtime dependencies
+        if: needs.scope.outputs.tests == 'true'
         run: |
           python -m pip install --disable-pip-version-check --upgrade -c constraints/python312-production.txt pip
           python -m pip install --disable-pip-version-check -r requirements.txt -r requirements-gui.txt -c constraints/python312-production.txt
 
       - name: Verify dependency consistency
+        if: needs.scope.outputs.tests == 'true'
         run: python -m pip check
 
       - name: Exercise local OCR models and inference
+        if: needs.scope.outputs.ocr_smoke == 'true'
         run: >-
           python -c
           "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test; ocr_runtime_smoke_test()"
 
       - name: Exercise Qt Quick front end
+        if: needs.scope.outputs.qt_smoke == 'true'
         env:
           HR_TOOLKIT_SKIP_UPDATE: "1"
           HR_TOOLKIT_QT_SMOKE_EXIT_MS: "800"
         run: python hr_toolkit_app.py --qt-smoke-test
 
-      - name: Run unit tests
+      - name: Run selected unit tests
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUTF8: "1"
-        run: python -m unittest discover -s tests -v
+        run: python scripts/ci_scope.py test
 
-      - name: Compile Python sources
-        env:
-          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/hr-toolkit-pycache
-        run: python -m compileall -q -f hr_toolkit scripts tests hr_toolkit_app.py hr_toolkit_qt_app.py hr_toolkit_updater.py
+      - name: Check syntax of changed Python sources
+        run: python scripts/ci_scope.py compile
 
   windows-win7-compat-test:
     name: Windows 7 compatibility stack on Python 3.8
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     # Keep the frozen Python 3.8/PySide2 stack off Windows Server 2025.
     runs-on: windows-2022
     env:
+      CI_SCOPE: ${{ needs.scope.outputs.scope }}
+      CI_WIN7: "true"
       PYTHONUTF8: "1"
       HR_TOOLKIT_7ZIP_EXE: ${{ github.workspace }}\build\win7-runtime\7zip\7z.exe
     steps:
@@ -169,20 +205,24 @@ jobs:
             constraints/python38-win7.txt
 
       - name: Install frozen Win7 dependencies
+        if: needs.scope.outputs.win7_tests == 'true' || needs.scope.outputs.qt_smoke == 'true' || needs.scope.outputs.ocr_smoke == 'true'
         run: |
           python -m pip install --disable-pip-version-check --upgrade "pip==25.0.1"
           python -m pip install --disable-pip-version-check -r requirements-win7.txt -r requirements-gui.txt -c constraints/python38-win7.txt
           python -m pip check
 
       - name: Prepare pinned Win7 runtimes
+        if: needs.scope.outputs.win7_tests == 'true' || needs.scope.outputs.qt_smoke == 'true' || needs.scope.outputs.ocr_smoke == 'true'
         run: python scripts/prepare_win7_runtime.py --output-dir build/win7-runtime
 
       - name: Exercise OCR and archive runtimes
+        if: needs.scope.outputs.ocr_smoke == 'true'
         run: >-
           python -c
           "from hr_toolkit.runtime_checks import ocr_runtime_smoke_test, smoke_test; ocr_runtime_smoke_test(); smoke_test()"
 
       - name: Exercise Win7 Qt Quick runtime on Windows runner
+        if: needs.scope.outputs.qt_smoke == 'true'
         env:
           HR_TOOLKIT_SKIP_UPDATE: "1"
           HR_TOOLKIT_QT_SMOKE_EXIT_MS: "800"
@@ -204,29 +244,7 @@ jobs:
       - name: Run Python 3.8-compatible core tests
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: >-
-          python -m unittest -v
-          tests.test_archive_import
-          tests.test_data_statistics
-          tests.test_project_store
-          tests.test_runtime_checks
-          tests.test_salary_merge
-          tests.test_salary_split
-          tests.test_social_security
-          tests.test_tool_registry
-          tests.test_paths
-          tests.test_pdf_backend_compat
-          tests.test_release_metadata
-          tests.test_background_process
-          tests.test_qt_controller
-          tests.test_qt_entrypoint
-          tests.test_qt_form_specs
-          tests.test_run_coordinator
-          tests.test_material_preferences
-          tests.test_material_collector_gui
-          tests.test_project_creation_gui
+        run: python scripts/ci_scope.py test
 
-      - name: Compile Python sources under Python 3.8
-        env:
-          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/hr-toolkit-pycache-win7
-        run: python -m compileall -q -f hr_toolkit scripts hr_toolkit_app.py hr_toolkit_qt_app.py hr_toolkit_updater.py
+      - name: Check syntax of changed Python sources under Python 3.8
+        run: python scripts/ci_scope.py compile
