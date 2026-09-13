@@ -16,6 +16,7 @@ _HEADER_WHITESPACE = re.compile(r"\s+")
 import shutil
 import tempfile
 from collections import OrderedDict
+from copy import copy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +25,7 @@ from typing import Any, Callable
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.worksheet.worksheet import Worksheet
 
 from hr_toolkit.common.resources import open_template_resource
@@ -32,6 +34,7 @@ from hr_toolkit.common.excel import (
     apply_row_snapshot,
     cached_style_id,
     cell_text as _cell_text,
+    insert_cols,
     insert_rows,
     set_style_ids,
     snapshot_row,
@@ -143,28 +146,29 @@ DETAIL_COLUMNS = {
     "大病医疗个人金额": 35,
     "大病医疗单位比例": 36,
     "大病医疗单位金额": 37,
-    "个人社保补缴合计": 62,
-    "单位社保补缴合计": 63,
-    "个人公积金补缴合计": 64,
-    "单位公积金补缴合计": 65,
-    "单位补缴滞纳金": 66,
-    "个人社保合计": 67,
-    "单位社保合计": 68,
-    "社保缴纳合计": 69,
-    "个人公积金合计": 70,
-    "单位公积金合计": 71,
-    "公积金缴纳合计": 72,
-    "管理费": 73,
-    "税金": 74,
-    "费用总计": 75,
-    "备注": 76,
+    "个人社保补缴合计": 65,
+    "单位社保补缴合计": 66,
+    "个人公积金补缴合计": 67,
+    "单位公积金补缴合计": 68,
+    "单位补缴滞纳金": 69,
+    "个人社保合计": 70,
+    "单位社保合计": 71,
+    "社保缴纳合计": 72,
+    "个人公积金合计": 73,
+    "单位公积金合计": 74,
+    "公积金缴纳合计": 75,
+    "管理费": 76,
+    "税金": 77,
+    "费用总计": 78,
+    "备注": 79,
 }
 
 DIFFERENCE_COLUMNS = {
     "养老": {"基数": 44, "个人比例": 45, "个人金额": 46, "单位比例": 47, "单位金额": 48},
     "失业": {"基数": 49, "个人比例": 50, "个人金额": 51, "单位比例": 52, "单位金额": 53},
     "工伤": {"基数": 54, "单位比例": 55, "单位金额": 56},
-    "医疗": {"基数": 57, "个人比例": 58, "个人金额": 59, "单位比例": 60, "单位金额": 61},
+    "补充工伤": {"基数": 57, "单位比例": 58, "单位金额": 59},
+    "医疗": {"基数": 60, "个人比例": 61, "个人金额": 62, "单位比例": 63, "单位金额": 64},
 }
 
 
@@ -1295,6 +1299,63 @@ def _append_source_mismatch_warnings(
         )
 
 
+def _add_supplementary_injury_template_columns(ws: Worksheet) -> None:
+    """扩展内置四行模板；数据行和合计公式随后按新列号重新写入。"""
+    insert_at = DIFFERENCE_COLUMNS["补充工伤"]["基数"]
+    merged_ranges = [copy(area) for area in ws.merged_cells.ranges]
+    dimensions = [copy(dimension) for dimension in ws.column_dimensions.values()]
+    ws.merged_cells.ranges.clear()
+    insert_cols(ws, insert_at, 3)
+    ws.column_dimensions.clear()
+    for dimension in dimensions:
+        # 模板有跨越插入点的共用列宽，拆开后保持每一旧列原来的宽度。
+        start, end = dimension.min, dimension.max
+        ranges = [(start, end)] if end < insert_at else (
+            [(start + 3, end + 3)] if start >= insert_at else [(start, insert_at - 1), (insert_at + 3, end + 3)]
+        )
+        for first, last in ranges:
+            shifted = copy(dimension)
+            shifted.min, shifted.max = first, last
+            shifted.index = get_column_letter(first)
+            ws.column_dimensions[shifted.index] = shifted
+    for offset in range(3):
+        source_col = insert_at - 3 + offset
+        target_col = insert_at + offset
+        dimension = copy(next(item for item in dimensions if item.min <= source_col <= item.max))
+        dimension.min = dimension.max = target_col
+        dimension.index = get_column_letter(target_col)
+        ws.column_dimensions[dimension.index] = dimension
+        for row in (2, 3, 4):
+            source = ws.cell(row, source_col)
+            target = ws.cell(row, target_col)
+            target._style = copy(source._style)
+            if row == 3:
+                target.value = source.value
+    for area in merged_ranges:
+        if area.min_col >= insert_at:
+            area.shift(col_shift=3)
+        elif area.max_col >= insert_at:
+            area.max_col += 3
+        ws.merge_cells(str(area))
+    ws.merge_cells(start_row=2, start_column=insert_at, end_row=2, end_column=insert_at + 2)
+    ws.cell(2, insert_at).value = "补充工伤补差"
+    for view in ws.views.sheetView:
+        for selection in view.selection:
+            for attribute in ("activeCell", "sqref"):
+                value = getattr(selection, attribute)
+                if not value:
+                    continue
+                shifted_ranges = []
+                for address in value.split():
+                    area = CellRange(address)
+                    if area.min_col >= insert_at:
+                        area.shift(col_shift=3)
+                    elif area.max_col >= insert_at:
+                        area.max_col += 3
+                    shifted_ranges.append(str(area))
+                setattr(selection, attribute, " ".join(shifted_ranges))
+
+
 def _write_detail_workbook(
     records: list[DetailRecord],
     output_file: Path,
@@ -1307,6 +1368,7 @@ def _write_detail_workbook(
     try:
         ws = workbook[workbook.sheetnames[0]]
         ws.title = "社保明细表"
+        _add_supplementary_injury_template_columns(ws)
         title = _detail_title(records)
         if title:
             ws["A1"].value = title
@@ -1453,14 +1515,20 @@ def _write_template_amount(
 
 def _write_difference_headers(ws: Worksheet, records: list[DetailRecord]) -> None:
     periods: set[str] = set()
+    injury_periods: set[str] = set()
     for record in records:
-        for category_periods in record.difference_periods.values():
-            periods.update(category_periods)
+        for category, category_periods in record.difference_periods.items():
+            if category == "补充工伤":
+                injury_periods.update(category_periods)
+            else:
+                periods.update(category_periods)
+    if injury_periods:
+        ws.cell(2, DIFFERENCE_COLUMNS["补充工伤"]["基数"]).value = f"补充工伤{_format_chinese_period_span(injury_periods)}补差"
     if not periods:
         return
     period_text = _format_chinese_period_span(periods)
-    for category, column in (("养老", 44), ("失业", 49), ("工伤", 54), ("医疗", 57)):
-        ws.cell(2, column).value = f"{category}{period_text}补差"
+    for category in ("养老", "失业", "工伤", "医疗"):
+        ws.cell(2, DIFFERENCE_COLUMNS[category]["基数"]).value = f"{category}{period_text}补差"
 
 
 def _write_difference_cells(ws: Worksheet, row_index: int, record: DetailRecord) -> None:
@@ -1496,6 +1564,7 @@ def _write_difference_rollups(ws: Worksheet, row_index: int, record: DetailRecor
         record.difference_amounts.get("养老", {}).get("单位", 0.0)
         + record.difference_amounts.get("失业", {}).get("单位", 0.0)
         + record.difference_amounts.get("工伤", {}).get("单位", 0.0)
+        + record.difference_amounts.get("补充工伤", {}).get("单位", 0.0)
         + record.difference_amounts.get("医疗", {}).get("单位", 0.0),
         2,
     )
@@ -1516,7 +1585,7 @@ def _write_difference_rollups(ws: Worksheet, row_index: int, record: DetailRecor
             DIFFERENCE_COLUMNS["失业"]["单位金额"],
             DIFFERENCE_COLUMNS["工伤"]["单位金额"],
             DIFFERENCE_COLUMNS["医疗"]["单位金额"],
-        ],
+        ] + ([DIFFERENCE_COLUMNS["补充工伤"]["单位金额"]] if record.difference_amounts.get("补充工伤", {}).get("单位") else []),
         unit_difference,
     )
 

@@ -25,6 +25,73 @@ from hr_toolkit.tools.social_security import (
 
 
 class SocialSecurityTest(unittest.TestCase):
+    def test_supplementary_injury_difference_is_separate_from_normal_and_arrears(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "北京春苗抚州账户2026年6月社保单位缴费明细.xlsx"
+            roster = root / "参保人员花名册.xlsx"
+            _write_roster(roster)
+            _write_long_payment_rows_with_nature(source, [
+                ["张三", "360111199001010011", "补充工伤保险费", "补充工伤保险", date(2026, month, 1), base, 0.0012, amount, nature]
+                for month, base, amount, nature in (
+                    (3, 1000, 1.2, "补缴"), (4, 1000, 1.2, "补缴"),
+                    (5, 100, 0.12, "补差"), (6, 1000, 1.2, "正常缴费"),
+                )
+            ])
+            result = generate_social_security_reports(source, roster, root / "output")
+            self.assertNotIn("模板没有对应补差明细列", "\n".join(result.warnings))
+            for path in [result.detail_output_file, *result.detail_output_files]:
+                with self.subTest(file=path.name):
+                    wb = load_workbook(path)
+                    try:
+                        ws = wb["社保明细表"]
+                        self.assertEqual(ws.max_column, 79)
+                        self.assertEqual(ws["BE2"].value, "补充工伤2026年5月补差")
+                        self.assertEqual([ws.cell(3, c).value for c in (57, 58, 59)], ["基数", "单位", "单位  金额"])
+                        self.assertEqual(ws["H4"].value, "202603-202604")
+                        self.assertEqual(ws["AA4"].value, 1000)
+                        self.assertEqual(ws["AC4"].value, 2.4)
+                        self.assertIsNone(ws["BG4"].value)
+                        self.assertIsNone(ws["BN4"].value)
+                        self.assertEqual(ws["H5"].value, "202606")
+                        self.assertEqual(ws["AC5"].value, "=ROUND(AA5*AB5,2)")
+                        self.assertEqual(ws["BE5"].value, 100)
+                        self.assertEqual(ws["BF5"].value, 0.0012)
+                        self.assertEqual(ws["BF5"].number_format, "0.00%")
+                        self.assertEqual(ws["BG5"].value, 0.12)
+                        self.assertEqual(ws["BN5"].value, "=AV5+BA5+BD5+BL5+BG5")
+                        self.assertEqual(ws["BS5"].value, "=M5+R5+W5+Z5+AK5+BN5+AC5+BQ5")
+                        self.assertIsNone(ws["BX4"].value)
+                        self.assertEqual(ws["BX5"].value, 20)
+                    finally:
+                        wb.close()
+
+    def test_supplementary_injury_multiple_bases_and_negative_difference(self) -> None:
+        for second_base, second_amount, expected_base, expected_amount in (
+            (100, 0.12, 100, 0.24), (200, 0.24, None, 0.36), (100, -0.24, 100, -0.12),
+        ):
+            with self.subTest(base=second_base, amount=second_amount), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "北京春苗抚州账户2026年6月社保单位缴费明细.xlsx"
+                roster = root / "参保人员花名册.xlsx"
+                _write_roster(roster)
+                _write_long_payment_rows_with_nature(source, [
+                    ["张三", "360111199001010011", "补充工伤保险费", "补充工伤保险", date(2026, 3, 1), 100, 0.0012, 0.12, "补差"],
+                    ["张三", "360111199001010011", "补充工伤保险费", "补充工伤保险", date(2026, 4, 1), second_base, 0.0012, second_amount, "补差"],
+                ])
+                result = generate_social_security_reports(source, roster, root / "output")
+                wb = load_workbook(result.detail_output_file)
+                try:
+                    ws = wb["社保明细表"]
+                    self.assertEqual(ws["BE2"].value, "补充工伤2026年3月-4月补差")
+                    self.assertEqual(ws["BE4"].value, expected_base)
+                    self.assertAlmostEqual(ws["BG4"].value, expected_amount)
+                    self.assertIsNone(ws["AC4"].value)
+                    self.assertEqual(ws["BN4"].value, "=AV4+BA4+BD4+BL4+BG4")
+                    self.assertEqual(any("补充工伤补差含多种基数" in warning for warning in result.warnings), expected_base is None)
+                finally:
+                    wb.close()
+
     def test_two_level_payment_headers_read_both_sides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -109,14 +176,14 @@ class SocialSecurityTest(unittest.TestCase):
                 ws = wb["社保明细表"]
                 self.assertEqual(ws["H4"].value, "202605")
                 self.assertEqual(ws["P4"].value, "=ROUND(N4*O4,2)")
-                self.assertIsNone(ws["BJ4"].value)
+                self.assertIsNone(ws["BM4"].value)
                 self.assertEqual(ws["H5"].value, "202606")
-                self.assertEqual(ws["BJ5"].value, "=AT5+AY5+BG5")
-                self.assertAlmostEqual(sum(ws[cell].value for cell in ("AT5", "AY5", "BG5")), 97.28)
-                self.assertEqual(ws["BJ2"].value, "个人社保\n补缴合计")
-                self.assertEqual(ws["BK2"].value, "单位社保\n补缴合计")
-                self.assertIsNone(ws["BU4"].value)
-                self.assertEqual(ws["BU5"].value, 20)
+                self.assertEqual(ws["BM5"].value, "=AT5+AY5+BJ5")
+                self.assertAlmostEqual(sum(ws[cell].value for cell in ("AT5", "AY5", "BJ5")), 97.28)
+                self.assertEqual(ws["BM2"].value, "个人社保\n补缴合计")
+                self.assertEqual(ws["BN2"].value, "单位社保\n补缴合计")
+                self.assertIsNone(ws["BX4"].value)
+                self.assertEqual(ws["BX5"].value, 20)
             finally:
                 wb.close()
 
@@ -146,8 +213,8 @@ class SocialSecurityTest(unittest.TestCase):
                         self.assertEqual(ws.cell(row, 24).value, base)
                         self.assertEqual(ws.cell(row, 25).value, rate)
                         self.assertEqual(ws.cell(row, 26).value, amount if "-" in period else f"=ROUND(X{row}*Y{row},2)")
-                        self.assertIsNone(ws.cell(row, 63).value)
-                    self.assertEqual(sum(ws.cell(row, 73).value or 0 for row in range(4, 4+len(expected))), 20)
+                        self.assertIsNone(ws.cell(row, 66).value)
+                    self.assertEqual(sum(ws.cell(row, 76).value or 0 for row in range(4, 4+len(expected))), 20)
                 finally:
                     wb.close()
 
@@ -269,8 +336,8 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(detail_ws.cell(zhang_row, 11).value, f"=ROUND(I{zhang_row}*J{zhang_row},2)")
             self.assertEqual(detail_ws.cell(zhang_row, 13).value, f"=ROUND(I{zhang_row}*L{zhang_row},2)")
             self.assertEqual(detail_ws.cell(zhang_row, 10).number_format, "0.00%")
-            self.assertEqual(detail_ws.cell(zhang_row, 67).number_format, "0.00_ ")
-            self.assertEqual(detail_ws.cell(zhang_row, 73).value, 20)
+            self.assertEqual(detail_ws.cell(zhang_row, 70).number_format, "0.00_ ")
+            self.assertEqual(detail_ws.cell(zhang_row, 76).value, 20)
             self.assertEqual(detail_ws.cell(li_row, 2).value, "唐人数智")
             self.assertEqual(detail_ws.cell(li_row, 8).value, "202604")
             self.assertEqual(detail_ws.cell(li_row, 26).value, f"=ROUND(X{li_row}*Y{li_row},2)")
@@ -280,7 +347,8 @@ class SocialSecurityTest(unittest.TestCase):
             )
             template_ws = template_wb["社保明细表模板"]
             for col_index in range(1, 77):
-                self.assertEqual(detail_ws.cell(zhang_row, col_index)._style, template_ws.cell(4, col_index)._style)
+                output_col = col_index + 3 if col_index >= 57 else col_index
+                self.assertEqual(detail_ws.cell(zhang_row, output_col)._style, template_ws.cell(4, col_index)._style)
             template_wb.close()
             detail_wb.close()
 
@@ -409,25 +477,25 @@ class SocialSecurityTest(unittest.TestCase):
             zhang_row = rows[zhang[1]]
             self.assertEqual(ws["A1"].value, "唐人数智2026年4月社保明细表")
             self.assertEqual(ws["BB2"].value, "工伤2026年1月-3月补差")
-            self.assertEqual(ws["BJ2"].value, "个人社保\n补缴合计")
-            self.assertEqual(ws["BK2"].value, "单位社保\n补缴合计")
+            self.assertEqual(ws["BM2"].value, "个人社保\n补缴合计")
+            self.assertEqual(ws["BN2"].value, "单位社保\n补缴合计")
             self.assertEqual(ws.cell(li_row, 8).value, "202604")
             self.assertEqual(ws.cell(li_row, 26).value, f"=ROUND(X{li_row}*Y{li_row},2)")
             self.assertEqual(ws.cell(li_row, 54).value, 4588)
             self.assertEqual(ws.cell(li_row, 55).value, 0.001)
             self.assertEqual(ws.cell(li_row, 55).number_format, "0.00%")
             self.assertEqual(ws.cell(li_row, 56).value, 13.74)
-            self.assertIsNone(ws.cell(li_row, 62).value)
-            self.assertEqual(ws.cell(li_row, 63).value, f"=AV{li_row}+BA{li_row}+BD{li_row}+BI{li_row}")
+            self.assertIsNone(ws.cell(li_row, 65).value)
+            self.assertEqual(ws.cell(li_row, 66).value, f"=AV{li_row}+BA{li_row}+BD{li_row}+BL{li_row}")
             self.assertEqual(
-                ws.cell(li_row, 68).value,
-                f"=M{li_row}+R{li_row}+W{li_row}+Z{li_row}+AK{li_row}+BK{li_row}+AC{li_row}+BN{li_row}",
+                ws.cell(li_row, 71).value,
+                f"=M{li_row}+R{li_row}+W{li_row}+Z{li_row}+AK{li_row}+BN{li_row}+AC{li_row}+BQ{li_row}",
             )
-            self.assertEqual(ws.cell(li_row, 67).value, f"=K{li_row}+P{li_row}+U{li_row}+AI{li_row}+BJ{li_row}")
-            self.assertEqual(ws.cell(li_row, 69).value, f"=BO{li_row}+BP{li_row}")
-            self.assertEqual(ws.cell(li_row, 74).value, f"=ROUND((BQ{li_row}+BU{li_row})*6.72%,2)")
-            self.assertEqual(ws.cell(li_row, 75).value, f"=BQ{li_row}+BU{li_row}+BV{li_row}")
-            self.assertIsNone(ws.cell(li_row, 76).value)
+            self.assertEqual(ws.cell(li_row, 70).value, f"=K{li_row}+P{li_row}+U{li_row}+AI{li_row}+BM{li_row}")
+            self.assertEqual(ws.cell(li_row, 72).value, f"=BR{li_row}+BS{li_row}")
+            self.assertEqual(ws.cell(li_row, 77).value, f"=ROUND((BT{li_row}+BX{li_row})*6.72%,2)")
+            self.assertEqual(ws.cell(li_row, 78).value, f"=BT{li_row}+BX{li_row}+BY{li_row}")
+            self.assertIsNone(ws.cell(li_row, 79).value)
             self.assertEqual(ws.cell(zhang_row, 8).value, "202604")
             self.assertEqual(ws.cell(zhang_row, 24).value, 4588)
             self.assertEqual(ws.cell(zhang_row, 25).value, 0.003)
@@ -435,10 +503,10 @@ class SocialSecurityTest(unittest.TestCase):
             arrears_row = next(row for row in range(4, 8) if ws.cell(row, 8).value == "202603")
             self.assertEqual(ws.cell(arrears_row, 6).value, zhang[1])
             self.assertEqual(ws.cell(arrears_row, 26).value, f"=ROUND(X{arrears_row}*Y{arrears_row},2)")
-            self.assertIsNone(ws.cell(arrears_row, 73).value)
+            self.assertIsNone(ws.cell(arrears_row, 76).value)
             self.assertIsNone(ws.cell(zhang_row, 56).value)
-            self.assertIsNone(ws.cell(zhang_row, 63).value)
-            self.assertIsNone(ws.cell(zhang_row, 76).value)
+            self.assertIsNone(ws.cell(zhang_row, 66).value)
+            self.assertIsNone(ws.cell(zhang_row, 79).value)
             wb.close()
 
     def test_compatible_arrears_and_normal_still_use_separate_rows(self) -> None:
@@ -469,7 +537,7 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(ws["Z4"].value, "=ROUND(X4*Y4,2)")
             self.assertEqual(ws["Z5"].value, "=ROUND(X5*Y5,2)")
             self.assertIsNone(ws["BD4"].value)
-            self.assertIsNone(ws["BK4"].value)
+            self.assertIsNone(ws["BN4"].value)
             wb.close()
 
             summary_wb = load_workbook(result.summary_output_file, data_only=False)
@@ -509,7 +577,7 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(ws["X4"].value, 500)
             self.assertEqual(ws["Y4"].value, 0.01)
             self.assertEqual(ws["Z4"].value, 25)
-            self.assertEqual(ws["BU4"].value, 20)
+            self.assertEqual(ws["BX4"].value, 20)
             wb.close()
 
     def test_different_bases_split_and_arrears_keep_actual_months(self) -> None:
@@ -539,8 +607,8 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(ws.cell(rows[500], 8).value, "202606")
             self.assertEqual(ws.cell(rows[400], 26).value, f"=ROUND(X{rows[400]}*Y{rows[400]},2)")
             self.assertEqual(ws.cell(rows[500], 26).value, f"=ROUND(X{rows[500]}*Y{rows[500]},2)")
-            self.assertEqual(ws.cell(rows[400], 73).value, 20)
-            self.assertIsNone(ws.cell(rows[500], 73).value)
+            self.assertEqual(ws.cell(rows[400], 76).value, 20)
+            self.assertIsNone(ws.cell(rows[500], 76).value)
             wb.close()
 
     def test_explicit_difference_marker_handles_single_history_month(self) -> None:
@@ -569,8 +637,8 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(ws["BC4"].value, 0.001)
             self.assertEqual(ws["BC4"].number_format, "0.00%")
             self.assertEqual(ws["BD4"].value, 4.58)
-            self.assertEqual(ws["BK4"].value, "=AV4+BA4+BD4+BI4")
-            self.assertIsNone(ws["BX4"].value)
+            self.assertEqual(ws["BN4"].value, "=AV4+BA4+BD4+BL4")
+            self.assertIsNone(ws["CA4"].value)
             wb.close()
 
     def test_explicit_arrears_marker_never_moves_amount_to_difference_columns(self) -> None:
@@ -604,13 +672,13 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(ws.cell(arrears_row, 25).value, 0.001)
             self.assertEqual(ws.cell(arrears_row, 26).value, 4.58)
             self.assertIsNone(ws.cell(arrears_row, 56).value)
-            self.assertIsNone(ws.cell(arrears_row, 63).value)
-            self.assertIsNone(ws.cell(arrears_row, 73).value)
+            self.assertIsNone(ws.cell(arrears_row, 66).value)
+            self.assertIsNone(ws.cell(arrears_row, 76).value)
             self.assertEqual(ws.cell(current_row, 26).value, f"=ROUND(X{current_row}*Y{current_row},2)")
             self.assertIsNone(ws.cell(current_row, 56).value)
-            self.assertIsNone(ws.cell(current_row, 63).value)
-            self.assertEqual(ws.cell(current_row, 73).value, 20)
-            self.assertIsNone(ws.cell(current_row, 76).value)
+            self.assertIsNone(ws.cell(current_row, 66).value)
+            self.assertEqual(ws.cell(current_row, 76).value, 20)
+            self.assertIsNone(ws.cell(current_row, 79).value)
             wb.close()
 
     def test_explicit_arrears_and_difference_remain_separate_for_same_person(self) -> None:
@@ -643,13 +711,13 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(ws["Z4"].value, "=ROUND(X4*Y4,2)")
             self.assertEqual(ws["Z5"].value, "=ROUND(X5*Y5,2)")
             self.assertIsNone(ws["BD4"].value)
-            self.assertIsNone(ws["BK4"].value)
+            self.assertIsNone(ws["BN4"].value)
             self.assertEqual(ws["BD5"].value, 4.58)
             self.assertEqual(
-                ws["BK5"].value,
-                "=AV5+BA5+BD5+BI5",
+                ws["BN5"].value,
+                "=AV5+BA5+BD5+BL5",
             )
-            self.assertIsNone(ws["BX4"].value)
+            self.assertIsNone(ws["CA4"].value)
             wb.close()
 
     def test_unsupported_difference_category_is_kept_visible_in_normal_columns(self) -> None:
@@ -673,9 +741,9 @@ class SocialSecurityTest(unittest.TestCase):
             wb = load_workbook(result.detail_output_file, data_only=False)
             ws = wb["社保明细表"]
             self.assertEqual(ws["AK4"].value, 30)
-            self.assertIsNone(ws["BI4"].value)
-            self.assertIsNone(ws["BK4"].value)
-            self.assertIsNone(ws["BX4"].value)
+            self.assertIsNone(ws["BL4"].value)
+            self.assertIsNone(ws["BN4"].value)
+            self.assertIsNone(ws["CA4"].value)
             wb.close()
 
     def test_does_not_guess_single_person_historical_rate_change_as_difference(self) -> None:
@@ -704,8 +772,8 @@ class SocialSecurityTest(unittest.TestCase):
             ws = wb["社保明细表"]
             self.assertEqual(ws["Z4"].value, 22.92)
             self.assertIsNone(ws["BD4"].value)
-            self.assertIsNone(ws["BK4"].value)
-            self.assertIsNone(ws["BX4"].value)
+            self.assertIsNone(ws["BN4"].value)
+            self.assertIsNone(ws["CA4"].value)
             wb.close()
 
     def test_combined_wide_file_keeps_its_bill_month(self) -> None:
@@ -736,7 +804,7 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(ws["Z4"].value, 8)
             self.assertEqual(ws["AK4"].value, 5)
             self.assertEqual(ws["AI4"].value, 2)
-            self.assertIsNone(ws["BX4"].value)
+            self.assertIsNone(ws["CA4"].value)
             wb.close()
 
     def test_wide_history_without_nature_or_basis_is_not_guessed_as_arrears(self) -> None:
@@ -754,8 +822,8 @@ class SocialSecurityTest(unittest.TestCase):
             wb = load_workbook(result.detail_output_file, data_only=False)
             ws = wb["社保明细表"]
             self.assertEqual(ws["M4"].value, 200)
-            self.assertIsNone(ws["BK4"].value)
-            self.assertIsNone(ws["BX4"].value)
+            self.assertIsNone(ws["BN4"].value)
+            self.assertIsNone(ws["CA4"].value)
             wb.close()
 
     def test_warns_when_bill_account_differs_from_roster(self) -> None:
