@@ -458,9 +458,9 @@ def _read_statistics_file(file_path: Path, warnings: list[str]) -> tuple[list[At
                 continue
             headers = _read_headers(grid, header_row)
             if _is_attendance_sheet(headers):
-                attendance_rows.extend(_read_attendance_sheet(grid, headers, header_row, file_path.name))
+                attendance_rows.extend(_read_attendance_sheet(grid, headers, header_row, file_path.name, warnings=warnings))
             elif _is_summary_attendance_sheet(headers):
-                attendance_rows.extend(_read_summary_attendance_sheet(grid, headers, header_row, file_path.name))
+                attendance_rows.extend(_read_summary_attendance_sheet(grid, headers, header_row, file_path.name, warnings=warnings))
             elif _is_report_sheet(headers):
                 report_type = _report_type_from_name(file_path.name, grid.title)
                 if report_type is None:
@@ -617,7 +617,34 @@ def _is_report_sheet(headers: dict[str, int]) -> bool:
     return {"汇报编号", "汇报时间", "汇报人"}.issubset(headers)
 
 
-def _read_attendance_sheet(grid: SheetGrid, headers: dict[str, int], header_row: int, file_name: str) -> list[AttendanceSourceRow]:
+def _paid_leave_total_days(
+    details: dict[str, float],
+    aggregate_value: Any,
+    *,
+    complete_details: bool,
+    warnings: list[str] | None,
+    source: str,
+) -> float:
+    """七类假别均为天数；总计只能作补全，不能与明细重复相加。"""
+    subtotal = round(sum(details.values()), 2)
+    if aggregate_value is None or _cell_text(aggregate_value) == "":
+        return subtotal
+    aggregate = round(_number(aggregate_value), 2)
+    # 七类列齐全时按明细合计；部分假别缺列时保留源表总计。
+    # 总计小于已知明细也属于冲突，不能因此漏计已识别的假别。
+    use_details = complete_details or aggregate < subtotal
+    if use_details and aggregate != subtotal and warnings is not None:
+        warnings.append(
+            f"{source}：带薪休假总计为{aggregate:g}天，"
+            f"已识别的假别合计为{subtotal:g}天，本次按假别合计填写，请核对原表。"
+        )
+    return subtotal if use_details else aggregate
+
+
+def _read_attendance_sheet(
+    grid: SheetGrid, headers: dict[str, int], header_row: int, file_name: str,
+    *, warnings: list[str] | None = None,
+) -> list[AttendanceSourceRow]:
     # 列号外提:循环外一次性解析,循环内只做 grid.cell 访问
     cols = {name: headers.get(_normalize_header(name)) for name in (
         "姓名", "日期", "部门名称",
@@ -633,7 +660,9 @@ def _read_attendance_sheet(grid: SheetGrid, headers: dict[str, int], header_row:
     dept_col = cols["部门名称"]
     personal_col = cols["事假"]
     sick_col = cols["病假天数"]
-    paid_col = cols["年假天数"]
+    paid_total_cols = tuple(headers.get(_normalize_header(name)) for name in (
+        "带薪休假", "带薪休假（天）", "带薪休假(天)",
+    ))
     paid_leave_cols = (
         ("婚假", cols["婚假"]),
         ("产假", cols["产假天数"]),
@@ -677,7 +706,7 @@ def _read_attendance_sheet(grid: SheetGrid, headers: dict[str, int], header_row:
     def _paid_leave_details(row_index: int) -> dict[str, float]:
         details: dict[str, float] = {}
         for leave_name, col in paid_leave_cols:
-            leave_days = _to_days(_number(_val(row_index, col)))
+            leave_days = round(_number(_val(row_index, col)), 2)
             if leave_days:
                 details[leave_name] = leave_days
         return details
@@ -692,6 +721,11 @@ def _read_attendance_sheet(grid: SheetGrid, headers: dict[str, int], header_row:
         company, department = _company_department_from_text(department_text)
         rest_raw = _number(_val(row_index, rest_col))
         overtime_raw = _number(_val(row_index, overtime_col))
+        paid_details = _paid_leave_details(row_index)
+        paid_total = next((
+            _val(row_index, col) for col in paid_total_cols
+            if _cell_text(_val(row_index, col)) != ""
+        ), None)
         rows.append(
             AttendanceSourceRow(
                 source_file=file_name,
@@ -702,8 +736,16 @@ def _read_attendance_sheet(grid: SheetGrid, headers: dict[str, int], header_row:
                 day=day,
                 personal_leave_days=_to_days(_number(_val(row_index, personal_col))),
                 sick_leave_days=_to_days(_number(_val(row_index, sick_col))),
-                paid_leave_days=_to_days(_number(_val(row_index, paid_col))),
-                paid_leave_details=_paid_leave_details(row_index),
+                paid_leave_days=_paid_leave_total_days(
+                    paid_details, paid_total,
+                    complete_details=(
+                        all(col is not None for _, col in paid_leave_cols)
+                        and any(_cell_text(_val(row_index, col)) != "" for _, col in paid_leave_cols)
+                    ),
+                    warnings=warnings,
+                    source=f"{file_name} 工作表「{grid.title}」第{row_index}行",
+                ),
+                paid_leave_details=paid_details,
                 rest_days=_to_days(rest_raw),
                 overtime_days=_to_days(overtime_raw),
                 rest_hours=_to_hours(rest_raw),
@@ -726,7 +768,10 @@ def _read_attendance_sheet(grid: SheetGrid, headers: dict[str, int], header_row:
     return rows
 
 
-def _read_summary_attendance_sheet(grid: SheetGrid, headers: dict[str, int], header_row: int, file_name: str) -> list[AttendanceSourceRow]:
+def _read_summary_attendance_sheet(
+    grid: SheetGrid, headers: dict[str, int], header_row: int, file_name: str,
+    *, warnings: list[str] | None = None,
+) -> list[AttendanceSourceRow]:
     """读取汇总格式的考勤表（没有日期列，直接按人汇总）"""
     # 列号外提:把每组 fallback 候选的列号一次性解析,循环内按 fallback 顺序查第一个非 None
     def _cols(*names: str) -> tuple[int | None, ...]:
@@ -738,7 +783,7 @@ def _read_summary_attendance_sheet(grid: SheetGrid, headers: dict[str, int], hea
 
     personal_cols = _cols("事假", "事假（天）", "事假\n(天)", "事假\n(小时)")
     sick_cols = _cols("病假天数", "病假", "病假（天）", "病假\n(天)")
-    paid_cols = _cols("年假天数", "年假", "年假\n（天）", "年假\n(天)", "带薪休假", "带薪休假（天）")
+    paid_total_cols = _cols("带薪休假", "带薪休假（天）", "带薪休假(天)")
     paid_leave_cols = (
         ("婚假", _cols("婚假", "婚假天数", "婚假（天）", "婚假\n(天)", "婚嫁（天）")),
         ("产假", _cols("产假", "产假天数", "产假（天）", "产假\n(天)")),
@@ -777,7 +822,7 @@ def _read_summary_attendance_sheet(grid: SheetGrid, headers: dict[str, int], hea
     def _paid_leave_details(row_index: int) -> dict[str, float]:
         details: dict[str, float] = {}
         for leave_name, leave_cols in paid_leave_cols:
-            leave_days = _to_days(_number(_first_not_none(row_index, leave_cols)))
+            leave_days = round(_number(_first_not_none(row_index, leave_cols)), 2)
             if leave_days:
                 details[leave_name] = leave_days
         return details
@@ -805,6 +850,11 @@ def _read_summary_attendance_sheet(grid: SheetGrid, headers: dict[str, int], hea
             company = company_text
         rest_raw = _number(_first_not_none(row_index, rest_cols))
         overtime_raw = _number(_first_not_none(row_index, overtime_cols))
+        paid_details = _paid_leave_details(row_index)
+        paid_total = next((
+            _val(row_index, col) for col in paid_total_cols
+            if _cell_text(_val(row_index, col)) != ""
+        ), None)
         rows.append(
             AttendanceSourceRow(
                 source_file=file_name,
@@ -816,8 +866,16 @@ def _read_summary_attendance_sheet(grid: SheetGrid, headers: dict[str, int], hea
                 is_summary_row=True,
                 personal_leave_days=_to_days(_number(_first_not_none(row_index, personal_cols))),
                 sick_leave_days=_to_days(_number(_first_not_none(row_index, sick_cols))),
-                paid_leave_days=_to_days(_number(_first_not_none(row_index, paid_cols))),
-                paid_leave_details=_paid_leave_details(row_index),
+                paid_leave_days=_paid_leave_total_days(
+                    paid_details, paid_total,
+                    complete_details=(
+                        all(any(col is not None for col in leave_cols) for _, leave_cols in paid_leave_cols)
+                        and any(_cell_text(_first_not_none(row_index, leave_cols)) != "" for _, leave_cols in paid_leave_cols)
+                    ),
+                    warnings=warnings,
+                    source=f"{file_name} 工作表「{grid.title}」第{row_index}行",
+                ),
+                paid_leave_details=paid_details,
                 rest_days=_to_days(rest_raw),
                 overtime_days=_to_days(overtime_raw),
                 rest_hours=_to_hours(rest_raw),

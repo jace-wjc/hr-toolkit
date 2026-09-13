@@ -230,8 +230,8 @@ class DataStatisticsTest(unittest.TestCase):
                 self.assertEqual(stats.max_column, 17)
                 self.assertEqual(stats.cell(3, 5).value, 0.5)
                 self.assertEqual(stats.cell(3, 6).value, 0.5)
-                # TASK-5 只改备注，带薪休假统计值继续保持原有年假口径。
-                self.assertEqual(stats.cell(3, 7).value, 1.5)
+                # 七类带薪假均计入合计，备注仍只显示具体假别。
+                self.assertEqual(stats.cell(3, 7).value, 7.5)
                 remarks[unit] = stats.cell(3, 17).value or ""
                 detail = wb["考勤异常明细"]
                 details[unit] = [
@@ -265,7 +265,7 @@ class DataStatisticsTest(unittest.TestCase):
             result = generate_data_statistics_reports(input_dir, root / "out")
             wb = load_workbook(result.output_file, data_only=False)
             stats = wb["考勤统计"]
-            self.assertEqual(stats.cell(3, 7).value, 0.5)
+            self.assertEqual(stats.cell(3, 7).value, 6.5)
             remark = stats.cell(3, stats.max_column).value or ""
             self.assertNotIn("带薪休假", remark)
             self.assertIn("病假上午0.5天", remark)
@@ -274,6 +274,96 @@ class DataStatisticsTest(unittest.TestCase):
                 remark,
             )
             wb.close()
+
+    def test_paid_leave_all_types_preserve_day_values(self) -> None:
+        leave_headers = ("婚假", "产假天数", "陪护假", "丧假", "探亲假", "工伤", "年假天数")
+        leave_names = ("婚假", "产假", "陪护假", "丧假", "探亲假", "工伤", "年假")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for summary in (False, True):
+                source = root / f"考勤2026年5月_{summary}.xlsx"
+                wb = Workbook()
+                ws = wb.active
+                prefix = ["姓名", "应出勤天数"] if summary else ["姓名", "日期", "漏打卡次数", "应出勤小时数"]
+                ws.append(prefix + list(leave_headers))
+                expected = {}
+                for index, leave_name in enumerate(leave_names):
+                    for days in (0, 0.5, 1, 3, 7, 98):
+                        name = f"测试{index}_{days}"
+                        values = [0] * len(leave_headers)
+                        values[index] = days
+                        fields = [name, 20] if summary else [name, datetime(2026, 5, 1), 0, 7]
+                        ws.append(fields + values)
+                        expected[name] = (leave_name, days)
+                wb.save(source)
+                wb.close()
+                for unit in ("day", "hour"):
+                    with self.subTest(summary=summary, unit=unit):
+                        result = generate_data_statistics_reports(source, root / f"out_{summary}_{unit}", remark_unit=unit)
+                        self.assertEqual(result.warnings, [])
+                        output = load_workbook(result.output_file)
+                        try:
+                            stats = output["考勤统计"]
+                            self.assertEqual(stats.max_row, len(expected) + 2)
+                            self.assertEqual(stats.cell(2, 7).value, "带薪休假（天）")
+                            for row in range(3, stats.max_row + 1):
+                                leave_name, days = expected[stats.cell(row, 4).value]
+                                self.assertEqual(stats.cell(row, 7).value, days or None)
+                                remark = stats.cell(row, stats.max_column).value or ""
+                                if days:
+                                    self.assertIn(leave_name, remark)
+                                    self.assertIn(f"{days:g}天", remark)
+                                else:
+                                    self.assertNotIn(leave_name, remark)
+                        finally:
+                            output.close()
+
+    def test_paid_leave_aggregate_fallback_and_conflicts(self) -> None:
+        all_headers = ["婚假", "产假天数", "陪护假", "丧假", "探亲假", "工伤", "年假天数"]
+        cases = (
+            (all_headers + ["带薪休假（天）"], [1, 1, 1, 1, 1, 1, 0.5, 6.5], 6.5, False),
+            (all_headers + ["带薪休假（天）"], [1, 1, 1, 1, 1, 1, 0.5, 9], 6.5, True),
+            (all_headers + ["带薪休假（天）"], [0, 0, 0, 3, 0, 0, 0, None], 3, False),
+            (all_headers + ["带薪休假（天）"], [None, None, None, None, None, None, None, 5], 5, False),
+            (all_headers + ["带薪休假（天）"], [0, 0, 0, 0, 0, 0, 0, 5], None, True),
+            (["年假天数", "带薪休假（天）"], [0, 5], 5, False),
+            (["年假天数", "带薪休假（天）"], [None, 5], 5, False),
+            (["年假天数", "带薪休假（天）"], [1.5, 5], 5, False),
+            (["年假天数", "带薪休假（天）"], [3, 0], 3, True),
+            (["带薪休假（天）"], [10], 10, False),
+            (["带薪休假(天)"], [10], 10, False),
+            (["带薪休假"], [0], None, False),
+            (["年假天数"], [3], 3, False),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for summary in (False, True):
+                for index, (headers, values, expected, conflict) in enumerate(cases):
+                    with self.subTest(summary=summary, case=index):
+                        source = root / f"考勤2026年5月_{summary}_{index}.xlsx"
+                        wb = Workbook()
+                        ws = wb.active
+                        if summary:
+                            ws.append(["姓名", "应出勤天数"] + headers)
+                            ws.append(["测试人员", 20] + values)
+                        else:
+                            ws.append(["姓名", "日期", "漏打卡次数", "应出勤小时数"] + headers)
+                            ws.append(["测试人员", datetime(2026, 5, 1), 0, 7] + values)
+                        wb.save(source)
+                        wb.close()
+                        result = generate_data_statistics_reports(source, root / f"out_{summary}_{index}")
+                        self.assertEqual(len(result.warnings), int(conflict))
+                        if conflict:
+                            self.assertIn("请核对原表", result.warnings[0])
+                        output = load_workbook(result.output_file)
+                        try:
+                            stats = output["考勤统计"]
+                            self.assertEqual(stats.cell(3, 7).value, expected)
+                            if headers[0].startswith("带薪休假"):
+                                remark = stats.cell(3, stats.max_column).value or ""
+                                self.assertNotIn("年假", remark)
+                        finally:
+                            output.close()
 
     def test_report_staff_list_counts_missing_people(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
