@@ -118,7 +118,7 @@ def _ensure_ocr_memory_headroom(required_bytes: int = 512 * 1024 * 1024) -> None
     available = _available_ocr_memory()
     if available is not None and available < required_bytes:
         required_mb = math.ceil(required_bytes / (1024 * 1024))
-        raise OCRMemoryPressureError(f"本页安全识别需预留约 {required_mb} MB，当前可用内存不足，已停止继续识别；请关闭其他程序或缩小图片后重试，原始资料未修改")
+        raise OCRMemoryPressureError(f"本次识别预计还需约 {required_mb} MB，当前可用约 {available // (1024 * 1024)} MB，已安全停止；当前资料未完成识别，原始资料未修改")
 
 
 _OCR_MAX_INPUT_BYTES = 32 * 1024 * 1024
@@ -126,7 +126,25 @@ _OCR_MAX_INPUT_PIXELS = 12_000_000
 _OCR_MAX_INPUT_ASPECT = 4
 
 
-def _check_ocr_input_budget(source: str | bytes) -> int:
+@dataclass(frozen=True)
+class _OCRImageBudget:
+    width: int
+    height: int
+    detector_pixels: int
+
+    @property
+    def normal(self) -> int:
+        return max(512 * 1024**2, self.detector_pixels * 1024 + self.width * self.height * 4)
+
+    @property
+    def serial(self) -> int:
+        # 单条推理仍保留完整检测图，不能将整页预算简单除以批次数。
+        # 为检测特征图、图像副本及推理固定开销分别留余量。
+        # 这是准入估计，不是 RSS 上限；Win7 的实际峰值仍需实机核验。
+        return min(self.normal, max(512 * 1024**2, self.detector_pixels * 384 + self.width * self.height * 16 + 128 * 1024**2))
+
+
+def _inspect_ocr_input_budget(source: str | bytes) -> _OCRImageBudget:
     # Pillow 仅读图片头，不解码像素；拦截压缩体积很小但展开极大的图片。
     from PIL import Image
 
@@ -148,7 +166,79 @@ def _check_ocr_input_budget(source: str | bytes) -> int:
         scale = min(1.0, 2000 / max(width, height))
         scale *= max(1.0, 736 / (min(width, height) * scale))
         detector_pixels = math.ceil(width * scale / 32) * 32 * math.ceil(height * scale / 32) * 32
-        return max(512 * 1024 * 1024, detector_pixels * 1024 + width * height * 4)
+        return _OCRImageBudget(width, height, detector_pixels)
+
+
+def _check_ocr_input_budget(source: str | bytes) -> int:
+    return _inspect_ocr_input_budget(source).normal
+
+
+class _SerialOCRSession:
+    """只拆推理批次，保留原批次的归一化像素、填充宽度及输出顺序。"""
+
+    def __init__(self, session: Any, cancelled: Callable[[], bool] | None = None):
+        self.session = session
+        self.cancelled = cancelled
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.session, name)
+
+    def __call__(self, batch: Any) -> Any:
+        import numpy as np
+
+        if len(batch) <= 1:
+            return self.session(batch)
+        merged = None
+        container = None
+        for index in range(len(batch)):
+            _raise_if_cancelled(self.cancelled)
+            result = self.session(batch[index:index + 1])
+            outputs = result if isinstance(result, (list, tuple)) else [result]
+            if merged is None:
+                container = type(result)
+                if not outputs or any(not isinstance(item, np.ndarray) or item.ndim == 0 or item.shape[0] != 1 for item in outputs):
+                    raise OCRUnavailableError("省内存识别返回了不支持的结果结构，当前资料未完成识别")
+                merged = [np.empty((len(batch), *item.shape[1:]), dtype=item.dtype) for item in outputs]
+            if len(outputs) != len(merged):
+                raise OCRUnavailableError("省内存识别结果数量异常，当前资料未完成识别")
+            for target, item in zip(merged, outputs):
+                if not isinstance(item, np.ndarray) or item.shape != (1, *target.shape[1:]) or item.dtype != target.dtype:
+                    raise OCRUnavailableError("省内存识别结果尺寸异常，当前资料未完成识别")
+                target[index:index + 1] = item
+            del result, outputs, item
+        if container is tuple:
+            return tuple(merged)
+        return merged if container is list else merged[0]
+
+
+def _supports_serial_ocr(engine: Any) -> bool:
+    # 两个随包发行的 RapidOCR 版本均使用该接口；未知适配器不降低门槛。
+    return all(callable(getattr(getattr(engine, stage, None), "session", None)) for stage in ("text_cls", "text_rec"))
+
+
+@contextmanager
+def _serial_ocr_sessions(engine: Any, enabled: bool, cancelled: Callable[[], bool] | None = None) -> Iterator[None]:
+    """调用方持有 _OCR_LOCK；异常和取消后也必须恢复正常推理接口。"""
+    originals = []
+    try:
+        if enabled:
+            for name in ("text_cls", "text_rec"):
+                stage = getattr(engine, name)
+                originals.append((stage, stage.session))
+                stage.session = _SerialOCRSession(stage.session, cancelled)
+        yield
+    finally:
+        for stage, session in reversed(originals):
+            stage.session = session
+
+
+def _log_ocr_budget(file_name: str, unit: int, budget: _OCRImageBudget, available: int | None, required: int, serial: bool, state: str) -> None:
+    # 不记录识别内容、员工姓名或身份证号。
+    from ..runlog import log_line
+
+    remaining = "未知" if available is None else str(available // 1024**2)
+    log_line(f"OCR资源 文件={file_name} 识别单元={unit} 图片={budget.width}x{budget.height} "
+             f"模式={'省内存' if serial else '正常'} 可用MB={remaining} 预算MB={math.ceil(required / 1024**2)} 状态={state}")
 
 
 def _ocr_runtime_options() -> dict[str, int]:
@@ -257,7 +347,7 @@ def _get_ocr_engine():
                 if isinstance(exc, MemoryError) or any(token in str(exc).lower() for token in (
                     "bad_alloc", "out of memory", "failed to allocate memory", "not enough memory",
                 )):
-                    raise OCRMemoryPressureError("OCR 初始化时内存不足，已停止识别；请关闭其他程序后重试") from exc
+                    raise OCRMemoryPressureError("识别引擎启动时内存不足，已安全停止；当前资料未完成识别，原始资料未修改") from exc
         if _OCR_ENGINE is None:
             raise OCRUnavailableError(_OCR_ENGINE_ERROR or "OCR 引擎未能启动，请检查依赖后重启软件。")
         return _OCR_ENGINE
@@ -2679,22 +2769,35 @@ def _collect_ocr_texts(
     """逐页 OCR，只累计文字；页面坐标结果在下一页前即可释放。"""
     texts: list[str] = []
     character_count = 0
+    serial_notice_sent = False
     try:
-        for target_input in _iter_ocr_targets(
+        for unit, target_input in enumerate(_iter_ocr_targets(
             file_path,
             progress_callback=progress_callback,
             cancelled=cancelled,
             render_pages=render_pages,
-        ):
+        ), start=1):
             _raise_if_cancelled(cancelled)
-            required_memory = _check_ocr_input_budget(target_input)
-            _ensure_ocr_memory_headroom(required_memory)
+            budget = _inspect_ocr_input_budget(target_input)
+            # 初始化只申请启动余量，随后按实际剩余内存判断本页处理方式。
+            _ensure_ocr_memory_headroom()
             engine = _get_ocr_engine()
             if engine is None:
                 raise OCRUnavailableError("OCR 引擎未能启动，请检查依赖后重启软件。")
-            _ensure_ocr_memory_headroom(required_memory)
             with _OCR_LOCK:
-                output = engine(target_input)
+                available = _available_ocr_memory()
+                serial = available is not None and available < max(2 * 1024**3, budget.normal) and _supports_serial_ocr(engine)
+                required_memory = budget.serial if serial else budget.normal
+                _log_ocr_budget(file_path.name, unit, budget, available, required_memory, serial, "准备")
+                _ensure_ocr_memory_headroom(required_memory)
+                if serial and not serial_notice_sent and progress_callback is not None:
+                    # 0/0 只传递提示，不冒充已完成文件或 PDF 页面进度。
+                    progress_callback(0, 0, "已启用省内存识别，处理速度可能稍慢，原始资料保持不变")
+                    serial_notice_sent = True
+                _raise_if_cancelled(cancelled)
+                with _serial_ocr_sessions(engine, serial, cancelled):
+                    output = engine(target_input)
+                _log_ocr_budget(file_path.name, unit, budget, _available_ocr_memory(), required_memory, serial, "完成")
             # 旧包返回 (结果, 耗时)，新版返回带 txts 的 RapidOCROutput。
             result = output[0] if isinstance(output, tuple) and len(output) == 2 else output
             if result:
@@ -2708,10 +2811,10 @@ def _collect_ocr_texts(
     except (MaterialCollectionCancelled, PDFRecognitionError, OCRResourceLimitError, OCRMemoryPressureError, OCRUnavailableError):
         raise
     except MemoryError as exc:
-        raise OCRMemoryPressureError("当前内存不足，已停止识别；请关闭其他程序或拆分资料后重试") from exc
+        raise OCRMemoryPressureError("识别时可用内存不足，已安全停止；当前资料未完成识别，原始资料未修改") from exc
     except Exception as exc:
         if any(token in str(exc).lower() for token in ("bad_alloc", "out of memory", "failed to allocate memory", "not enough memory")):
-            raise OCRMemoryPressureError("OCR 引擎内存不足，已停止识别；请关闭其他程序或拆分资料后重试") from exc
+            raise OCRMemoryPressureError("识别引擎内存不足，已安全停止；当前资料未完成识别，原始资料未修改") from exc
         return [], False
     return texts, True
 
