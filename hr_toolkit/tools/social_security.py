@@ -6,6 +6,7 @@ import re
 # 预编译正则
 _PERIOD_FROM_FILENAME = re.compile(r"(20\d{2})[-年._ ]?([01]?\d)")
 _PERIOD_FROM_TEXT = re.compile(r"(20\d{2})[-年/. ]?([01]?\d)")
+_SHEET_FEE_PERIOD_PATTERN = re.compile(r"(?<!\d)(20\d{2})[-年/. ]?([01]?\d)(?!\d)")
 _FILENAME_HAS_PERIOD = re.compile(r"^\d{4}[-年._ ]?[01]?\d")
 _FILENAME_STRIP_PERIOD = re.compile(r"20\d{2}.*")
 _BRACKET_CONTENT = re.compile(r"[（(]([^（）()]+)[）)]")
@@ -15,7 +16,7 @@ _HEADER_WHITESPACE = re.compile(r"\s+")
 import shutil
 import tempfile
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -194,6 +195,8 @@ class SourceContext:
     account_hint: str
     company_hint: str
     nature_hint: str | None
+    sheet_fee_period: str = ""
+    sheet_fee_period_end: str = ""
 
 
 @dataclass(frozen=True)
@@ -594,6 +597,10 @@ def _read_payment_file(file_path: Path) -> list[SocialPaymentLine]:
         # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
         ws = SheetGrid(workbook[workbook.sheetnames[0]])
         header_row = _find_payment_header_row(ws)
+        context = _with_sheet_fee_period(context, [
+            [ws.cell(row, col).value for col in range(1, ws.max_column + 1)]
+            for row in range(1, header_row)
+        ])
         headers = _read_payment_headers(
             [ws.cell(header_row, col).value for col in range(1, ws.max_column + 1)],
             [ws.cell(header_row + 1, col).value for col in range(1, ws.max_column + 1)],
@@ -620,6 +627,7 @@ def _read_xls_payment_file(file_path: Path, context: SourceContext) -> list[Soci
         header_row = _find_xls_header_row(sheet)
         if header_row is None:
             continue
+        context = _with_sheet_fee_period(context, [sheet.row_values(row) for row in range(header_row)])
         headers = _read_payment_headers(
             sheet.row_values(header_row),
             sheet.row_values(header_row + 1) if header_row + 1 < sheet.nrows else [],
@@ -934,21 +942,35 @@ def _build_detail_records(
     for (_id_card, _group_account_display, billing_period), group_items in resolved_groups.items():
         front_items = [item for item in group_items if normalized_natures[item[0]] != PAYMENT_DIFFERENCE]
         difference_items = [item for item in group_items if normalized_natures[item[0]] == PAYMENT_DIFFERENCE]
-        group_by_period = any(normalized_natures[item[0]] == PAYMENT_ARREARS for item in front_items)
-        front_groups = _group_front_payment_items(front_items) if group_by_period else [front_items]
+        arrears_items = [item for item in front_items if normalized_natures[item[0]] == PAYMENT_ARREARS]
+        regular_items = [item for item in front_items if normalized_natures[item[0]] != PAYMENT_ARREARS]
+        if arrears_items:
+            front_groups = _group_front_payment_items(arrears_items)
+            # 正常缴费与补差留在账单月份，不与历史补缴合并。
+            if regular_items or difference_items:
+                front_groups.append(regular_items)
+                primary_index = len(front_groups) - 1
+            else:
+                primary_index = _primary_front_group_index(front_groups, billing_period)
+        else:
+            front_groups = [front_items]
+            primary_index = 0
         if not front_groups:
             front_groups = [[]]
-        primary_index = _primary_front_group_index(front_groups, billing_period)
         period_split_input = any(item[0].period_split_file for item in group_items)
 
         group_records: list[DetailRecord] = []
         for group_index, front_group in enumerate(front_groups):
             context_item = front_group[0] if front_group else group_items[0]
             line, person, account_display, source_company, source_place = context_item
+            period = billing_period
+            if front_group and all(normalized_natures[item[0]] == PAYMENT_ARREARS for item in front_group):
+                periods = set().union(*(_line_periods(item[0]) for item in front_group))
+                period = _format_period_span(periods) or billing_period
             record = DetailRecord(
                 id_card=line.id_card,
                 name=person.name,
-                period=billing_period,
+                period=period,
                 billing_period=billing_period,
                 period_split_input=period_split_input,
                 account=line.account_hint or person.account,
@@ -1463,9 +1485,11 @@ def _write_difference_cells(ws: Worksheet, row_index: int, record: DetailRecord)
 
 
 def _write_difference_rollups(ws: Worksheet, row_index: int, record: DetailRecord) -> None:
+    medical_personal_difference = record.difference_amounts.get("医疗", {}).get("个人", 0.0)
     personal_difference = round(
         record.difference_amounts.get("养老", {}).get("个人", 0.0)
-        + record.difference_amounts.get("失业", {}).get("个人", 0.0),
+        + record.difference_amounts.get("失业", {}).get("个人", 0.0)
+        + medical_personal_difference,
         2,
     )
     unit_difference = round(
@@ -1479,7 +1503,8 @@ def _write_difference_rollups(ws: Worksheet, row_index: int, record: DetailRecor
         ws,
         row_index,
         DETAIL_COLUMNS["个人社保补缴合计"],
-        [DIFFERENCE_COLUMNS["养老"]["个人金额"], DIFFERENCE_COLUMNS["失业"]["个人金额"]],
+        [DIFFERENCE_COLUMNS["养老"]["个人金额"], DIFFERENCE_COLUMNS["失业"]["个人金额"]]
+        + ([DIFFERENCE_COLUMNS["医疗"]["个人金额"]] if medical_personal_difference else []),
         personal_difference,
     )
     _write_template_rollup(
@@ -1995,6 +2020,28 @@ def _period_from_value(value: Any) -> str | None:
     return None
 
 
+def _with_sheet_fee_period(context: SourceContext, rows: list[list[Any]]) -> SourceContext:
+    """只从明细表头上方的明确所属期标签取期间，不把文件月份改成所属期。"""
+    labels = ("费款所属期", "费用所属期", "所属月份", "缴费月份")
+    for row in rows:
+        for index, value in enumerate(row):
+            text = _normalize_header(value).replace("：", ":")
+            label = next((label for label in labels if text == label or text.startswith(label + ":")), None)
+            if label is None:
+                continue
+            period_value = text[len(label):].lstrip(":")
+            if not period_value:
+                period_value = next((v for v in row[index + 1:] if _cell_text(v)), None)
+            periods = [f"{match.group(1)}{int(match.group(2)):02d}" for match in _SHEET_FEE_PERIOD_PATTERN.finditer(_cell_text(period_value))]
+            periods = [period for period in periods if _is_period(period)]
+            if not periods and (isinstance(period_value, datetime) or (isinstance(period_value, (int, float)) and 20000 <= period_value <= 80000)):
+                period = _period_from_value(period_value)
+                periods = [period] if period else []
+            if periods:
+                return replace(context, sheet_fee_period=min(periods), sheet_fee_period_end=max(periods))
+    return context
+
+
 def _payment_periods_from_row(row: dict[str, Any], context: SourceContext) -> tuple[str, str]:
     start = ""
     for header in FEE_PERIOD_START_HEADERS:
@@ -2006,7 +2053,9 @@ def _payment_periods_from_row(row: dict[str, Any], context: SourceContext) -> tu
         end = _period_from_value(row.get(header)) or ""
         if end:
             break
-    start = start or context.file_period or context.container_period
+    if not start:
+        start = context.sheet_fee_period or context.file_period or context.container_period
+        end = end or context.sheet_fee_period_end
     end = end or start
     if start and end and end < start:
         start, end = end, start
