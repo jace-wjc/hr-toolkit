@@ -29,7 +29,7 @@ from hr_toolkit.common.inputs import (
     is_supported_archive_file,
     normalize_input_paths,
 )
-from .salary_headers import inspect_workbook
+from .salary_headers import inspect_workbook, normalize_header
 
 
 TOOL_NAME = "需求5-多月工资合并个人薪资汇总"
@@ -342,11 +342,15 @@ def inspect_salary_templates(
                 workbook = load_workbook(path, read_only=True, data_only=False)
                 try:
                     group = inspect_workbook(workbook, role=role, profiles=profiles, hint=hints.get(source_key))
-                    if role == "summary" and not _read_month_columns(workbook[group["sheet"]], group["header_bottom"]):
+                    if role == "summary" and not group.get("sheet_needs_confirmation") and not _read_month_columns(workbook[group["sheet"]], group["header_bottom"]):
                         raise ValueError("已有汇总表未找到月份列，请确认表头包含 202601 这类月份")
                 finally:
                     workbook.close()
                 key = group["key"]
+                if group.get("alias_signature"):
+                    # 不同文件的可选 Sheet 可能不同，不能共用第一份的确认状态或工作表列表。
+                    context = repr((group["sheet_names"], bool(group.get("sheet_needs_confirmation"))))
+                    key += ":" + hashlib.sha256(context.encode()).hexdigest()
                 # 同名列调整顺序后不得沿用另一文件中的物理列号。
                 if key in groups and group["order"] != groups[key]["order"]:
                     counts = Counter(c["key"] for c in group["columns"])
@@ -451,10 +455,13 @@ def _detect_source_layout(
         if not group["ready"]:
             raise ValueError(group["problem"])
         selected = group["selections"]
+        amount_column = next(c for c in group["columns"] if c["column"] == selected["amount"])
+        builtin_amount = any(normalize_header(name) in amount_column["leaves"] for name in HEADER_AMOUNT_ALIASES)
         return SalarySourceLayout(
             group["sheet"], group["header_row"],
             _find_data_start_row(workbook[group["sheet"]], group["header_bottom"]),
-            selected["name"], selected["id_card"], selected["amount"], not group["saved"],
+            selected["name"], selected["id_card"], selected["amount"],
+            not group["saved"] and (not group.get("alias_signature") or builtin_amount),
         )
     detail_sheet_name = _find_sheet_name(workbook.sheetnames, DETAIL_SHEET_KEYWORD)
     ws = workbook[detail_sheet_name]

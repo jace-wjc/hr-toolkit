@@ -215,6 +215,7 @@ class AppController(QObject):
         self._preview_cancel_event: threading.Event | None = None
         self._pending_preview: dict[str, Any] | None = None
         self._salary_header_profiles: dict[str, dict[str, Any]] = {}
+        self._header_name_rules: dict[str, dict[str, Any]] = {}
         self._salary_pending: ToolInvocation | None = None
         self._salary_project_key = ""
         self._salary_inspection: dict[str, Any] = {}
@@ -1376,6 +1377,9 @@ class AppController(QObject):
             state.get("material_preferences")
         )
         salary_profiles = state.get("salary_header_profiles")
+        header_rules = state.get("header_name_rules")
+        if isinstance(header_rules, dict):
+            self._header_name_rules = {str(key): value for key, value in header_rules.items() if isinstance(value, dict)}
         if isinstance(salary_profiles, dict):
             self._salary_header_profiles = {
                 str(project): {str(key): value for key, value in rules.items() if isinstance(value, dict)}
@@ -1434,6 +1438,7 @@ class AppController(QObject):
                 "material_preferences": self._material_preferences.to_payload(),
                 "last_selected_dir": str(self._last_selected_dir) if self._last_selected_dir is not None else None,
                 "salary_header_profiles": self._salary_header_profiles,
+                "header_name_rules": self._header_name_rules,
             }
         )
         try:
@@ -2636,6 +2641,40 @@ class AppController(QObject):
     def salaryMappingData(self) -> dict[str, Any]:
         return self._salary_inspection
 
+    @Property("QVariantList", notify=salaryMappingChanged)
+    def salaryAliasSections(self) -> list[dict[str, Any]]:
+        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, ALIASES, FIELD_LABELS, SHEET_LABELS, alias_rules
+
+        rules = alias_rules({ALIAS_PROFILE_KEY: self._header_name_rules.get("salary_merge", {})})
+        groups = self._salary_inspection.get("groups", [])
+        columns = list(dict.fromkeys(c["label"] for g in groups for c in g.get("columns", [])))
+        sheets = list(dict.fromkeys(name for g in groups for name in g.get("sheet_names", [])))
+        return [{"kind": kind, "key": key, "label": label,
+                 "selected": rules[kind].get(key, list(ALIASES[key]) if kind == "fields" else []),
+                 "options": columns if kind == "fields" else sheets}
+                for kind, labels in (("fields", FIELD_LABELS), ("sheets", SHEET_LABELS)) for key, label in labels.items()]
+
+    @Slot(str)
+    def saveSalaryAliasRules(self, payload: str) -> None:
+        if self._busy or self._salary_pending is None or self._salary_project_key != str(self._project_path):
+            return
+        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, alias_rules
+
+        try:
+            rules = alias_rules({ALIAS_PROFILE_KEY: json.loads(payload)})
+            previous = dict(self._header_name_rules)
+            self._header_name_rules["salary_merge"] = rules
+            if not self._save_workspace_preferences():
+                self._header_name_rules = previous
+                raise ValueError("名称规则未能保存，请重试")
+            self._salary_draft_profiles[ALIAS_PROFILE_KEY] = rules
+            self._salary_selection_drafts = {}
+            self._salary_hints = {}
+            self._salary_force_dialog = True
+            self._inspect_salary_in_background()
+        except (ValueError, TypeError) as exc:
+            self.notificationRequested.emit("名称规则未保存", str(exc), "warning")
+
     @Slot()
     def reviewSalaryHeaders(self) -> None:
         if self._busy or self._spec.tool_id != "salary_merge":
@@ -2652,6 +2691,8 @@ class AppController(QObject):
         self._salary_draft_profiles = json.loads(json.dumps(
             self._salary_header_profiles.get(self._salary_project_key, {}), ensure_ascii=False,
         ))
+        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY
+        self._salary_draft_profiles[ALIAS_PROFILE_KEY] = json.loads(json.dumps(self._header_name_rules.get("salary_merge", {}), ensure_ascii=False))
         self._salary_hints = {}
         self._salary_selection_drafts = {}
         self._salary_reset_profile_keys = set()
@@ -2770,7 +2811,7 @@ class AppController(QObject):
             self.notificationRequested.emit("工作项目已变化", "请在当前项目重新选择工资表。", "warning")
             self.cancelSalaryMappings()
             return
-        from hr_toolkit.tools.salary_headers import MAX_PROFILES, profile_from_selection
+        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, MAX_PROFILES, profile_from_selection
 
         try:
             payload = json.loads(choices_json)
@@ -2803,11 +2844,12 @@ class AppController(QObject):
                 skipped.add(issue["key"])
             if start_merge and included == 0:
                 raise ValueError("至少保留一份工资明细表参与合并")
-            if len(profiles) > MAX_PROFILES:
+            saved_profiles = {key: value for key, value in profiles.items() if key != ALIAS_PROFILE_KEY}
+            if len(saved_profiles) > MAX_PROFILES:
                 raise ValueError("当前项目已达到 200 套对应设置，请先恢复不再使用模板的自动识别")
             if remember:
                 previous = self._salary_header_profiles.get(self._salary_project_key)
-                self._salary_header_profiles[self._salary_project_key] = profiles
+                self._salary_header_profiles[self._salary_project_key] = saved_profiles
                 if not self._save_workspace_preferences():
                     if previous is None:
                         self._salary_header_profiles.pop(self._salary_project_key, None)

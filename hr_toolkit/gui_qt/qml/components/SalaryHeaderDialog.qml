@@ -91,7 +91,7 @@ AppDialog {
         for (var i = 0; i < groups.length; i++) {
             var g = groups[i]
             if (g.skip) continue
-            if (!g.selections.name || !g.selections.id_card || (g.role === "detail" && !g.selections.amount)) count++
+            if (g.sheet_needs_confirmation || !g.selections.name || !g.selections.id_card || (g.role === "detail" && !g.selections.amount)) count++
         }
         for (var j = 0; j < issues.length; j++)
             if (!issues[j].skip) count++
@@ -100,6 +100,12 @@ AppDialog {
     onClosed: {
         if (!closingFromBackend && backend) backend.cancelSalaryMappings()
         closingFromBackend = false
+    }
+
+    HeaderAliasDialog {
+        id: nameRules
+        parent: dialog.parent
+        onRulesSubmitted: function(payload) { dialog.backend.saveSalaryAliasRules(payload) }
     }
 
     contentItem: Flickable {
@@ -116,6 +122,12 @@ AppDialog {
                 Layout.fillWidth: true
                 text: "可混合上传不同模板。已识别的文件无需重选；在下拉框分别确认其余模板，勾选“记住”后下次自动使用，各套设置互不替换。"
                 color: "#55534D"; font.pixelSize: 13; wrapMode: Text.Wrap
+            }
+            AppButton {
+                objectName: "salaryAliasSettings"
+                text: "设置字段和工作表的常用名称（可多选）"
+                enabled: !dialog.working
+                onClicked: nameRules.showSections(dialog.backend.salaryAliasSections)
             }
             AppComboBox {
                 id: templatePicker
@@ -190,7 +202,7 @@ AppDialog {
                 ColumnLayout {
                     id: advanced
                     Layout.fillWidth: true
-                    visible: false
+                    visible: !!dialog.currentGroup.sheet_needs_confirmation
                     Text {
                         Layout.fillWidth: true
                         text: "可选择前 200 行内的表头，连续最多 6 行；列列表显示前 512 列中的非空列头。"

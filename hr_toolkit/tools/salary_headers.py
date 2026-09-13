@@ -10,6 +10,7 @@ from collections import Counter
 from typing import Any
 
 from openpyxl.utils import get_column_letter
+from hr_toolkit.common.header_aliases import matching_columns, matching_sheets, validate_alias_rules
 
 FIELD_LABELS = {"name": "姓名", "id_card": "身份证号码", "amount": "应发工资"}
 ALIASES = {
@@ -20,6 +21,16 @@ ALIASES = {
 MAX_PROFILES = 200
 MAX_HEADER_ROW = 200
 MAX_COLUMNS = 512
+ALIAS_PROFILE_KEY = "__name_aliases__"
+SHEET_LABELS = {"detail": "工资明细工作表", "summary": "已有汇总工作表"}
+
+
+def alias_rules(profiles: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
+    rules = validate_alias_rules(profiles.get(ALIAS_PROFILE_KEY, {}), field_labels=FIELD_LABELS, sheet_labels=SHEET_LABELS)
+    # 未设置的字段仍使用原名称，也不能与用户给另一字段设置的名称冲突。
+    validate_alias_rules({"fields": {key: rules["fields"].get(key, list(values)) for key, values in ALIASES.items()}},
+                         field_labels=FIELD_LABELS, sheet_labels=SHEET_LABELS)
+    return rules
 
 
 def normalize_header(value: Any) -> str:
@@ -40,9 +51,16 @@ def _rows(ws, last: int) -> list[list[Any]]:
     )]
 
 
-def _auto_header(rows: list[list[Any]], role: str) -> int:
+def _auto_header(rows: list[list[Any]], role: str, aliases: dict[str, list[str]] | None = None) -> int:
     # 先沿用身份证列定位方式；未知字段全部改名时，展示最可能的文字表头供人确认。
-    identity_aliases = {normalize_header(x) for x in ALIASES["id_card"]}
+    if aliases:
+        # 多个已知字段共同定位表头，不把正文中偶然出现的单个同名词当成表头。
+        wanted = [{normalize_header(a) for a in aliases.get(field, ALIASES[field])} for field in fields_for(role)]
+        scores = [sum(bool(names & {normalize_header(value) for value in row}) for names in wanted)
+                  for row in rows[:MAX_HEADER_ROW]]
+        if scores and max(scores) >= 2:
+            return scores.index(max(scores)) + 1
+    identity_aliases = {normalize_header(x) for x in (aliases or {}).get("id_card", ALIASES["id_card"])}
     for index, row in enumerate(rows[:20], 1):
         if any(normalize_header(value) in identity_aliases for value in row):
             return index
@@ -51,7 +69,7 @@ def _auto_header(rows: list[list[Any]], role: str) -> int:
     return max(range(min(20, len(rows))), key=lambda index: score(rows[index]), default=0) + 1
 
 
-def _describe(ws, rows: list[list[Any]], role: str, first: int, last: int) -> dict[str, Any]:
+def _describe(ws, rows: list[list[Any]], role: str, first: int, last: int, aliases: dict[str, list[str]] | None = None) -> dict[str, Any]:
     if not 1 <= first <= last <= MAX_HEADER_ROW or last - first > 5:
         raise ValueError("请选择 1—200 行内的表头，连续表头最多 6 行")
     if last > len(rows):
@@ -86,6 +104,10 @@ def _describe(ws, rows: list[list[Any]], role: str, first: int, last: int) -> di
     selections = {}
     for field in fields_for(role):
         selections[field] = 0
+        if aliases and field in aliases:
+            candidates = matching_columns(columns, aliases[field])
+            selections[field] = candidates[0] if len(candidates) == 1 else 0
+            continue
         for alias in ALIASES[field]:
             candidates = [c for c in columns if normalize_header(alias) in c["leaves"]]
             if candidates:
@@ -93,6 +115,9 @@ def _describe(ws, rows: list[list[Any]], role: str, first: int, last: int) -> di
                 if len(candidates) == 1:
                     selections[field] = candidates[0]["column"]
                 break
+    repeated = [field for field, col in selections.items() if col and list(selections.values()).count(col) > 1]
+    for field in repeated:
+        selections[field] = 0
     return {"key": key, "order": order, "role": role, "sheet": ws.title,
             "header_row": first, "header_bottom": last, "columns": columns,
             "selections": selections, "builtin_selections": dict(selections),
@@ -100,6 +125,8 @@ def _describe(ws, rows: list[list[Any]], role: str, first: int, last: int) -> di
 
 
 def _apply_profile(group: dict[str, Any], profile: dict[str, Any]) -> bool:
+    if group.get("alias_signature", "") != profile.get("alias_signature", ""):
+        return False
     selections = {}
     for field in fields_for(group["role"]):
         locator = profile.get("fields", {}).get(field, {})
@@ -124,6 +151,9 @@ def inspect_workbook(
     hint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     profiles = profiles or {}
+    rules = alias_rules(profiles)
+    field_aliases = rules["fields"]
+    sheet_aliases = rules["sheets"].get(role, [])
     keyword = "汇总" if role == "summary" else "明细"
     names = workbook.sheetnames
     preferred = next((name for name in names if keyword in name), names[0])
@@ -132,15 +162,17 @@ def inspect_workbook(
     def describe(sheet: str, first: int = 0, bottom: int = 0):
         if sheet not in names:
             raise ValueError("所选工作表已不存在，请重新选择")
-        last_needed = max(25, bottom + 5, first + 5)
+        last_needed = max(25, bottom + 5, first + 5, MAX_HEADER_ROW + 5 if field_aliases and not first else 0)
         if last_needed > MAX_HEADER_ROW + 5:
             raise ValueError("表头行不能超过 200")
         rows = cache.get(sheet)
         if rows is None or len(rows) < last_needed:
             rows = _rows(workbook[sheet], last_needed)
             cache[sheet] = rows
-        first = first or _auto_header(rows, role)
-        group = _describe(workbook[sheet], rows, role, first, bottom or first)
+        first = first or _auto_header(rows, role, field_aliases)
+        group = _describe(workbook[sheet], rows, role, first, bottom or first, field_aliases)
+        if field_aliases or sheet_aliases:
+            group["alias_signature"] = _digest(rules)
         group["sheet_names"] = names
         return group
 
@@ -149,11 +181,19 @@ def inspect_workbook(
                          int(hint.get("header_bottom") or 0))
         if group["key"] in profiles:
             _apply_profile(group, profiles[group["key"]])
+    elif sheet_aliases:
+        matched = matching_sheets(names, sheet_aliases)
+        group = describe(matched[0] if matched else preferred)
+        if len(matched) != 1:
+            group.update(ready=False, sheet_needs_confirmation=True,
+                         problem="未找到已设置名称的工作表，请选择本次工作表并重新读取列头" if not matched else "多张工作表匹配名称规则，请选择本次工作表并重新读取列头")
+        elif group["key"] in profiles:
+            _apply_profile(group, profiles[group["key"]])
     else:
         candidates = []
         seen = set()
         # 使用已确认工作表/表头位置；规则仍须匹配本次真实表头指纹。
-        for profile in list(profiles.values())[:MAX_PROFILES]:
+        for profile in [v for k, v in profiles.items() if k != ALIAS_PROFILE_KEY][:MAX_PROFILES]:
             if not isinstance(profile, dict) or profile.get("role") != role or profile.get("sheet") not in names:
                 continue
             spec = (profile["sheet"], int(profile.get("header_row") or 0), int(profile.get("header_bottom") or 0))
@@ -161,13 +201,15 @@ def inspect_workbook(
                 continue
             seen.add(spec)
             candidate = describe(*spec)
-            if candidate["key"] in profiles:
-                _apply_profile(candidate, profiles[candidate["key"]])
+            profile = profiles.get(candidate["key"])
+            if profile is not None and candidate.get("alias_signature", "") == profile.get("alias_signature", ""):
+                _apply_profile(candidate, profile)
                 candidates.append(candidate)
         group = describe(preferred)
         if group["key"] in profiles:
-            _apply_profile(group, profiles[group["key"]])
-            if not any(c["key"] == group["key"] for c in candidates):
+            applied = _apply_profile(group, profiles[group["key"]])
+            same_rules = group.get("alias_signature", "") == profiles[group["key"]].get("alias_signature", "")
+            if (applied or same_rules) and not any(c["key"] == group["key"] for c in candidates):
                 candidates.append(group)
         if len(candidates) == 1:
             group = candidates[0]
@@ -195,6 +237,8 @@ def inspect_workbook(
 
 
 def profile_from_selection(group: dict[str, Any], selections: dict[str, Any]) -> dict[str, Any]:
+    if group.get("sheet_needs_confirmation"):
+        raise ValueError("请先选择本次工作表并点击重新读取列头")
     fields = {}
     for field in fields_for(group["role"]):
         try:
@@ -209,4 +253,4 @@ def profile_from_selection(group: dict[str, Any], selections: dict[str, Any]) ->
         raise ValueError("姓名、身份证号码和应发工资必须对应不同的列")
     return {"role": group["role"], "sheet": group["sheet"], "header_row": group["header_row"],
             "header_bottom": group["header_bottom"], "order": group["order"], "fields": fields,
-            "headers": [c["key"] for c in group["columns"]]}
+            "headers": [c["key"] for c in group["columns"]], "alias_signature": group.get("alias_signature", "")}
