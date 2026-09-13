@@ -5,6 +5,7 @@ import unittest
 import zipfile
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
@@ -12,12 +13,78 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from hr_toolkit.tools.social_security import (
     DetailRecord,
+    _read_payment_file,
+    _read_payment_headers,
+    _read_xls_payment_file,
+    _source_context,
     _write_detail_workbook,
     generate_social_security_reports,
 )
 
 
 class SocialSecurityTest(unittest.TestCase):
+    def test_two_level_payment_headers_read_both_sides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for difference in (False, True):
+                for personal_first in (False, True):
+                    with self.subTest(difference=difference, personal_first=personal_first):
+                        source = root / f"测试2024年10月{'补差' if difference else '正常'}明细.xlsx"
+                        _write_two_level_payment_file(source, personal_first=personal_first)
+                        lines = _read_payment_file(source)
+                        self.assertEqual(len(lines), 9)
+                        amounts = {(line.source_row, line.category, line.side): line.amount for line in lines}
+                        self.assertEqual(amounts, {
+                            (5, "养老", "个人"): 384.96, (5, "养老", "单位"): 769.92,
+                            (5, "失业", "个人"): 24.06, (5, "失业", "单位"): 24.06,
+                            (5, "医疗", "个人"): 96.24, (5, "医疗", "单位"): 384.96,
+                            (5, "工伤", "单位"): 12.03,
+                            (6, "养老", "个人"): -10, (6, "养老", "单位"): -20,
+                        })
+                        self.assertEqual({line.fee_period for line in lines}, {"202410"})
+                        self.assertEqual({line.nature_hint for line in lines}, {"difference" if difference else None})
+                        self.assertTrue(all(line.base is None and line.rate is None for line in lines))
+                        self.assertAlmostEqual(sum(line.amount for line in lines if line.source_row == 5 and line.side == "个人"), 505.26)
+
+    def test_two_level_payment_xls_path_matches_xlsx(self) -> None:
+        # 同一单元格网格送入 xlrd 适配入口，核对零基列号与一基列号一致。
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "测试2024年10月补差明细.xlsx"
+            _write_two_level_payment_file(source, personal_first=True)
+            expected = _read_payment_file(source)
+            wb = load_workbook(source, data_only=True)
+            try:
+                values = list(wb.active.iter_rows(values_only=True))
+            finally:
+                wb.close()
+            sheet = SimpleNamespace(
+                nrows=len(values), row_values=lambda row: list(values[row]),
+                cell_value=lambda row, col: values[row][col],
+            )
+            book = SimpleNamespace(sheets=lambda: [sheet])
+            with patch("xlrd.open_workbook", return_value=book):
+                actual = _read_xls_payment_file(source.with_suffix(".xls"), _source_context(source))
+            self.assertEqual(actual, expected)
+
+    def test_payment_subheaders_do_not_change_single_headers_or_cross_groups(self) -> None:
+        for first_column in (0, 1):
+            with self.subTest(first_column=first_column):
+                single = ["姓名", "证件号码", "基本养老保险(个人缴纳)应缴费额", "基本养老保险(单位缴纳)应缴费额"]
+                expected = {name: index for index, name in enumerate(single, start=first_column)}
+                self.assertEqual(_read_payment_headers(single, ["张三", "360111199001010011", 8, 16], first_column=first_column), expected)
+                self.assertEqual(_read_payment_headers(single, [], first_column=first_column), expected)
+                headers = _read_payment_headers(
+                    ["姓名", "证件号码", "养老应缴费额", None, "合计", None, "未知应缴费额", None],
+                    [None, None, "单位部分", "个人部分", "单位部分", "个人部分", "单位部分", "个人部分"],
+                    first_column=first_column,
+                )
+                self.assertEqual(headers["养老应缴费额(单位部分)"], first_column + 2)
+                self.assertEqual(headers["养老应缴费额(个人部分)"], first_column + 3)
+                self.assertNotIn("养老应缴费额", headers)
+                self.assertEqual(headers["合计"], first_column + 4)
+                self.assertEqual(headers["未知应缴费额"], first_column + 6)
+                self.assertEqual(len(headers), 6)
+
     def test_large_detail_output_does_not_rescan_sheet_width_per_record(self) -> None:
         records = [
             DetailRecord(
@@ -599,6 +666,26 @@ class SocialSecurityTest(unittest.TestCase):
             self.assertEqual(ws.cell(4, 2).value, "北京春苗")
             self.assertEqual(ws.cell(4, 3).value, "抚州")
             wb.close()
+
+
+def _write_two_level_payment_file(path: Path, *, personal_first: bool = False) -> None:
+    workbook = Workbook()
+    ws = workbook.active
+    ws.append(["职工全险种明细"])
+    ws.append(["费款所属期", "2024-09"])
+    ws.append(["序号", "姓名", "证件类型", "证件号码", "基本养老应缴费额", None, "失业应缴费额", None, "工伤应缴费额", "基本医疗应缴费额", None, "合计"])
+    sides = ["个 人\n部分", "单位部分"] if personal_first else ["单位部分", "个 人\n部分"]
+    ws.append([None, None, None, None, *sides, *sides, "单位部分", *sides, None])
+    for start, end in ((5, 6), (7, 8), (10, 11)):
+        ws.merge_cells(start_row=3, start_column=start, end_row=3, end_column=end)
+    for col in (1, 2, 3, 4, 12):
+        ws.merge_cells(start_row=3, start_column=col, end_row=4, end_column=col)
+    pair = lambda unit, person: [person, unit] if personal_first else [unit, person]
+    ws.append([1, "张三", "身份证", "360111199001010011", *pair(769.92, "384.96"), *pair(24.06, 24.06), 12.03, *pair(384.96, 96.24), 9999])
+    ws.append([2, "李四", "身份证", "360111199002020022", *pair(-20, -10), *pair(0, None), 0, *pair(None, 0), -30])
+    ws.append([None, "合计", None, None, 9999])
+    workbook.save(path)
+    workbook.close()
 
 
 def _write_roster(path: Path, extra_rows: list[list[object]] | None = None) -> None:

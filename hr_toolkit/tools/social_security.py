@@ -594,7 +594,11 @@ def _read_payment_file(file_path: Path) -> list[SocialPaymentLine]:
         # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
         ws = SheetGrid(workbook[workbook.sheetnames[0]])
         header_row = _find_payment_header_row(ws)
-        headers = _read_headers(ws, header_row)
+        headers = _read_payment_headers(
+            [ws.cell(header_row, col).value for col in range(1, ws.max_column + 1)],
+            [ws.cell(header_row + 1, col).value for col in range(1, ws.max_column + 1)],
+            first_column=1,
+        )
         if "参保费种" in headers and ("征收品目" in headers or "险种" in headers):
             return _read_long_sheet(ws, headers, header_row, context)
         if _is_single_kind_sheet(headers):
@@ -616,7 +620,11 @@ def _read_xls_payment_file(file_path: Path, context: SourceContext) -> list[Soci
         header_row = _find_xls_header_row(sheet)
         if header_row is None:
             continue
-        headers = {_normalize_header(value): index for index, value in enumerate(sheet.row_values(header_row)) if _cell_text(value)}
+        headers = _read_payment_headers(
+            sheet.row_values(header_row),
+            sheet.row_values(header_row + 1) if header_row + 1 < sheet.nrows else [],
+            first_column=0,
+        )
         if "参保费种" in headers and ("征收品目" in headers or "险种" in headers):
             return _read_xls_long_sheet(sheet, headers, header_row, context)
         if _is_single_kind_sheet(headers):
@@ -1837,6 +1845,35 @@ def _read_headers(ws: Worksheet, header_row: int) -> dict[str, int]:
         header = _normalize_header(ws.cell(header_row, col_index).value)
         if header:
             headers[header] = col_index
+    return headers
+
+
+def _read_payment_headers(
+    header_values: list[Any], subheader_values: list[Any], *, first_column: int,
+) -> dict[str, int]:
+    """保留单层表头，补全险种金额下的个人/单位子表头。"""
+    headers = {
+        _normalize_header(value): index
+        for index, value in enumerate(header_values, start=first_column)
+        if _cell_text(value)
+    }
+    parent = ""
+    side_labels = {"个人", "单位", "个人部分", "单位部分", "个人缴纳部分", "单位缴纳部分"}
+    for offset, value in enumerate(header_values):
+        header = _normalize_header(value)
+        # 合并表头的空格继承左侧险种；遇到任何新标题立即终止继承。
+        if header:
+            parent = header
+        child = _normalize_header(subheader_values[offset]) if offset < len(subheader_values) else ""
+        if child not in side_labels or "应缴费额" not in parent:
+            continue
+        category, _side = _classify_insurance_item(parent, parent)
+        if category is None:
+            continue
+        col_index = offset + first_column
+        if headers.get(parent) == col_index:
+            del headers[parent]
+        headers[f"{parent}({child})"] = col_index
     return headers
 
 
