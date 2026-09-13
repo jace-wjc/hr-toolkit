@@ -6,8 +6,10 @@ import unittest
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.comments import Comment
+from openpyxl.styles import PatternFill
 
-from hr_toolkit.tools.salary_split import split_salary_by_company
+from hr_toolkit.tools.salary_split import split_salary_by_company, _remap_summary_formula
 
 
 class SalarySplitTest(unittest.TestCase):
@@ -52,16 +54,62 @@ class SalarySplitTest(unittest.TestCase):
             empty_detail = empty_section_wb["明细表"]
             detail_labels = [empty_detail.cell(row, 1).value for row in range(1, empty_detail.max_row + 1)]
             self.assertIn("河源无线代维合计", detail_labels)
-            self.assertIn("河源传输代维合计", detail_labels)
-            self.assertIsNone(empty_detail["P8"].value)
+            self.assertNotIn("河源传输代维合计", detail_labels)
+            self.assertEqual(empty_detail["P8"].value, "=P7")
             empty_summary = empty_section_wb["汇总表"]
             summary_labels = [empty_summary.cell(row, 1).value for row in range(1, empty_summary.max_row + 1)]
             self.assertIn("广东河源市2026年4月移动基站代维项目", summary_labels)
-            self.assertIn("广东河源市2026年4月移动线路代维项目", summary_labels)
-            self.assertIsNone(empty_summary["C7"].value)
-            self.assertEqual(empty_summary["A8"].value, "合计")
-            self.assertEqual(empty_summary["C8"].value, "=SUM(C6:C7)")
+            self.assertNotIn("广东河源市2026年4月移动线路代维项目", summary_labels)
+            self.assertEqual(empty_summary["A7"].value, "合计")
+            self.assertEqual(empty_summary["C7"].value, "=SUM(C6:C6)")
+            self.assertEqual(empty_summary["A8"].value, "制表：")
+            self.assertIn("A8:U8", empty_summary.merged_cells)
             empty_section_wb.close()
+
+    def test_empty_areas_and_groups_removed_but_zero_pay_employees_retained(self) -> None:
+        for hierarchical in (False, True):
+            with self.subTest(hierarchical=hierarchical), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "空区域.xlsx"
+                _write_empty_area_sample(source, hierarchical=hierarchical)
+                result = split_salary_by_company(source, root / "out")
+                item = next(item for item in result.outputs if item.company == "公司A")
+                self.assertEqual(item.employee_count, 2)
+                wb = load_workbook(item.file_path)
+                try:
+                    detail, summary = wb["明细表"], wb["汇总表"]
+                    self.assertEqual(detail["P6"].value, 0)
+                    self.assertEqual(detail["P7"].value, 0)
+                    self.assertEqual(detail["P8"].value, "=SUM(P6:P7)")
+                    self.assertEqual(summary["B6"].value, "=COUNT('明细表'!$A$6:$A$7)")
+                    self.assertEqual(summary["C6"].value, "='明细表'!P8")
+                    labels = [detail.cell(row, 1).value for row in range(6, detail.max_row+1)]
+                    self.assertNotIn("B区基站小计", labels)
+                    self.assertNotIn("传输专业合计", labels)
+                    self.assertNotIn("B区代维小计", labels)
+                    self.assertEqual(detail["A8"].value, "A区基站小计" if hierarchical else "A区代维小计")
+                    total_row = 8 if hierarchical else 7
+                    self.assertEqual(summary.cell(total_row, 3).value, f"=SUM(C{total_row-1}:C{total_row-1})")
+                    footer_row = total_row + 1
+                    self.assertEqual(summary.cell(footer_row, 1).value, "总经理：")
+                    self.assertEqual(summary.cell(footer_row, 4).value, f"=C{total_row}")
+                    self.assertIn(f"A{footer_row}:C{footer_row}", summary.merged_cells)
+                    self.assertEqual(summary.row_dimensions[footer_row].height, 36)
+                    self.assertEqual(summary.row_dimensions[6].height, 31)
+                    self.assertEqual(summary["C6"].comment.text, "保留核对说明")
+                    self.assertEqual(summary["C6"].number_format, "0.00")
+                    self.assertEqual(summary["C6"].fill.fgColor.rgb, "00FFFF00")
+                    self.assertEqual(wb["引用核对"]["A1"].value, f"='汇总表'!$C${total_row}")
+                    self.assertEqual(wb["引用核对"]["A2"].value, '="C12是说明文字"')
+                finally:
+                    wb.close()
+
+    def test_summary_remap_keeps_strings_external_and_other_sheet_references(self) -> None:
+        formula = '=SUM(C6:C9)+$D$10+\'汇总表\'!E10+\'其他表\'!C10+\'[外部.xlsx]汇总表\'!C10+IF(A1="C10",1,0)'
+        expected = '=SUM(C6:C7)+$D$8+\'汇总表\'!E8+\'其他表\'!C10+\'[外部.xlsx]汇总表\'!C10+IF(A1="C10",1,0)'
+        self.assertEqual(_remap_summary_formula(formula, "汇总表", [7, 9], local=True), expected)
+        self.assertEqual(_remap_summary_formula('=SUM(C7:C9)', "汇总表", [7,8,9], local=True), '=SUM(0)')
+        self.assertEqual(_remap_summary_formula('=C10', "汇总表", [7,9], local=False), '=C10')
 
     def test_manifest_is_optional(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -311,6 +359,34 @@ class SalarySplitTest(unittest.TestCase):
 
             wb.close()
 
+
+
+def _write_empty_area_sample(path: Path, *, hierarchical: bool = True) -> None:
+    if hierarchical:
+        _write_case3_hierarchical_sample(path)
+    else:
+        _write_case1_area_subtotals_sample(path)
+    wb = load_workbook(path)
+    detail, summary = wb["明细表"], wb["汇总表"]
+    for row in range(6, detail.max_row + 1):
+        if detail.cell(row, 2).value:
+            detail.cell(row, 40).value = "公司A" if row in (6, 7) else "公司B"
+            if row in (6, 7):
+                detail.cell(row, 16).value = 0
+            detail.cell(row, 17).value = f"=P{row}*2"
+    summary["C6"].number_format = "0.00"
+    summary["C6"].fill = PatternFill("solid", fgColor="FFFF00")
+    summary["C6"].comment = Comment("保留核对说明", "测试")
+    summary.row_dimensions[6].height = 31
+    footer_row = summary.max_row
+    summary.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=3)
+    summary.row_dimensions[footer_row].height = 36
+    summary.cell(footer_row, 4).value = f"=C{footer_row-1}"
+    audit = wb.create_sheet("引用核对")
+    audit["A1"] = f"='汇总表'!$C${footer_row-1}"
+    audit["A2"] = '="C12是说明文字"'
+    wb.save(path)
+    wb.close()
 
 
 def _write_salary_split_sample(path: Path) -> None:

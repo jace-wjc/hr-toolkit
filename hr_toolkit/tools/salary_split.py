@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from bisect import bisect_left
 from collections import OrderedDict
+from copy import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
+from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.merge import MergedCellRange
 from openpyxl.worksheet.worksheet import Worksheet
@@ -755,6 +758,8 @@ def _rebuild_detail_sheet(
                 if leaf is None:
                     continue
                 section_rows = rows_by_leaf.get(leaf.label, [])
+                if not section_rows:
+                    continue
                 data_start_row = current_row
                 for emp in section_rows:
                     if employee_seq % 500 == 0:
@@ -810,6 +815,8 @@ def _rebuild_detail_sheet(
             if leaf.label in leaves_in_categories:
                 continue
             section_rows = rows_by_leaf.get(leaf.label, [])
+            if not section_rows:
+                continue
             data_start_row = current_row
             for emp in section_rows:
                 if employee_seq % 500 == 0:
@@ -844,6 +851,8 @@ def _rebuild_detail_sheet(
     else:
         for leaf in hierarchy.leaves:
             section_rows = rows_by_leaf.get(leaf.label, [])
+            if not section_rows:
+                continue
             data_start_row = current_row
             for emp in section_rows:
                 if employee_seq % 500 == 0:
@@ -998,7 +1007,7 @@ def _rebuild_summary_sheet(
         raw_vals = [ws.cell(r, c).value for c in range(1, summary_max_col + 1)]
         template_rows.append((r, lbl, raw_vals))
 
-    # 汇总表原有的小计、合计和签字行全部保留，原位更新公式，避免丢失结构及格式。
+    # 先按原行号更新引用，最后仅移除能够对应到空区域/空专业的行。
 
     rendered_leaf_map = {l.label: l for l in rebuilt.rendered_leaves}
     rendered_group_map = {g.label: g for g in rebuilt.rendered_groups}
@@ -1061,6 +1070,8 @@ def _rebuild_summary_sheet(
 
     rendered_sub_rows_in_summary: list[int] = []
     rendered_group_rows_in_summary: list[int] = []
+    empty_rows: set[int] = set()
+    has_removed_section = False
 
     for src_r, lbl, _raw_vals in template_rows:
         current_row = src_r
@@ -1070,6 +1081,15 @@ def _rebuild_summary_sheet(
 
         if mapped is not None:
             item_kind, item = mapped
+            if item_kind == "leaf" and item.label not in rendered_leaf_map:
+                empty_rows.add(src_r)
+                has_removed_section = True
+                continue
+            if item_kind == "group" and item.label not in rendered_group_map:
+                empty_rows.add(src_r)
+                rendered_sub_rows_in_summary = []
+                has_removed_section = False
+                continue
             if item_kind == "leaf" and item.label in rendered_leaf_map:
                 target_leaf = rendered_leaf_map[item.label]
             elif item_kind == "group" and item.label in rendered_group_map:
@@ -1091,6 +1111,10 @@ def _rebuild_summary_sheet(
                             break
 
         is_group_row = target_group is not None or (target_leaf is None and _is_category_total_label(lbl))
+        if is_group_row and has_removed_section and not rendered_sub_rows_in_summary:
+            empty_rows.add(src_r)
+            has_removed_section = False
+            continue
         if not is_group_row:
             rendered_sub_rows_in_summary.append(current_row)
             _translate_summary_leaf_formulas(
@@ -1113,6 +1137,7 @@ def _rebuild_summary_sheet(
             )
             # 下一个专业仅累计自己的区域，不包含上一个专业的小计或合计。
             rendered_sub_rows_in_summary = []
+            has_removed_section = False
 
     _write_summary_total_formulas(
         ws,
@@ -1121,6 +1146,72 @@ def _rebuild_summary_sheet(
         rendered_group_rows_in_summary + rendered_sub_rows_in_summary,
         summary_max_col,
     )
+    _remove_empty_summary_rows(ws, empty_rows)
+
+
+def _remap_summary_formula(formula: str, sheet_name: str, removed: list[int], *, local: bool) -> str:
+    """删除汇总行时只移动真实单元格引用，不改字符串、其他表及外部工作簿引用。"""
+    tokens = Tokenizer(formula)
+    changed = False
+    for token in tokens.items:
+        if token.type != "OPERAND" or token.subtype != "RANGE":
+            continue
+        prefix, separator, address = token.value.rpartition("!")
+        if separator:
+            if prefix.strip("'").replace("''", "'") != sheet_name:
+                continue
+        elif not local:
+            continue
+        match = re.fullmatch(r"(\$?[A-Za-z]{1,3})(\$?)(\d+)(?::(\$?[A-Za-z]{1,3})(\$?)(\d+))?", address)
+        if match is None:
+            continue
+        col, anchor, row_text, end_col, end_anchor, end_text = match.groups()
+        first = int(row_text)
+        last = int(end_text) if end_text else first
+        while first in removed and first <= last:
+            first += 1
+        while last in removed and last >= first:
+            last -= 1
+        if first > last:
+            replacement = "0"
+        else:
+            new_first = first - bisect_left(removed, first)
+            new_last = last - bisect_left(removed, last)
+            replacement = f"{prefix}!" if separator else ""
+            replacement += f"{col}{anchor}{new_first}"
+            if end_col:
+                replacement += f":{end_col}{end_anchor}{new_last}"
+        if replacement != token.value:
+            token.value = replacement
+            changed = True
+    return tokens.render() if changed else formula
+
+
+def _remove_empty_summary_rows(ws: Worksheet, empty_rows: set[int]) -> None:
+    if not empty_rows:
+        return
+    removed = sorted(empty_rows)
+    merged_ranges = [copy(area) for area in ws.merged_cells.ranges]
+    row_dimensions = {row: copy(dimension) for row, dimension in ws.row_dimensions.items()}
+    ws.merged_cells.ranges.clear()
+    for row in reversed(removed):
+        ws.delete_rows(row)
+    ws.row_dimensions.clear()
+    for row, dimension in row_dimensions.items():
+        if row not in empty_rows:
+            dimension.index = row - bisect_left(removed, row)
+            ws.row_dimensions[dimension.index] = dimension
+    for area in merged_ranges:
+        kept = [row for row in range(area.min_row, area.max_row + 1) if row not in empty_rows]
+        if kept:
+            area.min_row = kept[0] - bisect_left(removed, kept[0])
+            area.max_row = kept[-1] - bisect_left(removed, kept[-1])
+            ws.merge_cells(str(area))
+    # 其他工作表若引用汇总表，随本次行删除同步更新；其他引用不动。
+    for sheet in ws.parent.worksheets:
+        for cell in sheet._cells.values():
+            if cell.data_type == "f" and isinstance(cell.value, str) and (sheet is ws or ws.title in cell.value):
+                cell.value = _remap_summary_formula(cell.value, ws.title, removed, local=sheet is ws)
 
 
 def _find_summary_total_row(ws: Worksheet, start_row: int) -> int:
