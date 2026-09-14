@@ -29,7 +29,7 @@ Item {
         id: sidebarButton
         objectName: "sidebarToggleButton"
         x: chrome.nativeMac ? 82 : 10
-        y: chrome.nativeMac ? 1 : 5; width: 32; height: 30
+        y: chrome.nativeMac ? 5 : 9; width: 32; height: 30
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         Accessible.name: chrome.sidebar.pinned ? "收起左侧栏" : "固定展开左侧栏"
@@ -51,7 +51,7 @@ Item {
         anchors.right: parent.right
         anchors.rightMargin: Math.max(chrome.systemButtons ? 148 : 10,
                                       chrome.workspaceExpanded ? chrome.width - chrome.workspacePanelLeft + 10 : 0)
-        y: chrome.nativeMac ? 1 : 5; width: 32; height: 30
+        y: chrome.nativeMac ? 5 : 9; width: 32; height: 30
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         enabled: chrome.workspaceAvailable || chrome.workspaceExpanded
@@ -99,6 +99,7 @@ Item {
                 contentItem: Item {
                     Image {
                         anchors.centerIn: parent; width: 13; height: 13
+                        anchors.verticalCenterOffset: 4
                         source: index === 0 ? "minus.png" : index === 2 ? "x.png" : chrome.window.visibility === Window.Maximized ? "copy-simple.png" : "square.png"
                         opacity: 0.7; sourceSize.width: 26; sourceSize.height: 26
                     }
