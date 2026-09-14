@@ -47,6 +47,89 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_background_and_manual_updates_prompt_before_download(self) -> None:
+        from hr_toolkit.app_update import UpdateInfo
+        info = UpdateInfo("9.0.0", "https://gitee.com/setup.exe", "a" * 64, (), True, "https://gitee.com/manifest")
+        controller = self.controller()
+        prompts = []
+        controller.updatePromptRequested.connect(prompts.append)
+        with patch.object(controller, "_accept_update") as download:
+            controller._apply_update_result("available", info)
+            download.assert_not_called()
+        self.assertEqual(prompts[-1]["version"], "9.0.0")
+        controller._update_manual = True
+        with patch.object(controller, "_accept_update") as download:
+            controller._apply_update_result("available", info)
+            download.assert_not_called()
+        self.assertEqual(prompts[-1]["version"], "9.0.0")
+        controller.close()
+
+    def test_download_ready_does_not_install_and_blocks_new_runs_only(self) -> None:
+        from hr_toolkit.app_update import UpdateInfo
+        controller = self.controller()
+        info = UpdateInfo("9.0.0", "https://gitee.com/setup.exe", "a" * 64, (), False, "https://gitee.com/manifest")
+        controller._pending_update = info
+        controller._update_busy = True
+        controller._set_busy(True)
+        with patch.object(controller, "_launch_ready_update") as launch:
+            controller._apply_update_result("downloaded", Path("cached.exe"))
+            launch.assert_not_called()
+        self.assertTrue(controller.updateReady)
+        self.assertTrue(controller.busy)
+        with patch.object(controller._run_coordinator, "cancel") as cancel:
+            controller.runOrCancel()
+            cancel.assert_called_once()
+        controller._set_busy(False)
+        with patch.object(controller, "_prepare_invocation") as prepare:
+            controller.runOrCancel()
+            prepare.assert_not_called()
+        with patch.object(controller._run_coordinator, "start") as start:
+            controller._start_project_run(None)
+            start.assert_not_called()
+        with patch.object(controller, "_shutdown_work_running", return_value=True), patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread:
+            controller.restartToUpdate()
+            thread.assert_not_called()
+        with patch("hr_toolkit.gui_qt.controller.launch_update_replacement") as install:
+            self.assertTrue(controller.requestClose())
+            install.assert_not_called()
+
+    def test_manual_download_waits_for_restart_click(self) -> None:
+        from hr_toolkit.app_update import UpdateInfo
+        controller = self.controller()
+        controller._update_manual = True
+        controller._pending_update = UpdateInfo("9.0.0", "https://gitee.com/setup.exe", "a" * 64, (), False, "https://gitee.com/manifest")
+        with patch.object(controller, "_launch_ready_update") as launch:
+            controller._apply_update_result("downloaded", Path("cached.exe"))
+            launch.assert_not_called()
+        self.assertTrue(controller.updateReady)
+        controller.close()
+
+    def test_no_update_only_prompts_after_manual_check(self) -> None:
+        controller = self.controller()
+        prompts = []
+        controller.updatePromptRequested.connect(prompts.append)
+        controller._apply_update_result("none", None)
+        self.assertEqual(prompts, [])
+        controller._update_manual = True
+        controller._apply_update_result("none", None)
+        self.assertEqual(prompts[-1]["available"], False)
+        controller.close()
+
+    def test_background_errors_do_not_prompt_and_ready_cache_restores_offline(self) -> None:
+        from hr_toolkit.app_update import UpdateInfo
+        controller = self.controller()
+        notifications = []
+        controller.notificationRequested.connect(lambda *args: notifications.append(args))
+        controller._apply_update_result("check-error", "offline")
+        with patch("hr_toolkit.gui_qt.controller.runlog.log_line"):
+            controller._apply_update_result("download-error", "offline")
+        self.assertEqual(notifications, [])
+        info = UpdateInfo("9.0.0", "https://gitee.com/setup.exe", "a" * 64, (), False, "https://gitee.com/manifest")
+        controller._apply_update_result("restored", (info, Path("cached.exe")))
+        self.assertTrue(controller.updateReady)
+        self.assertTrue(controller._block_run_for_update())
+        controller.close()
+
     def test_date_presets_keep_legacy_calendar_ranges(self) -> None:
         controller = self.controller()
         controller.selectTool("data_statistics")

@@ -21,7 +21,8 @@ from hr_toolkit.app_update import (
     UpdateInfo,
     check_for_update,
     cleanup_stale_update_files,
-    download_update_package,
+    download_cached_update,
+    load_ready_update,
     launch_update_replacement,
     resolve_download_url,
     update_check_enabled,
@@ -270,6 +271,13 @@ class AppController(QObject):
         self._update_status = ""
         self._update_progress = -1.0
         self._update_phase = ""
+        self._update_manual = False
+        self._ready_update: UpdateInfo | None = None
+        self._ready_update_package: Path | None = None
+        self._update_restart_requested = False
+        self._background_update_timer = QTimer(self)
+        self._background_update_timer.setInterval(4 * 60 * 60 * 1000)
+        self._background_update_timer.timeout.connect(self.requestStartupUpdateCheck)
         self._release_notes_seen_version = ""
         self._release_notes_open = False
         self._startup_notes_pending = False
@@ -573,6 +581,23 @@ class AppController(QObject):
     @Property(bool, notify=updateChanged)
     def updateBusy(self) -> bool:
         return self._update_busy
+
+    @Property(bool, notify=updateChanged)
+    def updateReady(self) -> bool:
+        return self._ready_update is not None and self._ready_update_package is not None
+
+    @Property(bool, notify=updateChanged)
+    def updateBackground(self) -> bool:
+        return not self._update_manual
+
+    @Property(bool, notify=updateChanged)
+    def updateRestarting(self) -> bool:
+        return self._update_restart_requested
+
+    @Property(str, notify=updateChanged)
+    def updateVersion(self) -> str:
+        info = self._ready_update or self._pending_update
+        return info.version if info else ""
 
     @Property(str, notify=updateChanged)
     def updateStatus(self) -> str:
@@ -1358,6 +1383,13 @@ class AppController(QObject):
 
     def _load_startup(self) -> None:
         state: dict[str, Any] = {}
+        if update_check_enabled():
+            try:
+                cached = load_ready_update(__version__)
+                if cached:
+                    self._updateResult.emit("restored", cached)
+            except Exception as exc:
+                runlog.log_line(f"已跳过不可用的更新缓存：{exc}")
         try:
             path = self._settings_path()
             if path.is_file():
@@ -2462,14 +2494,28 @@ class AppController(QObject):
 
     @Slot()
     def requestStartupUpdateCheck(self) -> None:
+        if self._closed or self._shutdown_requested:
+            return
         if update_check_enabled():
+            if not self._background_update_timer.isActive():
+                self._background_update_timer.start()
+            if self.updateReady or self._update_busy or (
+                self._pending_confirmation_action and self._pending_confirmation_action[0] == "update"
+            ):
+                return
             self._start_update_check(False)
 
     @Slot()
     def requestUpdateCheck(self) -> None:
+        if self.updateReady and not self._update_busy:
+            self._update_manual = True
+            self._apply_update_result("available", self._ready_update)
+            return
         self._start_update_check(True)
 
     def _start_update_check(self, manual: bool) -> None:
+        if self._closed or self._shutdown_requested:
+            return
         if self._update_busy:
             if manual:
                 self.notificationRequested.emit("正在检查更新", "请稍候，检查完成后会自动提示。", "info")
@@ -2493,6 +2539,22 @@ class AppController(QObject):
 
     @Slot(str, object)
     def _apply_update_result(self, kind: str, payload) -> None:
+        if self._closed or self._shutdown_requested:
+            return
+        if kind == "restored":
+            self._set_update_ready(*payload)
+            return
+        if kind == "cache-invalid":
+            self._update_restart_requested = False
+            self._ready_update = None
+            self._ready_update_package = None
+            self._update_busy = False
+            self._update_phase = ""
+            self._update_status = "更新文件已失效，将重新检查更新"
+            self.updateChanged.emit()
+            self.notificationRequested.emit("需要重新下载更新", "已下载的更新文件缺失或不完整，工具将重新检查更新。", "warning")
+            self.requestStartupUpdateCheck()
+            return
         if kind in ("check-error", "none", "available", "manual-ready", "download-error", "download-cancelled", "launch-error"):
             self._update_phase = ""
             self._update_cancel_event = None
@@ -2500,21 +2562,7 @@ class AppController(QObject):
             if self._update_cancel_event is not None and self._update_cancel_event.is_set():
                 self._apply_update_result("download-cancelled", None)
                 return
-            self._update_phase = "launching"
-            self._update_cancel_event = None
-            self._update_progress = -1.0
-            self._update_status = "正在打开安装程序…"
-            self.updateChanged.emit()
-
-            def launch_worker() -> None:
-                try:
-                    launch_update_replacement(payload)
-                except Exception as exc:
-                    self._updateResult.emit("launch-error", str(exc))
-                else:
-                    self._updateResult.emit("launched", None)
-
-            threading.Thread(target=launch_worker, daemon=True, name="HRToolkit-update-install").start()
+            self._set_update_ready(self._pending_update, payload)
             return
         if kind == "check-error":
             self._update_busy = False
@@ -2555,7 +2603,10 @@ class AppController(QObject):
             self._update_status = "更新下载失败"
             self._update_progress = -1.0
             self.updateChanged.emit()
-            self.notificationRequested.emit("更新失败", str(payload), "error")
+            if self._update_manual:
+                self.notificationRequested.emit("更新失败", str(payload), "error")
+            else:
+                runlog.log_line(f"后台更新下载失败，稍后重试：{payload}")
             return
         if kind == "download-cancelled":
             self._update_busy = False
@@ -2564,6 +2615,7 @@ class AppController(QObject):
             self.updateChanged.emit()
             return
         if kind == "launch-error":
+            self._update_restart_requested = False
             self._update_busy = False
             self._update_status = "更新程序启动失败"
             self.updateChanged.emit()
@@ -2573,12 +2625,67 @@ class AppController(QObject):
             self._update_status = "安装程序已启动，正在关闭当前版本…"
             self._update_progress = 1.0
             self.updateChanged.emit()
+            self.close()
             QTimer.singleShot(500, QCoreApplication.quit)
 
-    def _accept_update(self, update: UpdateInfo) -> None:
-        if self._busy or self._workspace_busy:
-            self.notificationRequested.emit("请先完成当前处理", "请等待当前处理或资料保存安全结束后再更新。", "warning")
+    def _set_update_ready(self, info: UpdateInfo, package: Path) -> None:
+        self._ready_update = info
+        self._ready_update_package = package
+        self._pending_update = info
+        self._update_cancel_event = None
+        self._update_busy = False
+        self._update_phase = "ready"
+        self._update_progress = 1.0
+        self._update_status = "重启以更新"
+        self.updateChanged.emit()
+
+    def _block_run_for_update(self) -> bool:
+        if not self.updateReady:
+            return False
+        self.notificationRequested.emit(
+            "请先更新工具", "新版本已准备好，请先点击左下角“重启以更新”。", "warning",
+        )
+        return True
+
+    @Slot()
+    def restartToUpdate(self) -> None:
+        self._launch_ready_update(show_ui=False)
+
+    def _launch_ready_update(self, *, show_ui: bool) -> None:
+        if not self.updateReady or self._update_busy or self._closed or self._shutdown_requested:
             return
+        if self._shutdown_work_running():
+            self.notificationRequested.emit("请先完成当前处理", "当前任务或资料保存尚未结束，请完成后再点击重启以更新。", "warning")
+            return
+        self._update_restart_requested = True
+        self._update_busy = True
+        self._update_manual = show_ui
+        self._update_phase = "launching"
+        self._update_status = "正在准备重启…"
+        self.updateChanged.emit()
+        expected = self._ready_update
+
+        def worker() -> None:
+            try:
+                cached = load_ready_update(__version__)
+                if not cached or cached[0].version != expected.version or cached[0].sha256 != expected.sha256:
+                    self._updateResult.emit("cache-invalid", None)
+                    return
+                launch_update_replacement(cached[1], show_ui=show_ui)
+            except Exception as exc:
+                self._updateResult.emit("launch-error", str(exc))
+            else:
+                self._updateResult.emit("launched", None)
+
+        threading.Thread(target=worker, daemon=True, name="HRToolkit-update-install").start()
+
+    def _accept_update(self, update: UpdateInfo) -> None:
+        if self._update_busy:
+            return
+        # Both check origins now require confirmation before downloading.
+        # Downloading is safe alongside work; only installation requires idle.
+        self._update_manual = True
+        self._pending_update = update
         self._update_busy = True
         self._update_progress = -1.0
         self._update_phase = "preparing"
@@ -2609,8 +2716,8 @@ class AppController(QObject):
                     self._updateProgressIncoming.emit(int(downloaded), int(total))
 
             try:
-                package = download_update_package(
-                    update,
+                package = download_cached_update(
+                    update, __version__,
                     progress_callback=progress,
                     cancel_event=cancel_event,
                     stage_callback=self._updatePhaseIncoming.emit,
@@ -2667,6 +2774,8 @@ class AppController(QObject):
                 self.runProgressChanged.emit()
             self._append_log("已请求停止，正在安全结束…", "warning")
             return
+        if self._block_run_for_update():
+            return
         if self._workspace_busy:
             self.notificationRequested.emit("项目资料正在保存", "请等待资料保存完成后再开始处理。", "warning")
             return
@@ -2683,6 +2792,8 @@ class AppController(QObject):
         self._prepare_invocation(preview=self._spec.tool_id == "folder_rename")
 
     def _prepare_invocation(self, *, preview: bool, preview_result=None) -> None:
+        if self._block_run_for_update():
+            return
         spec = self._spec
         kwargs = dict(
             input_paths=list(self._input_states[self._state_key()]),
@@ -3111,6 +3222,8 @@ class AppController(QObject):
         self.salaryMappingClosed.emit()
 
     def _start_preview(self, invocation: ToolInvocation) -> None:
+        if self._block_run_for_update():
+            return
         from hr_toolkit.background_process import (
             BusinessProcessStartError,
             run_business_process,
@@ -3248,6 +3361,8 @@ class AppController(QObject):
         self._pending_preview = None
 
     def _start_project_run(self, invocation: ToolInvocation) -> None:
+        if self._block_run_for_update():
+            return
         store = self._project_store
         if store is None:
             return
@@ -3510,6 +3625,8 @@ class AppController(QObject):
 
     @Slot(result=bool)
     def requestClose(self) -> bool:
+        if self._update_restart_requested:
+            return False
         if self._closed:
             return True
         if self._shutdown_requested:
@@ -3533,6 +3650,7 @@ class AppController(QObject):
     def close(self) -> None:
         if self._closed:
             return
+        self._background_update_timer.stop()
         self._incoming_progress_timer.stop()
         self._search_timer.stop()
         self._run_progress_timer.stop()

@@ -27,6 +27,11 @@ ApplicationWindow {
     flags: Qt.Window
     property bool nativeTitleIntegrated: false
     readonly property alias sidebarPanel: sidebar
+    Binding {
+        target: root.contentItem
+        property: "enabled"
+        value: !controller.updateRestarting
+    }
 
     readonly property color primary: "#17715B"
     readonly property color primaryActive: "#125E4B"
@@ -404,6 +409,7 @@ ApplicationWindow {
                     objectName: "sidebarUpdateCheckButton"
                     Layout.fillWidth: true
                     Layout.preferredHeight: 32
+                    visible: !controller.updateReady && !(controller.updateBusy && controller.updatePhase !== "checking")
                     text: controller.updateBusy ? "更新处理中…" : "检查更新"
                     variant: "link"
                     leftPadding: 9
@@ -430,6 +436,84 @@ ApplicationWindow {
                             font.pixelSize: 13
                             elide: Text.ElideRight
                             verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+                Button {
+                    id: sidebarUpdateCard
+                    objectName: "sidebarUpdateCard"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 48
+                    Layout.leftMargin: -4
+                    Layout.rightMargin: -4
+                    visible: controller.updateReady || (controller.updateBusy && controller.updatePhase !== "checking")
+                    enabled: controller.updateReady && !controller.updateBusy
+                    hoverEnabled: true
+                    padding: 10
+                    Accessible.name: controller.updateReady ? "重启以更新，版本" + controller.updateVersion : "正在下载更新"
+                    onClicked: controller.restartToUpdate()
+                    background: Item {
+                        Rectangle { anchors.fill: parent; anchors.topMargin: 2; anchors.bottomMargin: -2; color: "#0A000000"; radius: 10 }
+                        Rectangle {
+                            anchors.fill: parent; radius: 10
+                            color: sidebarUpdateCard.down ? "#F3F3F1" : "#FFFFFF"
+                        }
+                        // Clip a full rounded surface from the bottom up. This
+                        // works with Qt 5's software renderer without blur or
+                        // shader layers, including the legacy Windows build.
+                        Item {
+                            id: updateFill
+                            readonly property real fraction: controller.updateReady ? 0 : controller.updatePhase === "verifying" ? 1 : Math.max(0, Math.min(1, controller.updateProgress))
+                            x: 1; width: parent.width - 2
+                            anchors.bottom: parent.bottom; anchors.bottomMargin: 1
+                            height: (parent.height - 2) * fraction
+                            clip: true
+                            visible: !controller.updateReady
+                            Behavior on height { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+                            Rectangle {
+                                width: parent.width; height: sidebarUpdateCard.height - 2
+                                anchors.bottom: parent.bottom; radius: 9
+                                color: "#DDE8EB"; opacity: 0.72
+                            }
+                        }
+                        Rectangle {
+                            anchors.fill: parent; anchors.margins: 1; radius: 9
+                            color: "transparent"; border.color: "#B3FFFFFF"
+                        }
+                        Rectangle {
+                            anchors.fill: parent; radius: 10; color: "transparent"
+                            border.color: sidebarUpdateCard.visualFocus ? "#99C7FF" : "#E1E5E5"
+                        }
+                    }
+                    contentItem: RowLayout {
+                        spacing: 10
+                        Image {
+                            Layout.preferredWidth: 28; Layout.preferredHeight: 28
+                            source: "components/update-feather.png"
+                            fillMode: Image.PreserveAspectFit; smooth: true
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Text {
+                                Layout.fillWidth: true; font.pixelSize: 12; font.bold: true; color: root.textMain
+                                text: controller.updateReady ? (controller.updateRestarting ? "正在重启…" : "重启以更新") : controller.updatePhase === "verifying" ? "正在检查更新文件…" : "正在下载更新"
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                Layout.fillWidth: true; font.pixelSize: 10; color: root.textMuted
+                                text: controller.updateVersion ? "v" + controller.updateVersion : controller.updateStatus
+                                elide: Text.ElideRight
+                            }
+                        }
+                        Text {
+                            visible: !controller.updateReady && controller.updateProgress >= 0
+                            text: Math.floor(controller.updateProgress * 100) + "%"
+                            font.pixelSize: 13; color: root.textMain
+                        }
+                        Image {
+                            visible: controller.updateReady
+                            Layout.preferredWidth: 14; Layout.preferredHeight: 14
+                            source: "components/arrow-right.png"; sourceSize.width: 28; sourceSize.height: 28; opacity: 0.45
                         }
                     }
                 }
@@ -879,7 +963,7 @@ ApplicationWindow {
                                 // controller explains the required next step.  A
                                 // running action must also stay clickable so it can
                                 // always be stopped safely.
-                                enabled: controller.busy || !controller.workspaceBusy
+                                enabled: controller.busy || (!controller.workspaceBusy && !controller.updateReady)
                                 implicitWidth: 132
                                 implicitHeight: 40
                                 onClicked: controller.runOrCancel()
@@ -888,6 +972,13 @@ ApplicationWindow {
                             AppButton { objectName: "templateNameSettings"; text: "模板适配"; visible: controller.supportsTemplateRules; enabled: !controller.busy && !controller.workspaceBusy; onClicked: controller.reviewTemplateRules() }
                             Text { visible: !!controller.lastRunText; text: controller.lastRunText; color: root.textMuted; font.pixelSize: 12 }
                             Item { Layout.fillWidth: true }
+                        }
+
+                        Text {
+                            visible: controller.updateReady
+                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            text: "新版本已准备好，请先点击左下角“重启以更新”。"
+                            color: root.primary; font.pixelSize: 12
                         }
 
                         MaterialRunProgress {
@@ -1863,16 +1954,6 @@ ApplicationWindow {
         }
     }
 
-    UpdateProgressDialog {
-        id: updateProgressDialog
-        iconSource: controller.updateIconSource
-        phase: controller.updatePhase
-        statusText: controller.updateStatus
-        progress: controller.updateProgress
-        canCancel: controller.updateCanCancel
-        onCancelRequested: controller.cancelUpdate()
-    }
-
     ReleaseNotesDialog {
         id: releaseNotesDialog
         iconSource: controller.updateIconSource
@@ -1968,13 +2049,6 @@ ApplicationWindow {
         }
         function onTextInputRequested(title, prompt, initialValue, token) {
             textInputDialog.request(title, prompt, initialValue, token)
-        }
-        function onUpdateChanged() {
-            var downloading = controller.updateBusy && controller.updatePhase !== "checking" && controller.updatePhase !== ""
-            if (downloading && !updateProgressDialog.opened)
-                updateProgressDialog.open()
-            else if (!controller.updateBusy && updateProgressDialog.opened)
-                updateProgressDialog.close()
         }
     }
 }

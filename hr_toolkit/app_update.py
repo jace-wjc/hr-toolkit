@@ -15,11 +15,11 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from hr_toolkit.common.paths import current_executable_path
+from hr_toolkit.common.paths import current_executable_path, user_app_data_dir
 
 
 GITEE_REPOSITORY = "optimistic-little-sunspot/hr-toolkit"
@@ -458,6 +458,63 @@ def download_update_package(
     raise UpdateError("更新包下载失败，已按顺序尝试：" + "；".join(failures))
 
 
+def update_cache_dir() -> Path:
+    # Separate installed copies and Win7/modern packages; never use project data.
+    identity = str(current_app_dir().resolve()) + "|" + platform_key()
+    key = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    return user_app_data_dir("data") / "HRToolkit" / "updates" / key
+
+
+def load_ready_update(current_version: str) -> tuple[UpdateInfo, Path] | None:
+    root = update_cache_dir()
+    record = root / "ready.json"
+    if not record.is_file():
+        return None
+    try:
+        if record.is_symlink() or record.stat().st_size > UPDATE_MANIFEST_MAX_BYTES:
+            raise ValueError("invalid update record")
+        data = json.loads(record.read_text(encoding="utf-8"))
+        if data["platform"] != platform_key():
+            return None
+        info = UpdateInfo(**data["update"])
+        if not is_newer_version(info.version, current_version):
+            record.unlink(missing_ok=True)
+            return None
+        relative = Path(data["package"])
+        if relative.is_absolute() or ".." in relative.parts or len(relative.parts) != 2:
+            raise ValueError("invalid cached path")
+        package = root / relative
+        if package.parent.is_symlink() or package.is_symlink() or not package.is_file():
+            raise ValueError("missing cached package")
+        if package.suffix.lower() not in (".exe", ".zip") or info.update_mode != "auto":
+            raise ValueError("invalid cached package type")
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", info.sha256):
+            raise ValueError("invalid cached checksum")
+        if sha256_file(package).lower() != info.sha256.lower():
+            raise ValueError("cached package checksum mismatch")
+        return info, package
+    except (OSError, ValueError, TypeError, KeyError):
+        # A partial/invalid record must never lock the tools or launch an EXE.
+        return None
+
+
+def download_cached_update(update: UpdateInfo, current_version: str, **kwargs) -> Path:
+    cached = load_ready_update(current_version)
+    if cached and cached[0].version == update.version and cached[0].sha256.lower() == update.sha256.lower():
+        return cached[1]
+    root = update_cache_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    destination = Path(tempfile.mkdtemp(prefix="package-", dir=str(root)))
+    package = download_update_package(update, dest_dir=destination, **kwargs)
+    record = {"platform": platform_key(), "package": str(package.relative_to(root)), "update": asdict(update)}
+    # Atomic metadata publication: only fully downloaded and verified packages
+    # survive a normal close as restart-ready updates.
+    temporary = destination / "ready.json.tmp"
+    temporary.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    os.replace(temporary, root / "ready.json")
+    return package
+
+
 def resolve_download_url(update: UpdateInfo, timeout: int = 10) -> str:
     """Return the first reachable package URL without downloading its body."""
     failures: list[str] = []
@@ -483,6 +540,7 @@ def launch_update_replacement(
     app_dir: Path | None = None,
     launcher_path: Path | None = None,
     wait_pid: int | None = None,
+    show_ui: bool = True,
 ) -> None:
     app_dir = app_dir or current_app_dir()
     launcher_path = launcher_path or current_launcher_path()
@@ -521,10 +579,14 @@ def launch_update_replacement(
         "--log-file",
         str(log_file),
         "--relaunch",
-        "--ui",
     ]
+    if show_ui:
+        args.append("--ui")
     _append_update_log(log_file, "更新程序参数：" + " ".join(args[1:]))
-    subprocess.Popen(args, cwd=str(app_dir.parent), close_fds=True)
+    launch_options: dict[str, Any] = {"cwd": str(app_dir.parent), "close_fds": True}
+    if not show_ui:
+        launch_options["env"] = {**os.environ, "HR_TOOLKIT_UPDATE_NOTIFY_ERRORS": "1"}
+    subprocess.Popen(args, **launch_options)
 
 
 def _stage_win7_updater_app_local_runtimes(app_dir: Path, target_dir: Path) -> bool:

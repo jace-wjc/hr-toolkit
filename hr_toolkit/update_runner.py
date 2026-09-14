@@ -87,6 +87,18 @@ def _execute_update(args: argparse.Namespace, log_file: Path, status: StatusCall
         _append_log(log_file, f"更新失败：{exc}")
         _append_log(log_file, traceback.format_exc().rstrip())
         _notify(status, f"更新失败：{exc}")
+        if status is None and sys.platform.startswith("win") and os.environ.get("HR_TOOLKIT_UPDATE_NOTIFY_ERRORS") == "1":
+            # Successful background installs have no UI. Failure must not leave
+            # the user staring at a vanished application without an explanation.
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(
+                    None,
+                    f"更新没有完成，请重新打开工具后重试。若仍无法打开，请联系管理员重新安装。\n\n{exc}\n\n更新日志：{log_file}",
+                    "HR Toolkit 更新未完成", 0x10,
+                )
+            except Exception:
+                pass
         return 1
     _append_log(log_file, "更新完成。")
     _append_log(log_file, f"===== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 更新结束 =====")

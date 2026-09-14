@@ -43,6 +43,47 @@ from hr_toolkit.update_runner import main as update_runner_main
 
 
 class AppUpdateTests(unittest.TestCase):
+    def test_ready_update_survives_close_reuses_package_and_rejects_damage(self) -> None:
+        from hr_toolkit import app_update
+        import hashlib
+        data = b"verified update fixture"
+        info = app_update.UpdateInfo("9.1.0", "https://gitee.com/example/setup.exe",
+                                     hashlib.sha256(data).hexdigest(), ("更新内容",), False, "https://gitee.com/manifest")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def download(update, dest_dir, **kwargs):
+                package = dest_dir / "setup.exe"
+                package.write_bytes(data)
+                return package
+            with patch.object(app_update, "update_cache_dir", return_value=root), patch.object(app_update, "platform_key", return_value="windows-x64"), patch.object(app_update, "download_update_package", side_effect=download) as downloader:
+                package = app_update.download_cached_update(info, "9.0.0")
+                restored = app_update.load_ready_update("9.0.0")
+                self.assertEqual(restored[1], package)
+                self.assertEqual(restored[0].version, info.version)
+                self.assertEqual(app_update.download_cached_update(info, "9.0.0"), package)
+                self.assertEqual(downloader.call_count, 1)
+                package.write_bytes(b"damaged")
+                self.assertIsNone(app_update.load_ready_update("9.0.0"))
+                app_update.download_cached_update(info, "9.0.0")
+                self.assertEqual(downloader.call_count, 2)
+                self.assertIsNone(app_update.load_ready_update("9.1.0"))
+                self.assertFalse((root / "ready.json").exists())
+
+    def test_ready_update_rejects_other_platform_and_external_path(self) -> None:
+        from hr_toolkit import app_update
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = {"platform": "windows-x64-win7", "package": "../outside.exe", "update": {}}
+            (root / "ready.json").write_text(json.dumps(record))
+            with patch.object(app_update, "update_cache_dir", return_value=root), patch.object(app_update, "platform_key", return_value="windows-x64"):
+                self.assertIsNone(app_update.load_ready_update("1.0.0"))
+                record["platform"] = "windows-x64"
+                record["update"] = dict(version="2.0.0", file_url="https://gitee.com/setup.exe", sha256="a" * 64,
+                                        notes=[], mandatory=False, manifest_url="https://gitee.com/manifest")
+                (root / "ready.json").write_text(json.dumps(record))
+                self.assertIsNone(app_update.load_ready_update("1.0.0"))
+
     def test_macos_without_platform_entry_has_no_update(self) -> None:
         manifest = {"version": "9.0.0", "platforms": {"windows": {"version": "9.0.0"}}}
         with patch("hr_toolkit.app_update.load_update_manifest", return_value=(manifest, "https://gitee.com/latest.json")):
@@ -947,6 +988,15 @@ class AppUpdateTests(unittest.TestCase):
             self.assertIn("--installer", args)
             self.assertIn(str(installer), args)
             self.assertNotIn("--zip", args)
+
+            with patch("subprocess.Popen", side_effect=fake_popen):
+                launch_update_replacement(
+                    package_path=installer, app_dir=app_dir,
+                    launcher_path=app_dir / "HRToolkit.exe", wait_pid=1234, show_ui=False,
+                )
+            self.assertNotIn("--ui", captured["args"])
+            self.assertIn("--relaunch", captured["args"])
+            self.assertEqual(captured["kwargs"]["env"]["HR_TOOLKIT_UPDATE_NOTIFY_ERRORS"], "1")
 
     def test_win7_temporary_updater_keeps_app_local_runtime_beside_exe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
