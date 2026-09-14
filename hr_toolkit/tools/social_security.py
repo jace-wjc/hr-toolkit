@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from hr_toolkit import runlog
 from openpyxl import load_workbook
 from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -716,7 +717,7 @@ def _read_xls_long_sheet(sheet, headers: dict[str, int], header_row: int, contex
                 wage=_to_number(row.get("本人工资")),
                 base=_to_number(row.get("缴费基数")),
                 rate=_rate_to_decimal(row.get("费率")),
-                amount=_to_number(row.get("本期应缴费额")) or 0.0,
+                amount=_row_payment_amount(row, ("本期应缴费额",), context, row_index + 1) or 0.0,
                 nature_hint=_nature_hint_from_row(row, context),
             )
         )
@@ -752,7 +753,7 @@ def _read_xls_single_kind_sheet(sheet, headers: dict[str, int], header_row: int,
                 wage=_to_number(row.get("缴费工资") or row.get("本人工资")),
                 base=_to_number(row.get("缴费基数")),
                 rate=_rate_to_decimal(row.get("费率")),
-                amount=_to_number(row.get("应缴费额(元)") or row.get("本期应缴费额")) or 0.0,
+                amount=_row_payment_amount(row, ("应缴费额(元)", "本期应缴费额"), context, row_index + 1) or 0.0,
                 nature_hint=_nature_hint_from_row(row, context),
             )
         )
@@ -778,7 +779,7 @@ def _read_xls_wide_sheet(sheet, headers: dict[str, int], header_row: int, contex
         row = {header: sheet.cell_value(row_index, col_index) for header, col_index in headers.items()}
         fee_period, fee_period_end = _payment_periods_from_row(row, context)
         for _header, col_index, category, side in amount_columns:
-            amount = _to_number(sheet.cell_value(row_index, col_index))
+            amount = _payment_amount(sheet.cell_value(row_index, col_index), context, row_index + 1, col_index + 1)
             if not amount:
                 continue
             lines.append(
@@ -834,7 +835,7 @@ def _read_long_sheet(ws: Worksheet, headers: dict[str, int], header_row: int, co
                 wage=_to_number(row.get("本人工资") or row.get("缴费工资")),
                 base=_to_number(row.get("缴费基数")),
                 rate=_rate_to_decimal(row.get("费率")),
-                amount=_to_number(row.get("本期应缴费额") or row.get("应缴费额(元)")) or 0.0,
+                amount=_row_payment_amount(row, ("本期应缴费额", "应缴费额(元)"), context, row_index) or 0.0,
                 nature_hint=_nature_hint_from_row(row, context),
             )
         )
@@ -870,7 +871,7 @@ def _read_single_kind_sheet(ws: Worksheet, headers: dict[str, int], header_row: 
                 wage=_to_number(row.get("缴费工资") or row.get("本人工资")),
                 base=_to_number(row.get("缴费基数")),
                 rate=_rate_to_decimal(row.get("费率")),
-                amount=_to_number(row.get("应缴费额(元)") or row.get("本期应缴费额")) or 0.0,
+                amount=_row_payment_amount(row, ("应缴费额(元)", "本期应缴费额"), context, row_index) or 0.0,
                 nature_hint=_nature_hint_from_row(row, context),
             )
         )
@@ -897,7 +898,7 @@ def _read_wide_sheet(ws: Worksheet, headers: dict[str, int], header_row: int, co
         row = {header: ws.cell(row_index, col_index).value for header, col_index in headers.items()}
         fee_period, fee_period_end = _payment_periods_from_row(row, context)
         for _header, col_index, category, side in amount_columns:
-            amount = _to_number(ws.cell(row_index, col_index).value)
+            amount = _payment_amount(ws.cell(row_index, col_index).value, context, row_index, col_index)
             if not amount:
                 continue
             lines.append(
@@ -2423,6 +2424,24 @@ def _normalize_name(value: Any) -> str:
 def _is_binary_xls(path: Path) -> bool:
     with path.open("rb") as file:
         return file.read(8).startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+
+
+def _payment_amount(value: Any, context: SourceContext, row: int, column: str | int) -> float | None:
+    number = _to_number(value)
+    if number is None and _cell_text(value):
+        # Diagnostics only: preserve the caller's existing zero/skip behavior.
+        # Do not log cell contents or add warnings to exported workbooks.
+        runlog.log_line(f"社保金额解析失败：{Path(context.label).name} 第 {row} 行，列 {column}；已沿用原有空值处理，请核对源表。")
+    return number
+
+
+def _row_payment_amount(row: dict[str, Any], fields: tuple[str, ...], context: SourceContext, source_row: int) -> float | None:
+    # Match the previous `a or b` lookup exactly, including numeric zero.
+    for field in fields:
+        value = row.get(field)
+        if value:
+            break
+    return _payment_amount(value, context, source_row, field)
 
 
 def _to_number(value: Any) -> float | None:

@@ -25,6 +25,25 @@ from hr_toolkit.tools.social_security import (
 
 
 class SocialSecurityTest(unittest.TestCase):
+    def test_amount_diagnostics_preserve_parsing_and_do_not_log_cell_contents(self) -> None:
+        from hr_toolkit.tools import social_security as social
+        context = _source_context(Path("2026年6月社保.xlsx"))
+        for value in (None, "", "  ", 0, 12.5, "1,200元", "金额隐私样例"):
+            with self.subTest(value=value), patch.object(social.runlog, "log_line") as log:
+                self.assertEqual(social._payment_amount(value, context, 7, 4), social._to_number(value))
+                if value == "金额隐私样例":
+                    message = log.call_args[0][0]
+                    self.assertIn("第 7 行", message)
+                    self.assertIn("列 4", message)
+                    self.assertNotIn(value, message)
+                else:
+                    log.assert_not_called()
+        for first, second in ((0, 12), ("", 12), ("异常内容", 12), (None, None)):
+            with patch.object(social.runlog, "log_line"):
+                actual = social._row_payment_amount({"本期应缴费额": first, "应缴费额(元)": second},
+                                                   ("本期应缴费额", "应缴费额(元)"), context, 7)
+            self.assertEqual(actual, social._to_number(first or second))
+
     def test_supplementary_injury_difference_is_separate_from_normal_and_arrears(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
