@@ -2,7 +2,7 @@
 """Create and push an HR Toolkit release commit and tag.
 
 The local release command deliberately does not build installers.  It validates
-the repository, synchronizes the three version files, runs the complete local
+the repository, records this release's notes alongside the version files, runs the complete local
 checks, and atomically pushes ``main`` together with an annotated ``v*`` tag.
 GitHub Actions is responsible for all platform builds and publication.
 """
@@ -10,7 +10,9 @@ GitHub Actions is responsible for all platform builds and publication.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import pprint
 import re
 import shlex
 import subprocess
@@ -29,8 +31,13 @@ VERSION_FILES = (
     "hr_toolkit/__init__.py",
     "package.json",
     "package-lock.json",
+    "hr_toolkit/release_notes.py",
 )
 VERSION_FILE_SET = frozenset(VERSION_FILES)
+NOTES_FILE = VERSION_FILES[3]
+# A previously prepared entry may already contain the confirmed notes. Only
+# these exact file sets are allowed; all four files still get identity checks.
+RELEASE_CHANGE_SETS = (frozenset(VERSION_FILES[:3]), VERSION_FILE_SET)
 STABLE_SEMVER_PATTERN = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 )
@@ -477,7 +484,69 @@ def _replace_init_version(text: str, version: str) -> str:
     return updated
 
 
-def render_version_files(root: Path, version: str) -> Mapping[str, bytes]:
+def _read_notes_catalog(root: Path) -> tuple[bytes, ast.AST, dict]:
+    source = (root / NOTES_FILE).read_bytes()
+    tree = ast.parse(source, filename=NOTES_FILE)
+    values = []
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if any(isinstance(target, ast.Name) and target.id == "RELEASE_NOTES" for target in targets):
+            values.append(node.value)
+    if len(values) != 1 or values[0] is None:
+        raise ReleaseError("更新记录格式异常，请检查 RELEASE_NOTES。")
+    try:
+        catalog = ast.literal_eval(values[0])
+    except (ValueError, TypeError, SyntaxError) as exc:
+        raise ReleaseError("无法读取历史更新记录，未修改文件。") from exc
+    if not isinstance(catalog, dict):
+        raise ReleaseError("更新记录必须按版本分别保存。")
+    return source, values[0], catalog
+
+
+def normalize_release_notes(notes: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(notes, str):
+        notes = [notes]
+    if not isinstance(notes, (tuple, list)) or any(not isinstance(note, str) for note in notes):
+        raise ReleaseError("更新内容必须是文字。")
+    result = tuple(line.strip() for note in notes for line in note.splitlines() if line.strip())
+    if not result:
+        raise ReleaseError("本次更新内容不能为空，请说明新增了什么、修复了什么。")
+    return result
+
+
+def render_release_notes(root: Path, version: str, notes: Optional[Sequence[str]]) -> bytes:
+    source, node, catalog = _read_notes_catalog(root)
+    # The CLI always supplies fresh user input. Direct callers may use an entry
+    # prepared explicitly for this target version, never the previous version.
+    normalized = normalize_release_notes(notes if notes is not None else catalog.get(version, ()))
+    updated = {version: normalized, **{key: value for key, value in catalog.items() if key != version}}
+    lines = source.splitlines(keepends=True)
+    start = sum(len(line) for line in lines[:node.lineno - 1]) + node.col_offset
+    end = sum(len(line) for line in lines[:node.end_lineno - 1]) + node.end_col_offset
+    rendered = source[:start] + pprint.pformat(updated, width=100, sort_dicts=False).encode("utf-8") + source[end:]
+    ast.parse(rendered, filename=NOTES_FILE)
+    return rendered
+
+
+def collect_release_notes(version: str, notes: Optional[Sequence[str]], *, assume_yes: bool = False) -> tuple[str, ...]:
+    if notes is not None:
+        return normalize_release_notes(notes)
+    if assume_yes or not sys.stdin.isatty():
+        raise ReleaseError('请用 --notes "本次新增内容" "本次修复内容" 提供更新说明；不会沿用上次内容。')
+    print(f"\n请输入 v{version} 的更新内容（用户会看到）：")
+    print("每行一条，写完后再按一次回车结束；Ctrl+C 取消发布。")
+    entered: list[str] = []
+    while True:
+        line = input(f"{len(entered) + 1}. ").strip()
+        if not line:
+            if entered:
+                return normalize_release_notes(entered)
+            print("至少填写一条本次更新内容。")
+            continue
+        entered.append(line)
+
+
+def render_version_files(root: Path, version: str, notes: Optional[Sequence[str]] = None) -> Mapping[str, bytes]:
     """Render all version files in memory without changing the workspace."""
 
     parse_stable_semver(version)
@@ -507,7 +576,10 @@ def render_version_files(root: Path, version: str) -> Mapping[str, bytes]:
     )
     if rendered_versions.current != version:
         raise ReleaseError(f"版本渲染校验失败：{rendered_versions.values}")
-    return {relative: text.encode("utf-8") for relative, text in rendered_texts.items()}
+    return {
+        **{relative: text.encode("utf-8") for relative, text in rendered_texts.items()},
+        NOTES_FILE: render_release_notes(root, version, notes),
+    }
 
 
 def snapshot_version_files(root: Path) -> Mapping[str, bytes]:
@@ -706,7 +778,7 @@ def _assert_only_version_changes(git: GitRepository) -> None:
     staged = git.staged_paths()
     unstaged = git.unstaged_paths()
     untracked = git.untracked_paths()
-    if staged or unstaged != VERSION_FILE_SET or untracked:
+    if staged or unstaged not in RELEASE_CHANGE_SETS or untracked:
         raise ReleaseError(
             "版本更新后的文件集合不符合白名单。"
             f"\n暂存：{sorted(staged)}"
@@ -719,7 +791,7 @@ def _assert_exact_staged_files(git: GitRepository) -> None:
     staged = git.staged_paths()
     unstaged = git.unstaged_paths()
     untracked = git.untracked_paths()
-    if staged != VERSION_FILE_SET or unstaged or untracked:
+    if staged not in RELEASE_CHANGE_SETS or unstaged or untracked:
         raise ReleaseError(
             "提交前的文件集合不符合版本白名单。"
             f"\n期望暂存：{sorted(VERSION_FILE_SET)}"
@@ -965,9 +1037,10 @@ def execute_release_plan(
     *,
     dry_run: bool,
     checks: Callable[[Path], None] = run_full_checks,
+    notes: Optional[Sequence[str]] = None,
 ) -> None:
     revalidate_release_plan(plan, git)
-    rendered = render_version_files(plan.root, plan.target_version)
+    rendered = render_version_files(plan.root, plan.target_version, notes)
     if dry_run:
         checks(plan.root)
         revalidate_release_plan(plan, git)
@@ -1021,7 +1094,7 @@ def execute_release_plan(
         if git.commit_parents(state.release_commit) != (state.start_head,):
             raise ReleaseError("release commit 必须只有发布前 HEAD 一个父提交。")
         committed_paths = git.commit_paths(state.release_commit)
-        if committed_paths != VERSION_FILE_SET:
+        if committed_paths not in RELEASE_CHANGE_SETS:
             raise ReleaseError(
                 f"release commit 包含白名单以外的文件：{sorted(committed_paths)}"
             )
@@ -1083,6 +1156,7 @@ def release(
     dry_run: bool = False,
     assume_yes: bool = False,
     root: Path = REPO_ROOT,
+    notes: Optional[Sequence[str]] = None,
 ) -> None:
     git = GitRepository(root)
     plan = prepare_release(version, root, git)
@@ -1091,10 +1165,14 @@ def release(
         f"发布计划：{plan.current_version} -> {plan.target_version}，"
         f"分支 {MAIN_BRANCH}，Tag {plan.tag}"
     )
+    release_notes = collect_release_notes(version, notes, assume_yes=assume_yes)
+    print(f"\n用户将看到的 v{version} 更新内容：")
+    for note in release_notes:
+        print(f"  • {note}")
     if not confirm_release(version, assume_yes, dry_run):
         print("发布已取消。")
         return
-    execute_release_plan(plan, git, dry_run=dry_run)
+    execute_release_plan(plan, git, dry_run=dry_run, notes=release_notes)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1102,6 +1180,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="检查、提交并原子推送 HR Toolkit 版本；不在本机构建安装包。"
     )
     parser.add_argument("version", help="canonical stable SemVer，例如 0.2.1")
+    parser.add_argument("--notes", nargs="+", help="本次更新内容，每条加引号；不传则逐行询问")
     parser.add_argument("--dry-run", action="store_true", help="运行全部检查，但不写版本或修改 Git 历史")
     parser.add_argument("--yes", action="store_true", help="跳过正式发布前的交互确认")
     return parser
@@ -1110,7 +1189,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        release(args.version, dry_run=args.dry_run, assume_yes=args.yes)
+        release(args.version, dry_run=args.dry_run, assume_yes=args.yes, notes=args.notes)
+    except (EOFError, KeyboardInterrupt):
+        print("\n发布已取消。", file=sys.stderr)
+        return 1
     except ReleaseError as error:
         print(f"发布失败：{error}", file=sys.stderr)
         return 1

@@ -1,7 +1,8 @@
 """Versioned user-facing notes, shared by the app and release metadata.
 
-Add each new version here before releasing. Keep previous entries for offline
-review; do not infer user-facing changes from Git commit messages.
+The release command records the user's notes for each new version here and
+keeps previous entries for offline review. Do not infer user-facing changes
+from Git commit messages.
 """
 
 from __future__ import annotations

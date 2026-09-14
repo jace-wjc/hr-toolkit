@@ -510,8 +510,18 @@ python3 scripts/compare_regression_outputs.py verify \
 日常发布只在本地 Mac 做版本检查、测试、版本提交、annotated Tag 和原子推送；Windows、macOS 构建与 GitHub Release 发布全部交给 GitHub Actions。正式发布命令为：
 
 ```bash
-npm run release -- 0.3.5
+npm run release -- 0.9.1
 ```
+
+命令会询问**本次更新内容**：每行填写一条，写完后输入空行结束，随后展示给你确认。填写的是用户实际会看到的新增功能、问题修复等，不会沿用上次内容，也不会自动把 Git 提交记录当成说明。确认发布后，脚本自动按版本保存；这些文字会用于更新前提示，以及安装后的“更新记录”。无需手动修改源码。
+
+也可以直接传入本次内容：
+
+```bash
+npm run release -- 0.9.1 --notes "新增更新记录入口" "优化下载和安装进度提示"
+```
+
+上面的内容仅为写法示例，每次应填写该版本实际的改动。
 
 首次使用先安装 Python 依赖和 Node.js。npm 入口会优先使用 `.venv/bin/python`，不存在时再使用 `python3`；两者之一必须能运行完整测试。发布前可执行不修改版本文件、commit、Tag 或远端的演练：
 
@@ -519,7 +529,7 @@ npm run release -- 0.3.5
 npm run release -- 0.3.5 --dry-run
 ```
 
-无人值守环境审核完版本后可追加 `--yes`。发布脚本会严格检查 stable SemVer、clean `main`、`HEAD == origin/main`、本地/远端 Tag 冲突以及全部版本字段，并通过已登录的 GitHub CLI (`gh`) 确认当前精确提交的完整 CI 已成功；CI 尚未开始、运行中、失败或取消时都不会创建版本提交和 Tag。通过远端门禁后再运行 `unittest`、`compileall` 和 `git diff --check`。正式执行只会暂存 `hr_toolkit/__init__.py`、`package.json`、`package-lock.json`，不会运行本地跨平台构建，也不会使用 `git add .`。
+无人值守环境需用 `--notes` 提供本次内容，审核后可追加 `--yes`；`--yes` 不会自动生成更新内容。发布脚本会严格检查 stable SemVer、clean `main`、`HEAD == origin/main`、本地/远端 Tag 冲突以及全部版本字段，并通过已登录的 GitHub CLI (`gh`) 确认当前精确提交的完整 CI 已成功；CI 尚未开始、运行中、失败或取消时都不会创建版本提交和 Tag。通过远端门禁后再运行 `unittest`、`compileall` 和 `git diff --check`。正式执行只会暂存 `hr_toolkit/__init__.py`、`package.json`、`package-lock.json` 和 `hr_toolkit/release_notes.py`，不会运行本地跨平台构建，也不会使用 `git add .`。版本号与本次更新记录一起提交，失败时按同样的保护规则回滚。
 
 脚本创建单一版本提交和 `v<version>` annotated Tag，再通过一次 atomic push 同时推送 `main` 与 Tag。推送失败时只有在确认远端两个引用都未变化后才自动回滚；远端状态不明确时会保留现场，要求人工核对。
 

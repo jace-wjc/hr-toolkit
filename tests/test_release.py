@@ -31,6 +31,10 @@ def write_version_tree(root: Path, version: str = "0.1.32") -> None:
         f'"""test package"""\n\n__version__ = "{version}"\n',
         encoding="utf-8",
     )
+    (package_dir / "release_notes.py").write_text(
+        'RELEASE_NOTES = {"0.1.32": ("历史更新内容",), "0.2.1": ("测试发布内容",)}\n',
+        encoding="utf-8",
+    )
     (root / "package.json").write_text(
         json.dumps(
             {
@@ -58,6 +62,40 @@ def write_version_tree(root: Path, version: str = "0.1.32") -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+class ReleaseNotesInputTests(unittest.TestCase):
+    def test_interactive_input_collects_only_this_releases_lines(self) -> None:
+        with mock.patch.object(release.sys.stdin, "isatty", return_value=True), mock.patch(
+            "builtins.input", side_effect=["", "新增更新记录入口", "修复下载进度显示", ""]
+        ):
+            notes = release.collect_release_notes("0.9.1", None)
+        self.assertEqual(notes, ("新增更新记录入口", "修复下载进度显示"))
+
+    def test_unattended_release_requires_explicit_notes(self) -> None:
+        with mock.patch.object(release.sys.stdin, "isatty", return_value=False):
+            with self.assertRaisesRegex(release.ReleaseError, "不会沿用"):
+                release.collect_release_notes("0.9.1", None, assume_yes=True)
+
+    def test_explicit_notes_are_not_replaced_with_a_previous_version(self) -> None:
+        notes = release.collect_release_notes("0.9.1", ["本次新增功能", "本次修复问题"], assume_yes=True)
+        self.assertEqual(notes, ("本次新增功能", "本次修复问题"))
+        with self.assertRaises(release.ReleaseError):
+            release.collect_release_notes("0.9.1", ["  "], assume_yes=True)
+
+    def test_new_entry_preserves_history_and_is_not_written_before_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_version_tree(root)
+            path = root / release.NOTES_FILE
+            before = path.read_bytes()
+            rendered = release.render_version_files(root, "0.9.1", ("本次内容含引号：'名字'",))
+            self.assertEqual(path.read_bytes(), before)
+            release.write_version_files(root, rendered)
+            _source, _node, catalog = release._read_notes_catalog(root)
+            self.assertEqual(catalog["0.9.1"], ("本次内容含引号：'名字'",))
+            self.assertEqual(catalog["0.1.32"], ("历史更新内容",))
+            self.assertEqual(catalog["0.2.1"], ("测试发布内容",))
 
 
 class PrepareGit:
@@ -442,7 +480,7 @@ class GithubCiGateTest(unittest.TestCase):
             ) as confirm, mock.patch.object(
                 release, "execute_release_plan"
             ) as execute:
-                release.release("0.2.1", root=root)
+                release.release("0.2.1", root=root, notes=("本次测试内容",))
 
             gate.assert_called_once_with(plan)
             confirm.assert_called_once()
