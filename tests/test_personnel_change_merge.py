@@ -13,6 +13,27 @@ from hr_toolkit.tools import personnel_change_merge as changes
 
 
 class PersonnelChangeMergeTest(unittest.TestCase):
+    def test_conflict_diagnostics_keep_original_values_and_merge_counts(self) -> None:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "增员"
+        ws.append(["序号", "姓名", "备注", "岗位"])
+        ws.append([1, "隐私姓名", "旧内容", None])
+        layout = changes.ChangeSheetLayout("增员", 1, 2, 3, 4,
+                                          {"序号": 1, "姓名": 2, "备注": 3, "岗位": 4})
+        row = changes.ChangeRow("增员", "202609", {"姓名": "隐私姓名", "备注": "新内容", "岗位": "补充岗位"}, "原表.xlsx", 9)
+        with patch.object(changes.runlog, "log_line") as log:
+            self.assertTrue(changes._merge_existing_change_row(ws, layout, 2, row))
+            self.assertEqual(ws.cell(2, 3).value, "旧内容")
+            self.assertEqual(ws.cell(2, 4).value, "补充岗位")
+            message = log.call_args[0][0]
+            self.assertIn("第 9 行", message)
+            self.assertIn("列 3", message)
+            for private in ("隐私姓名", "旧内容", "新内容", "补充岗位"):
+                self.assertNotIn(private, message)
+            self.assertFalse(changes._merge_existing_change_row(ws, layout, 2, row))
+        wb.close()
+
     def test_footer_moves_only_for_actual_overflow_after_duplicate_updates(self) -> None:
         from openpyxl.comments import Comment
         from openpyxl.styles import PatternFill

@@ -15,6 +15,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from hr_toolkit import runlog
 from openpyxl import Workbook, load_workbook
 from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection, ignored_sheet, preview, assigned_role
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -839,6 +840,7 @@ def _write_change_row(ws: Worksheet, layout: ChangeSheetLayout, row_index: int, 
 
 def _merge_existing_change_row(ws: Worksheet, layout: ChangeSheetLayout, row_index: int, row: ChangeRow) -> bool:
     changed = False
+    conflicting_columns = []
     for header, col_index in layout.headers.items():
         if header == HEADER_SERIAL or header in FORMULA_TARGET_HEADERS:
             continue
@@ -848,6 +850,14 @@ def _merge_existing_change_row(ws: Worksheet, layout: ChangeSheetLayout, row_ind
             cell.value = value
             _apply_date_number_format(cell, header)
             changed = True
+        elif _has_value(value) and _has_value(cell.value) and value != cell.value:
+            conflicting_columns.append(str(col_index))
+    if conflicting_columns:
+        # Report coordinates only; never expose HR cell values or alter merge rules.
+        runlog.log_line(
+            f"异动记录非空字段冲突：{Path(row.source_file).name}，{row.sheet_name}第 {row.source_row} 行，"
+            f"对应汇总表第 {row_index} 行，列 {','.join(conflicting_columns)}；已保留原值。"
+        )
     before = tuple(ws.cell(row_index, col_index).value for header, col_index in layout.headers.items() if header in FORMULA_TARGET_HEADERS)
     _write_summary_formulas(ws, layout, row_index)
     after = tuple(ws.cell(row_index, col_index).value for header, col_index in layout.headers.items() if header in FORMULA_TARGET_HEADERS)
