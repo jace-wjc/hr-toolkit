@@ -2,7 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 
-AppDialog {
+Item {
     id: dialog
     property var sections: []
     property int sectionIndex: 0
@@ -11,13 +11,6 @@ AppDialog {
     property string editError: ""
     property var currentSection: sections.length ? sections[sectionIndex] : ({})
     signal rulesSubmitted(string payload)
-    title: "字段与工作表的常用名称"
-    width: Math.min(parent ? parent.width - 32 : 720, 720)
-    height: Math.min(parent ? parent.height - 32 : 660, 660)
-    x: parent ? (parent.width - width) / 2 : 0
-    y: parent ? (parent.height - height) / 2 : 0
-    acceptText: "保存名称规则并重新检查"
-    rejectText: "取消"
 
     function normalized(value) {
         var text = String(value)
@@ -52,7 +45,6 @@ AppDialog {
         search.text = ""
         cancelEdit()
         revision++
-        open()
     }
     function choices() {
         var tick = revision
@@ -101,7 +93,7 @@ AppDialog {
         if (normalized(editingName) === key) cancelEdit()
         revision++
     }
-    onAccepted: {
+    function submit() {
         var rules = {fields: {}, sheets: {}}
         for (var i = 0; i < sections.length; i++) {
             var item = sections[i]
@@ -109,7 +101,8 @@ AppDialog {
         }
         rulesSubmitted(JSON.stringify(rules))
     }
-    contentItem: ColumnLayout {
+    ColumnLayout {
+        anchors.fill: parent
         spacing: 10
         Text {
             Layout.fillWidth: true

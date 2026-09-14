@@ -30,6 +30,26 @@ def workbook(name="姓名", sheet="工资明细", amount="应发小计"):
 
 
 class HeaderAliasTest(unittest.TestCase):
+    def test_shared_dialog_preview_keeps_salary_field_locations(self):
+        wb = workbook()
+        group = inspect_workbook(wb)
+        self.assertEqual(group["preview_rows"][0], ["序号", "姓名", "身份证号码", "应发小计"])
+        self.assertEqual(group["preview_rows"][1], ["1", "测试人员", "TEST-001", "1250.5"])
+        self.assertEqual(group["selections"], {"name": 2, "id_card": 3, "amount": 4})
+        self.assertEqual(wb.active.cell(2, 4).value, 1250.5)
+        self.assertNotIn("preview_rows", profile_from_selection(group, group["selections"]))
+
+    def test_shared_dialog_auto_sheet_hint_retains_multirow_headers(self):
+        wb = workbook()
+        wb.active.insert_rows(1)
+        wb.active.cell(1, 1).value = "工资表"
+        group = inspect_workbook(wb, hint={"sheet": "工资明细", "header_row": 0, "header_bottom": 0})
+        self.assertEqual(group["header_row"], 2)
+        self.assertEqual(group["selections"]["amount"], 4)
+        combined = inspect_workbook(wb, hint={"sheet": "工资明细", "header_row": 1, "header_bottom": 2})
+        self.assertEqual(combined["header_bottom"], 2)
+        self.assertEqual(combined["selections"]["amount"], 4)
+
     def test_alternatives_match_one_name_per_template(self):
         for name in ("姓名", "名字", " ＮＡＭＥ "):
             with self.subTest(name=name):

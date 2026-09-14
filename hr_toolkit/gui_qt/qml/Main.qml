@@ -832,8 +832,7 @@ ApplicationWindow {
                                 onClicked: controller.runOrCancel()
                             }
                             AppButton { text: "打开结果目录"; enabled: controller.canOpenLastResult; implicitWidth: 138; implicitHeight: 40; onClicked: controller.openLastResult() }
-                            AppButton { objectName: "salaryHeaderSettings"; text: "列头对应设置"; visible: controller.currentTool === "salary_merge"; enabled: !controller.busy && !controller.workspaceBusy; onClicked: controller.reviewSalaryHeaders() }
-                            AppButton { objectName: "templateNameSettings"; text: "列名与工作表设置"; visible: controller.supportsTemplateRules; enabled: !controller.busy && !controller.workspaceBusy; onClicked: controller.reviewTemplateRules() }
+                            AppButton { objectName: "templateNameSettings"; text: "模板适配"; visible: controller.supportsTemplateRules; enabled: !controller.busy && !controller.workspaceBusy; onClicked: controller.reviewTemplateRules() }
                             Text { visible: !!controller.lastRunText; text: controller.lastRunText; color: root.textMuted; font.pixelSize: 12 }
                             Item { Layout.fillWidth: true }
                         }
@@ -1856,15 +1855,13 @@ ApplicationWindow {
         }
     }
 
-    SalaryHeaderDialog { id: salaryHeaderDialog; backend: controller }
-    HeaderAliasDialog { id: templateRulesDialog; onRulesSubmitted: function(payload) { controller.saveTemplateRules(payload) } }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }
 
     Connections {
         target: controller
-        function onSalaryMappingRequested() { salaryHeaderDialog.showData(controller.salaryMappingData) }
-        function onSalaryMappingClosed() { salaryHeaderDialog.dismiss() }
-        function onTemplateRulesRequested() { templateRulesDialog.showSections(controller.templateRuleSections) }
+        function onSalaryMappingRequested() { templateChoiceDialog.showSalaryData(controller.salaryMappingData) }
+        function onSalaryMappingClosed() { templateChoiceDialog.dismissSalary() }
+        function onTemplateRulesRequested() { templateChoiceDialog.showRules(controller.templateRuleSections) }
         function onTemplateSelectionRequested() { templateChoiceDialog.showData(controller.templateSelectionData) }
         function onNotificationRequested(title, message, level) { notificationDialog.showMessage(title, message, level) }
         function onConfirmationRequested(title, message, token) {

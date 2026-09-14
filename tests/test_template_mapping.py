@@ -32,6 +32,33 @@ def invoke(tool, callback, rules=None):
 
 
 class TemplateMappingTest(unittest.TestCase):
+    def test_prompt_labels_do_not_change_internal_fields_or_source(self):
+        ws = sheet(["名字", "证件编号"], ["示例人员", "TEST-001"], name="增员")
+        ws.parent.create_sheet("说明", 0)
+        with self.assertRaises(TemplateSelectionRequired) as caught:
+            invoke("social_security", lambda: map_sheet(ws, "roster", file="异动表.xlsx", source_sheets=ws.parent.worksheets))
+        payload = caught.exception.payload
+        self.assertEqual(payload["selected_sheet"], "增员")
+        self.assertEqual(payload["sheets"][0]["name"], "说明")
+        role = payload["roles"][0]
+        self.assertEqual(role["field_labels"]["*姓名.简体中文"], "姓名")
+        self.assertEqual(role["field_labels"]["*身份证"], "身份证号码")
+        self.assertIn("*姓名.简体中文", role["required"])
+        self.assertEqual(role["fields"]["*姓名.简体中文"], ["*姓名.简体中文"])
+        self.assertNotIn("简体中文", payload["message"])
+        self.assertEqual(ws.cell(1, 1).value, "名字")
+
+    def test_prompt_still_rejects_missing_and_duplicate_required_columns(self):
+        ws = sheet(["名字", "证件编号"], ["示例人员", "TEST-001"])
+        with self.assertRaises(TemplateSelectionRequired) as caught:
+            invoke("social_security", lambda: map_sheet(ws, "roster"))
+        payload = caught.exception.payload
+        base = {"role": "roster", "sheet": "Sheet1", "row": 1}
+        with self.assertRaisesRegex(ValueError, "身份证号码"):
+            save_choice("social_security", {}, payload, {**base, "columns": {"*姓名.简体中文": 1}})
+        with self.assertRaisesRegex(ValueError, "同一列"):
+            save_choice("social_security", {}, payload, {**base, "columns": {"*姓名.简体中文": 1, "*身份证": 1}})
+
     def test_all_six_entrypoints_accept_serializable_rules(self):
         from hr_toolkit.tools.registry import get_tool_by_id
         self.assertEqual(len(SUPPORTED_TOOLS), 6)

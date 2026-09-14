@@ -187,6 +187,11 @@ def inspect_workbook(
         if field_aliases or sheet_aliases:
             group["alias_signature"] = _digest(rules)
         group["sheet_names"] = names
+        # 复用已经读到的少量行供统一确认窗口预览，不额外扫描全表。
+        group["preview_rows"] = [[str(value)[:200] if value is not None else "" for value in row]
+                                 for row in rows[:MAX_HEADER_ROW + 5]]
+        group["field_aliases"] = {field: field_aliases.get(field, list(ALIASES[field]))
+                                  for field in fields_for(role)}
         return group
 
     if hint:

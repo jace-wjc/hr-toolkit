@@ -221,6 +221,7 @@ class AppController(QObject):
         self._template_issue: dict[str, Any] = {}
         self._template_settings_tool = ""
         self._template_issue_project = ""
+        self._template_input_snapshot = ""
         self._salary_pending: ToolInvocation | None = None
         self._salary_project_key = ""
         self._salary_inspection: dict[str, Any] = {}
@@ -2649,10 +2650,12 @@ class AppController(QObject):
     @Property(bool, notify=specChanged)
     def supportsTemplateRules(self) -> bool:
         from hr_toolkit.common.template_mapping import SUPPORTED_TOOLS
-        return self._spec.tool_id in SUPPORTED_TOOLS
+        return self._spec.tool_id in (*SUPPORTED_TOOLS, "salary_merge")
 
     @Property("QVariantList", notify=specChanged)
     def templateRuleSections(self):
+        if self._template_settings_tool == "salary_merge":
+            return self.salaryAliasSections
         from hr_toolkit.common.template_mapping import sections
         return sections(self._template_settings_tool, self._header_name_rules.get(self._template_settings_tool, {}))
 
@@ -2667,10 +2670,26 @@ class AppController(QObject):
         self._template_settings_tool = self._spec.tool_id
         self.templateRulesRequested.emit()
 
-    @Slot(str)
+    @Slot(str, result=bool)
     def saveTemplateRules(self, payload):
         if self._busy or self._template_settings_tool != self._spec.tool_id:
-            return
+            return False
+        if self._template_settings_tool == "salary_merge":
+            if self._salary_pending is not None:
+                return self.saveSalaryAliasRules(payload)
+            from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, alias_rules
+            try:
+                rules = alias_rules({ALIAS_PROFILE_KEY: json.loads(payload)})
+                previous = dict(self._header_name_rules)
+                self._header_name_rules["salary_merge"] = rules
+                if not self._save_workspace_preferences():
+                    self._header_name_rules = previous
+                    raise ValueError("保存失败，请重试")
+                self.notificationRequested.emit("名称已保存", "下次处理工资表时会使用这些名称。", "success")
+                return True
+            except (ValueError, TypeError, KeyError) as exc:
+                self.notificationRequested.emit("名称未保存", str(exc), "warning")
+                return False
         from hr_toolkit.common.template_mapping import catalog, clean_rules
         from hr_toolkit.common.header_aliases import normalize_alias
         try:
@@ -2690,8 +2709,10 @@ class AppController(QObject):
                 self._header_name_rules = previous
                 raise ValueError("保存失败，请重试")
             self.notificationRequested.emit("名称规则已保存", "请重新点击开始处理。不同工具的设置互不影响。", "success")
+            return True
         except (ValueError, TypeError, KeyError) as exc:
             self.notificationRequested.emit("名称规则未保存", str(exc), "warning")
+            return False
 
     @Slot(str)
     def saveTemplateChoice(self, payload):
@@ -2702,16 +2723,40 @@ class AppController(QObject):
             tool = self._template_issue.get("tool")
             if tool != self._spec.tool_id or self._template_issue_project != str(self._project_path):
                 raise ValueError("当前工具或项目已改变，请重新开始处理")
+            if self._template_input_snapshot != self._template_current_inputs():
+                raise ValueError("选择的文件或处理选项已改变，请返回主界面重新开始处理")
             rules = save_choice(tool, self._header_name_rules.get(tool, {}), self._template_issue, json.loads(payload))
             previous = dict(self._header_name_rules)
             self._header_name_rules[tool] = rules
             if not self._save_workspace_preferences():
                 self._header_name_rules = previous
                 raise ValueError("对应关系未能保存，请重试")
-            self.notificationRequested.emit("对应关系已保存", "请重新点击开始处理；同样表头的模板下次会自动使用这套对应关系。", "success")
+            self._template_issue = {}
+            self._append_log("已记住这份表的列名选择，继续处理。", "info")
+            # 回到正常入口，重新检查项目状态和输入；不复用失败任务的运行目录。
+            QTimer.singleShot(0, self._continue_template_run)
         except (ValueError, TypeError, KeyError) as exc:
             self.notificationRequested.emit("对应关系未保存", str(exc), "warning")
-            self.templateSelectionRequested.emit()
+            if (self._template_issue.get("tool") == self._spec.tool_id
+                    and self._template_issue_project == str(self._project_path)
+                    and self._template_input_snapshot == self._template_current_inputs()):
+                self.templateSelectionRequested.emit()
+            else:
+                self._template_issue = {}
+
+    def _template_current_inputs(self):
+        key = self._state_key()
+        return json.dumps([str(self._project_path), key, self._input_states[key],
+                           self._support_states[key], self._form_states[key]],
+                          ensure_ascii=False, sort_keys=True, default=str)
+
+    def _continue_template_run(self):
+        if self._closed or self._shutdown_requested:
+            return
+        if self._busy or self._template_input_snapshot != self._template_current_inputs():
+            self.notificationRequested.emit("列名选择已保存", "当前处理状态已改变，请回到主界面重新开始处理。", "warning")
+            return
+        self.runOrCancel()
 
     @Property("QVariantList", notify=salaryMappingChanged)
     def salaryAliasSections(self) -> list[dict[str, Any]]:
@@ -2729,9 +2774,9 @@ class AppController(QObject):
                 for kind, labels in (("fields", FIELD_LABELS), ("sheets", SHEET_LABELS)) for key, label in labels.items()]
 
     @Slot(str)
-    def saveSalaryAliasRules(self, payload: str) -> None:
+    def saveSalaryAliasRules(self, payload: str) -> bool:
         if self._busy or self._salary_pending is None or self._salary_project_key != str(self._project_path):
-            return
+            return False
         from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, alias_rules
 
         try:
@@ -2746,8 +2791,10 @@ class AppController(QObject):
             self._salary_hints = {}
             self._salary_force_dialog = True
             self._inspect_salary_in_background()
+            return True
         except (ValueError, TypeError) as exc:
             self.notificationRequested.emit("名称规则未保存", str(exc), "warning")
+            return False
 
     @Slot()
     def reviewSalaryHeaders(self) -> None:
@@ -2844,7 +2891,7 @@ class AppController(QObject):
         if self._busy or self._salary_pending is None:
             return
         try:
-            if not 1 <= first <= bottom <= 200 or bottom - first > 5:
+            if (first, bottom) != (0, 0) and (not 1 <= first <= bottom <= 200 or bottom - first > 5):
                 raise ValueError("表头范围须在 1—200 行内，连续表头最多 6 行")
             self._salary_selection_drafts = {x["group_id"]: x for x in json.loads(choices_json).get("groups", [])}
             group = next(g for g in self._salary_inspection["groups"] if g["group_id"] == group_id)
@@ -3109,6 +3156,7 @@ class AppController(QObject):
             invocation = replace(invocation, kwargs={**invocation.kwargs,
                 "template_rules": json.loads(json.dumps(self._header_name_rules.get(invocation.tool_id, {}), ensure_ascii=False))})
             self._template_issue_project = str(self._project_path)
+            self._template_input_snapshot = self._template_current_inputs()
         request = RunRequest(
             tool_id=invocation.tool_id,
             tool_name=invocation.tool_name,

@@ -191,7 +191,16 @@ def profile_key(sheet, row, values):
     return hashlib.sha256(json.dumps([sheet, row, [normalize_alias(v) for v in values]], ensure_ascii=False).encode()).hexdigest()
 
 
-def request_selection(sheets, roles, *, file="", message="请选择原表对应的列", row=1, allow_ignore=False, required_fields=None, one_of=None):
+def field_label(name):
+    """只用于界面展示，不改变识别名称、保存的键或输出字段。"""
+    return {"*姓名.简体中文": "姓名", "*身份证": "身份证号码",
+            "*参保状态": "参保状态", "*参保日期": "参保日期",
+            "*参保方案.名称": "参保方案", "*参保单位.名称": "参保单位",
+            "*责任部门.名称": "责任部门", "项目.项目名称": "项目名称",
+            "成本中心.名称": "成本中心"}.get(name, name)
+
+
+def request_selection(sheets, roles, *, file="", message="请选择原表对应的列", row=1, allow_ignore=False, required_fields=None, one_of=None, selected_sheet=""):
     if not active():
         raise ValueError(message)
     tool, rules = _current.get()
@@ -201,10 +210,13 @@ def request_selection(sheets, roles, *, file="", message="请选择原表对应�
         spec = specs[role]
         fields = {name: rules["fields"].get(role + "|" + name, values) for name, values in spec["fields"].items()}
         required = list(dict.fromkeys([*spec["required"], *(required_fields or {}).get(role, []), *(name for name in fields if role + "|" + name in rules["fields"])]))
-        described.append({"key": role, **spec, "fields": fields, "required": required, "one_of": (one_of or {}).get(role, [])})
+        described.append({"key": role, **spec, "fields": fields, "required": required,
+                          "field_labels": {name: field_label(name) for name in fields},
+                          "one_of": (one_of or {}).get(role, [])})
     if allow_ignore:
         described.append({"key": "_ignore", "label": "此工作表不是本次业务数据，不参与处理", "fields": {}, "required": []})
     raise TemplateSelectionRequired({"tool": tool, "file": str(file), "message": message, "row": row,
+        "selected_sheet": selected_sheet,
         "roles": described,
         "sheets": [{"name": _title(ws), "rows": preview(ws)} for ws in sheets]})
 
@@ -371,7 +383,8 @@ def map_sheet(sheet, role, *, required=True, file="", source_sheets=None):
                 else:
                     changes[other_col] = ""
     if missing:
-        request_selection(source_sheets or [sheet], [role], file=file, row=r, message="请确认对应列：" + "、".join(dict.fromkeys(missing)))
+        request_selection(source_sheets or [sheet], [role], file=file, row=r, selected_sheet=_title(sheet),
+                          message="请确认对应列：" + "、".join(field_label(n) for n in dict.fromkeys(missing)))
     return HeaderView(sheet, r, changes, role)
 
 
@@ -381,7 +394,7 @@ def sections(tool, rules):
     for role, spec in catalog(tool).items():
         for name, aliases in spec["fields"].items():
             key = role + "|" + name
-            result.append({"kind": "fields", "key": key, "label": spec["label"] + " · " + name,
+            result.append({"kind": "fields", "key": key, "label": spec["label"] + " · " + field_label(name),
                            "selected": rules["fields"].get(key, aliases), "options": aliases, "builtins": aliases})
         result.append({"kind": "sheets", "key": role, "label": spec["label"] + " · 工作表名称",
                        "selected": rules["sheets"].get(role, spec["sheets"]), "options": spec["sheets"],
@@ -411,7 +424,7 @@ def save_choice(tool, rules, issue, payload):
         if not col and name not in required:
             continue
         if not 1 <= col <= len(values) or not values[col - 1]:
-            raise ValueError(f"请选择{name}对应的列")
+            raise ValueError(f"请选择“{field_label(name)}”在原表中的列")
         if col in cleaned.values():
             raise ValueError("不同字段不能选择同一列")
         cleaned[name] = col
