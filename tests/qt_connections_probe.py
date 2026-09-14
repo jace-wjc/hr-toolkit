@@ -61,6 +61,13 @@ QtObject {
             probe.record("text", [title, prompt, initialValue, token])
         }
     }
+    property QtObject updatePromptDialog: QtObject {
+        function showPrompt(prompt) { probe.record("update-prompt", [prompt]) }
+    }
+    property QtObject releaseNotesDialog: QtObject {
+        function showNotes(details) { probe.record("release-notes", [details]) }
+    }
+    // Sentinel: progress changes must no longer open a standalone dialog.
     property QtObject updateProgressDialog: QtObject {
         property bool opened: false
         function open() { opened = true; probe.record("update-open", []) }
@@ -74,8 +81,8 @@ QtObject {
         ["confirmation", ["确认标题", "确认内容", "opaque-token:123"]],
         ["project", ["工作项目", "E:\\资料\\工作目录"]],
         ["text", ["输入标题", "输入提示", "初始值", "text-token:456"]],
-        ["update-open", []],
-        ["update-close", []],
+        ["update-prompt", [{"available": True, "version": "9.0.0", "notes": ["功能更新", "完整更新说明"], "token": "update-token:789"}]],
+        ["release-notes", [{"version": "8.0.0", "notes": ["问题修复", "完整历史说明"]}]],
     ]
     # Rebuilding connections repeatedly exposes nondeterministic native crashes
     # without depending on a visible desktop or a user's saved project.
@@ -91,9 +98,12 @@ QtObject {
             controller.confirmationRequested.emit(*expected[1][1])
             controller.projectCreationRequested.emit(*expected[2][1])
             controller.textInputRequested.emit(*expected[3][1])
+            controller.updatePromptRequested.emit(*expected[4][1])
+            controller.releaseNotesRequested.emit(*expected[5][1])
             controller._update_busy = True
             controller._update_status = "正在下载更新"
-            # The production handler uses the phase, not the display text.
+            # Downloads now use sidebar bindings: neither transition may call
+            # the standalone progress-dialog sentinel above.
             controller._update_phase = "downloading"
             controller.updateChanged.emit()
             controller._update_busy = False
