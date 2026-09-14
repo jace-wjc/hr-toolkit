@@ -44,7 +44,7 @@ Rectangle {
     }
     function resetPosition() {
         var initial = {}
-        if (history && entries.length) initial[String(entries[0].version)] = true
+        if (history && entries && entries.length) initial[String(entries[0].version)] = true
         expandedVersions = initial
         flick.contentY = 0
     }
