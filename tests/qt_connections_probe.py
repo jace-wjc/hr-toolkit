@@ -93,8 +93,11 @@ QtObject {
             controller.textInputRequested.emit(*expected[3][1])
             controller._update_busy = True
             controller._update_status = "正在下载更新"
+            # The production handler uses the phase, not the display text.
+            controller._update_phase = "downloading"
             controller.updateChanged.emit()
             controller._update_busy = False
+            controller._update_phase = ""
             controller.updateChanged.emit()
             app.processEvents()
             observed = roots[0].property("calls")
