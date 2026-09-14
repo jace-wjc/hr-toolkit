@@ -10,7 +10,7 @@ from collections import Counter
 from typing import Any
 
 from openpyxl.utils import get_column_letter
-from hr_toolkit.common.header_aliases import matching_columns, matching_sheets, validate_alias_rules
+from hr_toolkit.common.header_aliases import matching_columns, matching_sheets, validate_alias_rules, protected_aliases, has_custom_aliases
 
 FIELD_LABELS = {"name": "姓名", "id_card": "身份证号码", "amount": "应发工资"}
 ALIASES = {
@@ -23,10 +23,23 @@ MAX_HEADER_ROW = 200
 MAX_COLUMNS = 512
 ALIAS_PROFILE_KEY = "__name_aliases__"
 SHEET_LABELS = {"detail": "工资明细工作表", "summary": "已有汇总工作表"}
+SHEET_ALIASES = {"detail": ("明细",), "summary": ("汇总",)}
 
 
 def alias_rules(profiles: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
-    rules = validate_alias_rules(profiles.get(ALIAS_PROFILE_KEY, {}), field_labels=FIELD_LABELS, sheet_labels=SHEET_LABELS)
+    payload = profiles.get(ALIAS_PROFILE_KEY, {})
+    if not isinstance(payload, dict) or set(payload) - {"fields", "sheets"}:
+        raise ValueError("名称规则格式无效")
+    rules = {"fields": {}, "sheets": {}}
+    for kind, defaults in (("fields", ALIASES), ("sheets", SHEET_ALIASES)):
+        items = payload.get(kind, {})
+        if not isinstance(items, dict) or set(items) - set(defaults):
+            raise ValueError("名称规则包含当前工具不支持的字段或工作表")
+        for key, values in items.items():
+            merged = protected_aliases(defaults[key], values)
+            if has_custom_aliases(defaults[key], merged):
+                rules[kind][key] = merged
+    validate_alias_rules(rules, field_labels=FIELD_LABELS, sheet_labels=SHEET_LABELS)
     # 未设置的字段仍使用原名称，也不能与用户给另一字段设置的名称冲突。
     validate_alias_rules({"fields": {key: rules["fields"].get(key, list(values)) for key, values in ALIASES.items()}},
                          field_labels=FIELD_LABELS, sheet_labels=SHEET_LABELS)
@@ -183,8 +196,17 @@ def inspect_workbook(
             _apply_profile(group, profiles[group["key"]])
     elif sheet_aliases:
         matched = matching_sheets(names, sheet_aliases)
+        matched = list(dict.fromkeys([*matched, *(name for name in names if keyword in name)]))
         group = describe(matched[0] if matched else preferred)
-        if len(matched) != 1:
+        confirmed = []
+        for name in matched if len(matched) > 1 else []:
+            candidate = describe(name)
+            profile = profiles.get(candidate["key"])
+            if profile and _apply_profile(candidate, profile):
+                confirmed.append(candidate)
+        if len(confirmed) == 1:
+            group = confirmed[0]
+        elif len(matched) != 1:
             group.update(ready=False, sheet_needs_confirmation=True,
                          problem="未找到已设置名称的工作表，请选择本次工作表并重新读取列头" if not matched else "多张工作表匹配名称规则，请选择本次工作表并重新读取列头")
         elif group["key"] in profiles:

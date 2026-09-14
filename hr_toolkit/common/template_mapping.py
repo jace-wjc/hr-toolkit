@@ -12,7 +12,7 @@ from copy import copy
 from functools import wraps
 from typing import Any
 
-from .header_aliases import normalize_alias, validate_alias_rules
+from .header_aliases import normalize_alias, validate_alias_rules, protected_aliases, has_custom_aliases
 
 ERROR_PREFIX = "HR_TEMPLATE_SELECTION:"
 SUPPORTED_TOOLS = ("salary_split", "personnel_change_merge", "archive_import",
@@ -115,14 +115,26 @@ def clean_rules(tool, payload):
         if not isinstance(values, dict) or set(values) - set(labels):
             raise ValueError("名称规则包含当前工具不支持的字段或工作表")
         for key, aliases in values.items():
-            cleaned = validate_alias_rules({kind: {key: aliases}}, field_labels=labels, sheet_labels=labels)
-            result[kind].update(cleaned[kind])
+            if kind == "fields":
+                role, name = key.split("|", 1)
+                builtins = specs[role]["fields"][name]
+            else:
+                builtins = specs[key]["sheets"]
+            merged = protected_aliases(builtins, aliases)
+            if has_custom_aliases(builtins, merged):
+                cleaned = validate_alias_rules({kind: {key: merged}}, field_labels=labels, sheet_labels=labels)
+                result[kind].update(cleaned[kind])
     for role, spec in specs.items():
         owners = {}
         for name in spec["fields"]:
             key = role + "|" + name
             for alias in result["fields"].get(key, []):
                 normalized = normalize_alias(alias)
+                # 原有字段的内置同义词可能交叉（如公司/入职公司），保留旧行为。
+                if normalized in {normalize_alias(v) for v in spec["fields"][name]}:
+                    continue
+                if any(normalized in {normalize_alias(v) for v in defaults} for other, defaults in spec["fields"].items() if other != name):
+                    raise ValueError(f"{spec['label']}：“{alias}”是其他字段的内置名称，不能改作{name}")
                 if normalized in owners and owners[normalized] != name:
                     raise ValueError(f"{spec['label']}：“{alias}”不能同时对应{owners[normalized]}和{name}")
                 owners[normalized] = name
@@ -208,12 +220,12 @@ def ignored_sheet(sheet, file):
     return bool(profiles) and any(p["key"] == _ignore_key(file, _title(sheet), preview(sheet)) for p in profiles)
 
 
-def assigned_role(sheet, roles):
+def assigned_role(sheet, roles, *, confirmed_only=False):
     if not active():
         return None
     tool, rules = _current.get()
     title = _title(sheet)
-    candidates = [role for role in roles if normalize_alias(title) in {normalize_alias(s) for s in rules["sheets"].get(role, [])}]
+    candidates = [] if confirmed_only else [role for role in roles if normalize_alias(title) in {normalize_alias(s) for s in rules["sheets"].get(role, [])}]
     rows = None
     confirmed = []
     for profile in rules["profiles"]:
@@ -236,11 +248,16 @@ def choose_sheet(sheets, role, default=None, *, required=True, file="", allow_ab
         return default
     rules = _current.get()[1]
     configured = rules["sheets"].get(role, [])
+    confirmed = [ws for ws in sheets if assigned_role(ws, [role], confirmed_only=True) == role]
+    if len(confirmed) == 1:
+        return confirmed[0]
+    if len(confirmed) > 1:
+        request_selection(sheets, [role], file=file, message="多张工作表匹配手动对应关系，请确认本次工作表")
     candidates = [ws for ws in sheets if assigned_role(ws, [role]) == role]
     if len(candidates) == 1:
         return candidates[0]
-    if configured and not candidates and allow_absent:
-        return None
+    if configured and not candidates and (allow_absent or default is not None or not required):
+        configured = []  # 未命中自定义名称时，仍允许原有的内置查找。
     if candidates or configured:
         request_selection(sheets, [role], file=file, message="工作表名称未匹配或匹配了多张，请选择本次处理的工作表")
     if default is not None:
@@ -308,11 +325,7 @@ def map_sheet(sheet, role, *, required=True, file="", source_sheets=None):
             saved = profile["columns"]
             selected_row = r
             break
-    sheet_names = rules["sheets"].get(role, [])
-    if sheet_names and normalize_alias(_title(sheet)) not in {normalize_alias(n) for n in sheet_names} and not selected_row:
-        if not required:
-            return None
-        request_selection(source_sheets or [sheet], [role], file=file, message="工作表未匹配已设置的名称，请确认本次对应关系")
+    # 自定义名称扩展识别范围，不禁用调用方原有的工作表内容识别。
     def matches(values, name):
         aliases = {normalize_alias(v) for v in configured.get(name, spec["fields"][name])}
         return [i for i, value in enumerate(values, 1) if normalize_alias(value) in aliases]
@@ -369,9 +382,10 @@ def sections(tool, rules):
         for name, aliases in spec["fields"].items():
             key = role + "|" + name
             result.append({"kind": "fields", "key": key, "label": spec["label"] + " · " + name,
-                           "selected": rules["fields"].get(key, aliases), "options": aliases})
+                           "selected": rules["fields"].get(key, aliases), "options": aliases, "builtins": aliases})
         result.append({"kind": "sheets", "key": role, "label": spec["label"] + " · 工作表名称",
-                       "selected": rules["sheets"].get(role, []), "options": spec["sheets"]})
+                       "selected": rules["sheets"].get(role, spec["sheets"]), "options": spec["sheets"],
+                       "builtins": spec["sheets"], "builtinRule": "原有工作表自动识别规则（始终保留）"})
     return result
 
 

@@ -2715,14 +2715,16 @@ class AppController(QObject):
 
     @Property("QVariantList", notify=salaryMappingChanged)
     def salaryAliasSections(self) -> list[dict[str, Any]]:
-        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, ALIASES, FIELD_LABELS, SHEET_LABELS, alias_rules
+        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, ALIASES, FIELD_LABELS, SHEET_LABELS, SHEET_ALIASES, alias_rules
 
         rules = alias_rules({ALIAS_PROFILE_KEY: self._header_name_rules.get("salary_merge", {})})
         groups = self._salary_inspection.get("groups", [])
         columns = list(dict.fromkeys(c["label"] for g in groups for c in g.get("columns", [])))
         sheets = list(dict.fromkeys(name for g in groups for name in g.get("sheet_names", [])))
         return [{"kind": kind, "key": key, "label": label,
-                 "selected": rules[kind].get(key, list(ALIASES[key]) if kind == "fields" else []),
+                 "selected": rules[kind].get(key, list(ALIASES[key]) if kind == "fields" else list(SHEET_ALIASES[key])),
+                 "builtins": list(ALIASES[key]) if kind == "fields" else list(SHEET_ALIASES[key]),
+                 "builtinRule": "名称包含“明细”或“汇总”的原有识别规则始终保留" if kind == "sheets" else "",
                  "options": columns if kind == "fields" else sheets}
                 for kind, labels in (("fields", FIELD_LABELS), ("sheets", SHEET_LABELS)) for key, label in labels.items()]
 

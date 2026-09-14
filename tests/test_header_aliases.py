@@ -57,7 +57,7 @@ class HeaderAliasTest(unittest.TestCase):
         self.assertEqual(inspect_workbook(wb, profiles=saved)["selections"]["name"], 2)
 
     def test_normalization_deduplicates_and_rejects_cross_field_conflict(self):
-        self.assertEqual(alias_rules(rules(names=["name", "ＮＡＭＥ", "Name"]))["fields"]["name"], ["name"])
+        self.assertEqual(alias_rules(rules(names=["name", "ＮＡＭＥ", "Name"]))["fields"]["name"], ["姓名", "name"])
         with self.assertRaises(ValueError):
             alias_rules(rules(names=["身份证号码"]))
         columns = [{"column": 1, "label": "姓名 / 名字", "leaves": ["姓名", "名字"]}]
@@ -89,7 +89,7 @@ class HeaderAliasTest(unittest.TestCase):
 
     def test_sheet_name_can_be_shared_by_separately_supplied_roles(self):
         result = alias_rules({ALIAS_PROFILE_KEY: {"sheets": {"detail": ["Sheet1"], "summary": ["Sheet1"]}}})
-        self.assertEqual(result["sheets"]["detail"], ["Sheet1"])
+        self.assertEqual(result["sheets"]["detail"], ["明细", "Sheet1"])
 
     def test_header_position_and_column_reordering(self):
         wb = Workbook()

@@ -10,6 +10,28 @@ def normalize_alias(value: Any) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or ""))).casefold()
 
 
+def protected_aliases(builtins: Sequence[str], values: Any) -> list[str]:
+    """内置名称始终保留；兼容旧配置，只允许增删自定义部分。"""
+    if not isinstance(values, list) or len(values) > 100:
+        raise ValueError("每个字段或工作表最多设置 100 个名称")
+    result = list(dict.fromkeys(builtins))
+    seen = {normalize_alias(value) for value in result}
+    for value in values:
+        if not isinstance(value, str) or len(value) > 200 or not normalize_alias(value):
+            raise ValueError("名称须为不超过 200 字的非空文字")
+        if normalize_alias(value) not in seen:
+            result.append(value.strip())
+            seen.add(normalize_alias(value))
+    if len(result) > 100:
+        raise ValueError("内置和自定义名称合计不能超过 100 个")
+    return result
+
+
+def has_custom_aliases(builtins: Sequence[str], values: Sequence[str]) -> bool:
+    known = {normalize_alias(value) for value in builtins}
+    return any(normalize_alias(value) not in known for value in values)
+
+
 def validate_alias_rules(
     payload: Any, *, field_labels: Mapping[str, str], sheet_labels: Mapping[str, str],
 ) -> dict[str, dict[str, list[str]]]:
