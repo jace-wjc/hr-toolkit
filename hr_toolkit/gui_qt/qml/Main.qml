@@ -168,7 +168,7 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.leftMargin: root.compactSidebar ? 10 : 12
                 anchors.rightMargin: root.compactSidebar ? 10 : 12
-                anchors.topMargin: 16
+                anchors.topMargin: 6
                 anchors.bottomMargin: 14
                 spacing: 0
 
