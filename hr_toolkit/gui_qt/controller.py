@@ -587,6 +587,18 @@ class AppController(QObject):
         return self._ready_update is not None and self._ready_update_package is not None
 
     @Property(bool, notify=updateChanged)
+    def updateBlocksTools(self) -> bool:
+        return self.updateReady or (
+            self._update_busy and self._update_phase in ("preparing", "downloading", "verifying", "launching")
+        )
+
+    @Property(str, notify=updateChanged)
+    def updateBlockMessage(self) -> str:
+        if self.updateReady:
+            return "新版本已准备好，请先点击左下角“重启以更新”。"
+        return "正在下载或校验更新，暂不能开始工具处理，请等待完成后重启以更新。"
+
+    @Property(bool, notify=updateChanged)
     def updateBackground(self) -> bool:
         return not self._update_manual
 
@@ -2643,10 +2655,10 @@ class AppController(QObject):
         self.updateChanged.emit()
 
     def _block_run_for_update(self) -> bool:
-        if not self.updateReady:
+        if not self.updateBlocksTools:
             return False
         self.notificationRequested.emit(
-            "请先更新工具", "新版本已准备好，请先点击左下角“重启以更新”。", "warning",
+            "请先更新工具", self.updateBlockMessage, "warning",
         )
         return True
 

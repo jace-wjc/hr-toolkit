@@ -119,6 +119,37 @@ class QtControllerTests(unittest.TestCase):
         self.assertTrue(controller.updateReady)
         controller.close()
 
+    def test_update_download_blocks_tool_entrypoints_until_cancel_or_failure(self) -> None:
+        controller = self.controller()
+        for phase in ("preparing", "downloading", "verifying", "launching"):
+            with self.subTest(phase=phase):
+                controller._update_busy = True
+                controller._update_phase = phase
+                self.assertTrue(controller.updateBlocksTools)
+                with patch.object(controller, "_prepare_invocation") as prepare:
+                    controller.runOrCancel()
+                    prepare.assert_not_called()
+                # Inner entry points must also reject calls from existing dialogs.
+                controller._prepare_invocation(preview=False)
+                controller._start_preview(None)
+                with patch.object(controller._run_coordinator, "start") as start:
+                    controller._start_project_run(None)
+                    start.assert_not_called()
+                controller._set_busy(True)
+                with patch.object(controller._run_coordinator, "cancel") as cancel:
+                    controller.runOrCancel()
+                    cancel.assert_called_once()
+                controller._set_busy(False)
+        controller._update_phase = "checking"
+        self.assertFalse(controller.updateBlocksTools)
+        for result in ("download-cancelled", "download-error"):
+            controller._update_busy = True
+            controller._update_phase = "downloading"
+            with patch("hr_toolkit.gui_qt.controller.runlog.log_line"):
+                controller._apply_update_result(result, "fixture")
+            self.assertFalse(controller.updateBlocksTools)
+        controller.close()
+
     def test_no_update_only_prompts_after_manual_check(self) -> None:
         controller = self.controller()
         prompts = []

@@ -963,7 +963,7 @@ ApplicationWindow {
                                 // controller explains the required next step.  A
                                 // running action must also stay clickable so it can
                                 // always be stopped safely.
-                                enabled: controller.busy || (!controller.workspaceBusy && !controller.updateReady)
+                                enabled: controller.busy || (!controller.workspaceBusy && !controller.updateBlocksTools)
                                 implicitWidth: 132
                                 implicitHeight: 40
                                 onClicked: controller.runOrCancel()
@@ -975,9 +975,9 @@ ApplicationWindow {
                         }
 
                         Text {
-                            visible: controller.updateReady
+                            visible: controller.updateBlocksTools
                             Layout.fillWidth: true; wrapMode: Text.Wrap
-                            text: "新版本已准备好，请先点击左下角“重启以更新”。"
+                            text: controller.updateBlockMessage
                             color: root.primary; font.pixelSize: 12
                         }
 
