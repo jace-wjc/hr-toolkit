@@ -13,7 +13,7 @@ Dialog {
     modal: true
     closePolicy: hasUpdate ? Popup.NoAutoClose : Popup.CloseOnEscape
     width: Math.min(hasUpdate ? 580 : 260, parent ? parent.width - 32 : 580)
-    height: Math.min(implicitHeight, parent ? parent.height - 32 : 600)
+    height: Math.min(implicitHeight, hasUpdate ? 520 : 320, parent ? parent.height * 0.84 : 520)
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
     padding: 20
@@ -27,7 +27,7 @@ Dialog {
     header: Item { implicitHeight: 0 }
 
     function showPrompt(value) { prompt = value; answered = false; open() }
-    onOpened: primary.forceActiveFocus()
+    onOpened: { notesView.resetPosition(); primary.forceActiveFocus() }
     function choose(accepted) {
         if (answered) return
         answered = true
@@ -36,15 +36,7 @@ Dialog {
         if (hasUpdate && token) decision(token, accepted)
     }
 
-    contentItem: Flickable {
-        implicitHeight: content.implicitHeight
-        contentHeight: content.implicitHeight
-        contentWidth: width
-        clip: true; boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar {}
-        ColumnLayout {
-            id: content
-            width: parent.width
+    contentItem: ColumnLayout {
             spacing: 18
             ColumnLayout {
                 Layout.fillWidth: true; visible: !dialog.hasUpdate; spacing: 12
@@ -62,17 +54,15 @@ Dialog {
                     Text { Layout.fillWidth: true; text: "新版本为 v" + (dialog.prompt.version || "") + "，你当前使用的是 v" + (dialog.prompt.currentVersion || "") + "。是否现在更新？"; textFormat: Text.PlainText; font.pixelSize: 13; color: "#242424"; wrapMode: Text.Wrap }
                 }
             }
-            Rectangle {
+            UpdateNotesView {
+                id: notesView
+                objectName: "promptNotesView"
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(notesText.implicitHeight + 28, 260)
+                Layout.fillHeight: true
+                Layout.minimumHeight: 0
+                Layout.preferredHeight: implicitHeight
                 visible: dialog.hasUpdate && (dialog.prompt.notes || []).length > 0
-                color: "#FFFFFF"; border.color: "#DDDDDD"; radius: 8
-                ScrollView {
-                    id: notesScroll
-                    anchors.fill: parent; anchors.margins: 14; clip: true
-                    contentWidth: availableWidth
-                    Text { id: notesText; width: notesScroll.availableWidth; text: (dialog.prompt.notes || []).join("\n\n"); textFormat: Text.PlainText; color: "#242424"; font.pixelSize: 13; wrapMode: Text.Wrap }
-                }
+                notes: dialog.prompt.notes || []
             }
             Text {
                 Layout.fillWidth: true; visible: dialog.hasUpdate && (!!dialog.prompt.mandatory || !!dialog.prompt.manual)
@@ -81,7 +71,6 @@ Dialog {
                       + (dialog.prompt.mandatory ? "本次为必要更新；不更新将退出程序。" : "")
                 color: "#606060"; font.pixelSize: 12; wrapMode: Text.Wrap
             }
-        }
     }
     footer: Item {
         implicitHeight: buttonFlow.implicitHeight + 26
