@@ -407,10 +407,18 @@ ApplicationWindow {
                                 }
                             }
                         }
+                        Rectangle {
+                            width: parent.width; height: 33; radius: 8; color: helpNavMouse.containsMouse ? root.navHover : "transparent"
+                            Row { anchors.fill: parent; anchors.leftMargin: root.compactSidebar ? 0 : 9; spacing: 8
+                                Item { width: root.compactSidebar ? parent.width : 18; height: parent.height; ToolIcon { anchors.centerIn: parent; width: 16; height: 16; iconId: "tutorial"; strokeColor: "#78766E" } }
+                                Text { visible: !root.compactSidebar; width: parent.width - 34; height: parent.height; text: "使用教程"; color: "#78766E"; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+                            }
+                            MouseArea { id: helpNavMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: helpDialog.open() }
+                        }
                     }
                 }
 
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.bottomMargin: 6; color: "#EBE9E4" }
+                Rectangle { visible: root.showLegacyHistoryEntry; Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.bottomMargin: 6; color: "#EBE9E4" }
                 Rectangle {
                     visible: root.showLegacyHistoryEntry
                     Layout.fillWidth: true; Layout.preferredHeight: visible ? 32 : 0; radius: 8; color: historyNavMouse.containsMouse ? root.navHover : "transparent"
@@ -419,14 +427,6 @@ ApplicationWindow {
                         Text { visible: !root.compactSidebar; width: parent.width - 34; height: parent.height; text: "旧版记录"; color: "#55534C"; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
                     }
                     MouseArea { id: historyNavMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { controller.requestHistory(); historyDrawer.open() } }
-                }
-                Rectangle {
-                    Layout.fillWidth: true; Layout.preferredHeight: 32; radius: 8; color: helpNavMouse.containsMouse ? root.navHover : "transparent"
-                    Row { anchors.fill: parent; anchors.leftMargin: root.compactSidebar ? 0 : 9; spacing: 8
-                        Item { width: root.compactSidebar ? parent.width : 18; height: parent.height; ToolIcon { anchors.centerIn: parent; width: 16; height: 16; iconId: "tutorial"; strokeColor: "#78766E" } }
-                        Text { visible: !root.compactSidebar; width: parent.width - 34; height: parent.height; text: "使用教程"; color: "#78766E"; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
-                    }
-                    MouseArea { id: helpNavMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: helpDialog.open() }
                 }
                 Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 8; color: "#EBE9E4" }
                 RowLayout {

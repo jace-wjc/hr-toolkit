@@ -33,7 +33,7 @@ Item {
         background: Rectangle {
             radius: 6
             color: sidebarButton.down ? "#E3E0D9" : sidebarButton.hovered ? "#EBE8E1" : "transparent"
-            border.width: sidebarButton.activeFocus ? 1 : 0
+            border.width: sidebarButton.visualFocus ? 1 : 0
             border.color: "#78766E"
         }
         contentItem: Item { Image { anchors.centerIn: parent; width: 17; height: 17; source: "sidebar-simple.png"; opacity: 0.65; sourceSize.width: 34; sourceSize.height: 34 } }
