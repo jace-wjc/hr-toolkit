@@ -221,24 +221,6 @@ ApplicationWindow {
                                     font.weight: Font.DemiBold
                                 }
                                 Item { Layout.fillWidth: true }
-                                Button {
-                                    Layout.preferredWidth: 76
-                                    Layout.fillHeight: true
-                                    opacity: controller.recentProjects.length > 0 ? 1.0 : 0.45
-                                    enabled: controller.recentProjects.length > 0
-                                    hoverEnabled: true
-                                    focusPolicy: Qt.StrongFocus
-                                    onClicked: projectMenu.open()
-                                    contentItem: Item {
-                                        Row {
-                                            anchors.centerIn: parent
-                                            spacing: 3
-                                            Text { text: "最近项目"; color: root.textMuted; font.pixelSize: 11 }
-                                            ToolIcon { width: 10; height: 10; iconId: "chevron_down"; strokeColor: root.textMuted; lineWidth: 1.2 }
-                                        }
-                                    }
-                                    background: Rectangle { color: "transparent" }
-                                }
                             }
                         }
 
