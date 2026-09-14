@@ -52,6 +52,21 @@ class CIScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Add CI test routing"):
             ci_scope.select_scope(["hr_toolkit/tools/new_unknown_tool.py"])
 
+    def test_release_notes_selects_release_and_display_callers(self):
+        scope = ci_scope.select_scope(["hr_toolkit/release_notes.py"])
+        self.assertEqual(set(scope["targets"]), {
+            "tests.test_release", "tests.test_release_metadata", "tests.test_app_update",
+            "tests.test_qt_controller", "tests.test_windows_packaging",
+            "tests.test_prepare_gitee_release",
+        })
+        self.assertEqual(set(scope["win7_targets"]), {
+            "tests.test_release_metadata", "tests.test_qt_controller",
+        })
+        self.assertEqual(scope["python_files"], ["hr_toolkit/release_notes.py"])
+        self.assertFalse(scope["full"])
+        self.assertFalse(scope["audit"])
+        self.assertFalse(scope["ocr_smoke"])
+
     def test_deleted_test_is_not_imported(self):
         scope = ci_scope.select_scope(["tests/test_deleted_case.py"])
         self.assertEqual(scope["targets"], [])
