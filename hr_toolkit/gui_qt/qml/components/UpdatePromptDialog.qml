@@ -87,7 +87,7 @@ Dialog {
                 height: 30
                 text: !dialog.hasUpdate ? "好" : dialog.prompt.manual ? "下载更新" : "安装更新"
                 Accessible.name: text
-                background: Rectangle { radius: height / 2; color: primary.down ? "#005FCC" : primary.hovered ? "#0070E8" : "#007AFF"; border.width: primary.activeFocus ? 2 : 0; border.color: "#004DA8" }
+                background: Rectangle { radius: height / 2; color: primary.down ? "#005FCC" : primary.hovered ? "#0070E8" : "#007AFF"; border.width: primary.visualFocus ? 2 : 0; border.color: "#99C7FF" }
                 contentItem: Text { text: primary.text; color: "white"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 onClicked: dialog.choose(true)
             }
@@ -98,7 +98,7 @@ Dialog {
                 width: 124; height: 30
                 text: dialog.prompt.mandatory ? "退出程序" : "暂不更新"
                 Accessible.name: text
-                background: Rectangle { radius: height / 2; color: secondary.down ? "#DEDEDE" : secondary.hovered ? "#E9E9E9" : "#EEEEEE"; border.width: secondary.activeFocus ? 2 : 0; border.color: "#007AFF" }
+                background: Rectangle { radius: height / 2; color: secondary.down ? "#DEDEDE" : secondary.hovered ? "#E9E9E9" : "#EEEEEE"; border.width: secondary.visualFocus ? 2 : 0; border.color: "#99C7FF" }
                 contentItem: Text { text: secondary.text; color: "#242424"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 onClicked: dialog.choose(false)
             }

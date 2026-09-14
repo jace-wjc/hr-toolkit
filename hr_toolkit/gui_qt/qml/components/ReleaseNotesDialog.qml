@@ -50,7 +50,7 @@ Dialog {
             objectName: "releaseNotesDone"
             anchors.right: parent.right; anchors.rightMargin: 20
             width: 100; height: 30; text: "好"
-            background: Rectangle { radius: 15; color: done.down ? "#005FCC" : "#007AFF"; border.width: done.activeFocus ? 2 : 0; border.color: "#004DA8" }
+            background: Rectangle { radius: 15; color: done.down ? "#005FCC" : "#007AFF"; border.width: done.visualFocus ? 2 : 0; border.color: "#99C7FF" }
             contentItem: Text { text: done.text; color: "white"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
             onClicked: dialog.close()
         }

@@ -76,7 +76,7 @@ Dialog {
                     enabled: dialog.canCancel
                     text: dialog.phase === "cancelling" ? "正在取消…" : "取消"
                     Accessible.name: text
-                    background: Rectangle { radius: 6; color: cancel.down ? "#DEDEDE" : "#EEEEEE"; border.width: cancel.activeFocus ? 2 : 0; border.color: "#007AFF" }
+                    background: Rectangle { radius: 6; color: cancel.down ? "#DEDEDE" : "#EEEEEE"; border.width: cancel.visualFocus ? 2 : 0; border.color: "#99C7FF" }
                     contentItem: Text { text: cancel.text; font.pixelSize: 13; color: cancel.enabled ? "#242424" : "#888888"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: dialog.cancelRequested()
                 }
