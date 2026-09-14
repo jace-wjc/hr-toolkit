@@ -458,22 +458,63 @@ ApplicationWindow {
                             anchors.fill: parent; radius: 10
                             color: sidebarUpdateCard.down ? "#F3F3F1" : "#FFFFFF"
                         }
-                        // Clip a full rounded surface from the bottom up. This
-                        // works with Qt 5's software renderer without blur or
-                        // shader layers, including the legacy Windows build.
-                        Item {
+                        // Small CPU-painted waves also work with Qt 5's software
+                        // renderer. No shader, blur layer or continuous idle work.
+                        Canvas {
                             id: updateFill
                             readonly property real fraction: controller.updateReady ? 0 : controller.updatePhase === "verifying" ? 1 : Math.max(0, Math.min(1, controller.updateProgress))
-                            x: 1; width: parent.width - 2
-                            anchors.bottom: parent.bottom; anchors.bottomMargin: 1
-                            height: (parent.height - 2) * fraction
-                            clip: true
+                            property real level: fraction
+                            property real wavePhase: 0
+                            readonly property bool wavesRunning: visible && root.visible
+                                && root.visibility !== Window.Minimized && Qt.application.state === Qt.ApplicationActive
+                                && controller.updateBusy && controller.updatePhase === "downloading"
+                                && level > 0 && level < 1
+                            anchors.fill: parent; anchors.margins: 1
                             visible: !controller.updateReady
-                            Behavior on height { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
-                            Rectangle {
-                                width: parent.width; height: sidebarUpdateCard.height - 2
-                                anchors.bottom: parent.bottom; radius: 9
-                                color: "#DDE8EB"; opacity: 0.72
+                            renderTarget: Canvas.Image
+                            renderStrategy: Canvas.Cooperative
+                            Behavior on level { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+                            onLevelChanged: requestPaint()
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+                            onVisibleChanged: if (visible) requestPaint()
+                            Timer {
+                                interval: 33
+                                repeat: true
+                                running: updateFill.wavesRunning
+                                onTriggered: {
+                                    updateFill.wavePhase = (updateFill.wavePhase + 0.045) % (Math.PI * 2)
+                                    updateFill.requestPaint()
+                                }
+                            }
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.clearRect(0, 0, width, height)
+                                if (width <= 0 || height <= 0 || level <= 0)
+                                    return
+                                ctx.save()
+                                ctx.beginPath()
+                                ctx.roundedRect(0, 0, width, height, Math.min(9, width / 2, height / 2), Math.min(9, width / 2, height / 2))
+                                ctx.clip()
+                                var waterline = height * (1 - level)
+                                // Taper at both ends: 0% stays empty; 100% is full.
+                                var amplitude = Math.min(2.4, height * level * 0.45, waterline * 0.45)
+                                function drawWave(offset, direction, scale, color) {
+                                    ctx.beginPath()
+                                    ctx.moveTo(0, height)
+                                    for (var x = 0; x <= width + 5; x += 5) {
+                                        var px = Math.min(x, width)
+                                        var angle = px / width * Math.PI * 2 + wavePhase * direction + offset
+                                        ctx.lineTo(px, waterline + Math.sin(angle) * amplitude * scale)
+                                    }
+                                    ctx.lineTo(width, height)
+                                    ctx.closePath()
+                                    ctx.fillStyle = color
+                                    ctx.fill()
+                                }
+                                drawWave(1.4, -1, 0.7, "rgba(173, 200, 209, 0.22)")
+                                drawWave(0, 1, 1, "rgba(194, 215, 221, 0.42)")
+                                ctx.restore()
                             }
                         }
                         Rectangle {
