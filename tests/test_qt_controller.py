@@ -47,7 +47,7 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
-    def test_background_and_manual_updates_prompt_before_download(self) -> None:
+    def test_background_update_downloads_immediately_but_manual_check_prompts(self) -> None:
         from hr_toolkit.app_update import UpdateInfo
         info = UpdateInfo("9.0.0", "https://gitee.com/setup.exe", "a" * 64, (), True, "https://gitee.com/manifest")
         controller = self.controller()
@@ -55,13 +55,28 @@ class QtControllerTests(unittest.TestCase):
         controller.updatePromptRequested.connect(prompts.append)
         with patch.object(controller, "_accept_update") as download:
             controller._apply_update_result("available", info)
-            download.assert_not_called()
-        self.assertEqual(prompts[-1]["version"], "9.0.0")
+            download.assert_called_once_with(info, background=True)
+        self.assertEqual(prompts, [])
         controller._update_manual = True
         with patch.object(controller, "_accept_update") as download:
             controller._apply_update_result("available", info)
             download.assert_not_called()
         self.assertEqual(prompts[-1]["version"], "9.0.0")
+        controller.close()
+
+    def test_background_download_keeps_origin_and_can_start_alongside_work(self) -> None:
+        from hr_toolkit.app_update import UpdateInfo
+        controller = self.controller()
+        info = UpdateInfo("9.0.0", "https://gitee.com/setup.exe", "a" * 64, (), False, "https://gitee.com/manifest")
+        controller._set_busy(True)
+        with patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread:
+            controller._accept_update(info, background=True)
+            thread.return_value.start.assert_called_once()
+        self.assertFalse(controller._update_manual)
+        self.assertTrue(controller.updateBusy)
+        self.assertEqual(controller.updatePhase, "preparing")
+        self.assertTrue(controller.busy)
+        controller._set_busy(False)
         controller.close()
 
     def test_download_ready_does_not_install_and_blocks_new_runs_only(self) -> None:

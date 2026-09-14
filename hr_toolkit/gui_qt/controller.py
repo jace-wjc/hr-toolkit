@@ -2583,6 +2583,9 @@ class AppController(QObject):
             self._pending_update = payload
             self._update_status = f"发现新版本 v{payload.version}"
             self.updateChanged.emit()
+            if not self._update_manual and payload.update_mode == "auto":
+                self._accept_update(payload, background=True)
+                return
             token = f"update:{time.monotonic_ns()}"
             self._pending_confirmation = token
             self._pending_confirmation_action = ("update", payload)
@@ -2679,12 +2682,12 @@ class AppController(QObject):
 
         threading.Thread(target=worker, daemon=True, name="HRToolkit-update-install").start()
 
-    def _accept_update(self, update: UpdateInfo) -> None:
+    def _accept_update(self, update: UpdateInfo, *, background: bool = False) -> None:
         if self._update_busy:
             return
-        # Both check origins now require confirmation before downloading.
         # Downloading is safe alongside work; only installation requires idle.
-        self._update_manual = True
+        # Keep automatic download failures quiet; confirmed downloads report them.
+        self._update_manual = not background
         self._pending_update = update
         self._update_busy = True
         self._update_progress = -1.0
