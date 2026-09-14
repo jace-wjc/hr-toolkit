@@ -954,6 +954,45 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertIsNone(manifest.get("pending_restore"))
         self.assertTrue(extra.is_file())
 
+    def test_restore_tolerates_system_metadata_without_changing_registered_files(self) -> None:
+        running, trash_path = self._trashed_successful_batch()
+        for directory in (trash_path / "batch", trash_path / "batch" / "上传资料" / "子目录",
+                          trash_path / "batch" / "处理结果", trash_path / "batch" / "补充资料"):
+            directory.mkdir(parents=True, exist_ok=True)
+            for name in (".DS_Store", "Thumbs.db", "desktop.ini"):
+                (directory / name).write_bytes(b"system metadata")
+
+        restored = self.store.restore_from_trash(running.summary.id)
+
+        self.assertEqual(len(restored.files), 1)
+        self.assertEqual(restored.files[0].path(self.store.workspace).read_bytes(), b"restore")
+        self.assertTrue(self.store.integrity_check())
+        self.store.close()
+        self.store = ProjectStore.open(self.project_root)
+        self.assertTrue(self.store.integrity_check())
+        self.assertTrue((restored.directories[CATEGORY_RESULTS] / ".DS_Store").is_file())
+
+    def test_restore_does_not_ignore_other_hidden_or_temporary_files(self) -> None:
+        for name in (".hidden.xlsx", "~$工资.xlsx", "._工资.xlsx", ".DS_Store.xlsx"):
+            with self.subTest(name=name):
+                running, trash_path = self._trashed_successful_batch()
+                extra = trash_path / "batch" / "处理结果" / name
+                extra.write_bytes(b"unregistered")
+                with self.assertRaisesRegex(ProjectStoreError, "未登记文件"):
+                    self.store.restore_from_trash(running.summary.id)
+                self.assertTrue(extra.is_file())
+
+    def test_restore_rejects_system_metadata_symlink(self) -> None:
+        running, trash_path = self._trashed_successful_batch()
+        link = trash_path / "batch" / ".DS_Store"
+        try:
+            link.symlink_to(self.sources / "回收.xlsx")
+        except (OSError, NotImplementedError):
+            self.skipTest("平台不支持创建符号链接")
+        with self.assertRaisesRegex(ProjectStoreError, "链接"):
+            self.store.restore_from_trash(running.summary.id)
+        self.assertIsNone(self.store.get_batch(running.summary.id))
+
     def test_read_only_project_can_list_trash_but_cannot_restore(self) -> None:
         running, _trash_path = self._trashed_successful_batch()
         read_only = ProjectStore.open(self.project_root)

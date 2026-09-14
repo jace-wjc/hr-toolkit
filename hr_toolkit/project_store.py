@@ -2230,6 +2230,9 @@ class ProjectStore:
                 batch_root,
                 ignore_temporary=False,
             )
+            # Finder/Explorer may create these after import. The strict walk
+            # still checks links and file types before this name-only filter.
+            if path.name.casefold() not in IGNORED_IMPORT_NAMES
         }
         undeclared = sorted(actual_paths - expected_paths, key=lambda path: path.as_posix().casefold())
         if undeclared:
@@ -2247,7 +2250,11 @@ class ProjectStore:
             for item in _file_objects(manifest)
             if str(item.get("category")) == CATEGORY_RESULTS
         }
-        return [path for path, _parts in _walk_directory_strict(result_root, ignore_temporary=False) if path not in registered]
+        return [
+            path
+            for path, _parts in _walk_directory_strict(result_root, ignore_temporary=False)
+            if path not in registered and path.name.casefold() not in IGNORED_IMPORT_NAMES
+        ]
 
     def _assert_no_unregistered_results(self, manifest: dict[str, Any]) -> None:
         unregistered = self._unregistered_result_files(manifest)
