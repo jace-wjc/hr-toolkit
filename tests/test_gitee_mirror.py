@@ -121,6 +121,7 @@ class GiteeMirrorTests(unittest.TestCase):
             tag=self.TAG,
             repository=self.GITHUB_REPOSITORY,
             project_version=self.VERSION,
+            notes=("Gitee 镜像测试更新内容",),
             download_base_url=(
                 f"https://gitee.com/{self.GITEE_REPOSITORY}/releases/download"
             ),
@@ -195,6 +196,7 @@ class GiteeMirrorTests(unittest.TestCase):
                 tag=self.TAG,
                 repository=self.GITHUB_REPOSITORY,
                 project_version=self.VERSION,
+                notes=("Gitee 镜像测试更新内容",),
                 download_base_url=(
                     f"https://gitee.com/{self.GITEE_REPOSITORY}/releases/download"
                 ),
