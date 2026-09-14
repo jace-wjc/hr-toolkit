@@ -387,14 +387,6 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        Rectangle {
-                            width: parent.width; height: 33; radius: 8; color: helpNavMouse.containsMouse ? root.navHover : "transparent"
-                            Row { anchors.fill: parent; anchors.leftMargin: root.compactSidebar ? 0 : 9; spacing: 8
-                                Item { width: root.compactSidebar ? parent.width : 18; height: parent.height; ToolIcon { anchors.centerIn: parent; width: 16; height: 16; iconId: "tutorial"; strokeColor: "#78766E" } }
-                                Text { visible: !root.compactSidebar; width: parent.width - 34; height: parent.height; text: "使用教程"; color: "#78766E"; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
-                            }
-                            MouseArea { id: helpNavMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: helpDialog.open() }
-                        }
                     }
                 }
 
@@ -408,7 +400,42 @@ ApplicationWindow {
                     }
                     MouseArea { id: historyNavMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { controller.requestHistory(); historyDrawer.open() } }
                 }
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 8; color: "#EBE9E4" }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 6; color: "#EBE9E4" }
+                AppButton {
+                    id: sidebarUpdateCheckButton
+                    objectName: "sidebarUpdateCheckButton"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 32
+                    text: controller.updateBusy ? "更新处理中…" : "检查更新"
+                    variant: "link"
+                    leftPadding: 9
+                    rightPadding: 9
+                    enabled: !controller.updateBusy
+                    onClicked: controller.requestUpdateCheck()
+                    contentItem: RowLayout {
+                        spacing: 8
+                        Item {
+                            Layout.preferredWidth: 18
+                            Layout.fillHeight: true
+                            Image {
+                                anchors.centerIn: parent
+                                width: 16; height: 16
+                                source: "components/arrows-clockwise.png"
+                                sourceSize.width: 32; sourceSize.height: 32
+                                opacity: sidebarUpdateCheckButton.enabled ? 0.65 : 0.3
+                            }
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: sidebarUpdateCheckButton.text
+                            color: sidebarUpdateCheckButton.enabled ? root.textMain : root.textDisabled
+                            font.pixelSize: 13
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 6; Layout.bottomMargin: 8; color: "#EBE9E4" }
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
@@ -478,10 +505,18 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                         }
                     }
-                    ColumnLayout {
-                        spacing: 4
-                        AppButton { Layout.preferredWidth: 116; text: controller.updateBusy ? "更新处理中…" : "↻  检查更新"; enabled: !controller.updateBusy; onClicked: controller.requestUpdateCheck() }
-                        AppButton { Layout.alignment: Qt.AlignRight; text: "更新记录"; variant: "link"; enabled: !controller.updateBusy; onClicked: controller.showReleaseNotes() }
+                    AppButton {
+                        objectName: "tutorialButton"
+                        text: "使用教程"
+                        variant: "link"
+                        onClicked: helpDialog.open()
+                    }
+                    AppButton {
+                        objectName: "releaseNotesButton"
+                        text: "更新记录"
+                        variant: "link"
+                        enabled: !controller.updateBusy
+                        onClicked: controller.showReleaseNotes()
                     }
                 }
 
