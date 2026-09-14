@@ -25,7 +25,7 @@ Item {
         id: sidebarButton
         objectName: "sidebarToggleButton"
         x: chrome.nativeMac ? 82 : 10
-        y: 5; width: 32; height: 30
+        y: chrome.nativeMac ? 1 : 5; width: 32; height: 30
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         Accessible.name: chrome.sidebar.pinned ? "收起左侧栏" : "固定展开左侧栏"
