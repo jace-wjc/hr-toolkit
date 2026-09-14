@@ -19,7 +19,7 @@ ApplicationWindow {
     height: Math.min(preferredWindowHeight,
                      Math.max(minimumHeight, currentScreenAvailableHeight - initialWindowMargin))
     visible: true
-    color: "#F7F5F1"
+    color: "#FCFCFB"
     title: "HR Workbench v" + controller.appVersion
     flags: Qt.platform.os === "windows" ? Qt.Window | Qt.FramelessWindowHint : Qt.Window
     property bool nativeTitleIntegrated: false
@@ -104,6 +104,15 @@ ApplicationWindow {
         controller.start()
     }
 
+    Rectangle {
+        objectName: "sidebarTitleBackground"
+        x: sidebar.x
+        width: sidebar.width
+        height: windowChrome.height
+        visible: sidebar.visible
+        color: sidebar.color
+        z: 19
+    }
     WindowChrome {
         id: windowChrome
         objectName: "windowChrome"

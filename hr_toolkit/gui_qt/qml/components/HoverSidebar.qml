@@ -14,7 +14,7 @@ Rectangle {
     x: expanded ? 0 : -width
     visible: expanded || slide.running
     enabled: expanded
-    color: "#F7F5F1"
+    color: "#FBFBF9"
     border.width: 0
     clip: true
 
