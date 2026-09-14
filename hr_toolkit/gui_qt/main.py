@@ -131,6 +131,13 @@ def main() -> int:
         return 1
     root_window = engine.rootObjects()[0]
     root_window.setIcon(app.windowIcon())
+    from .window_chrome import integrate_mac_titlebar
+
+    try:
+        integrate_mac_titlebar(root_window)
+    except (AttributeError, OSError, ValueError, TypeError) as exc:
+        # Native decorations remain usable if the optional Cocoa bridge fails.
+        runlog.log_line(f"保留系统标题栏：{exc}")
     live_resize_updater = LiveResizeUpdater(
         root_window if sys.platform.startswith("win") else None
     )

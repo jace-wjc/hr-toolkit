@@ -21,6 +21,9 @@ ApplicationWindow {
     visible: true
     color: "#F7F5F1"
     title: "HR Workbench v" + controller.appVersion
+    flags: Qt.platform.os === "windows" ? Qt.Window | Qt.FramelessWindowHint : Qt.Window
+    property bool nativeTitleIntegrated: false
+    readonly property alias sidebarPanel: sidebar
 
     readonly property color primary: "#17715B"
     readonly property color primaryActive: "#125E4B"
@@ -37,11 +40,8 @@ ApplicationWindow {
     readonly property color navHover: "#F0EEE8"
     readonly property int contentMaxWidth: 820
     readonly property bool showLegacyHistoryEntry: false
-    // Keep the navigation geometry stable while the native window is dragged.
-    // Hysteresis makes the responsive mode switch at most once in either
-    // direction instead of repeatedly rebuilding both sides of the layout
-    // around one breakpoint.
-    property bool compactSidebar: false
+    // Navigation stays full-width when shown; small windows start collapsed.
+    readonly property bool compactSidebar: false
     property bool wideContentInsets: false
 
     // Keep breakpoint-only geometry stable during a live native resize.  The
@@ -65,10 +65,6 @@ ApplicationWindow {
     onHeightChanged: settleTimer.restart()
 
     function updateResponsiveMode() {
-        if (!compactSidebar && settledWidth <= 860)
-            compactSidebar = true
-        else if (compactSidebar && settledWidth >= 980)
-            compactSidebar = false
         if (!wideContentInsets && settledWidth >= 1540)
             wideContentInsets = true
         else if (wideContentInsets && settledWidth <= 1460)
@@ -104,21 +100,50 @@ ApplicationWindow {
     }
     Component.onCompleted: {
         updateResponsiveMode()
+        if (width <= 980) sidebar.pinned = false
         controller.start()
+    }
+
+    WindowChrome {
+        id: windowChrome
+        objectName: "windowChrome"
+        width: parent.width
+        window: root
+        sidebar: root.sidebarPanel
+        nativeMac: root.nativeTitleIntegrated
+        systemButtons: Qt.platform.os === "windows"
+        z: 30
+    }
+    WindowResizeEdges {
+        anchors.fill: parent
+        window: root
+        enabled: Qt.platform.os === "windows"
+        visible: enabled && root.visibility !== Window.Maximized && root.visibility !== Window.FullScreen
+        z: 40
     }
 
     RowLayout {
         anchors.fill: parent
+        anchors.topMargin: windowChrome.height
         spacing: 0
 
-        Rectangle {
+        Item {
+            Layout.fillHeight: true
+            Layout.preferredWidth: sidebar.reservedWidth
+            Layout.minimumWidth: Layout.preferredWidth
+            Layout.maximumWidth: Layout.preferredWidth
+        }
+        HoverSidebar {
             id: sidebar
             objectName: "sidebar"
-            Layout.fillHeight: true
-            Layout.preferredWidth: root.compactSidebar ? 76 : 248
-            Layout.minimumWidth: Layout.preferredWidth
-            color: "#F7F5F1"
-            border.color: "#EBE9E4"
+            parent: root.contentItem
+            y: windowChrome.height
+            width: 248
+            height: parent.height - y
+            z: 20
+            triggerHovered: windowChrome.triggerHovered
+            keepOpen: projectMenu.opened
+            windowActive: root.active
 
             ColumnLayout {
                 anchors.fill: parent
@@ -433,7 +458,7 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.leftMargin: root.compactSidebar ? 12 : 28
                 anchors.rightMargin: root.compactSidebar ? 58 : (root.wideContentInsets ? 102 : 66)
-                anchors.topMargin: 39
+                anchors.topMargin: 28
                 anchors.bottomMargin: 14
                 spacing: 14
 

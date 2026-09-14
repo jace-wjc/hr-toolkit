@@ -324,9 +324,13 @@ class QtEntrypointTests(unittest.TestCase):
         )
         source = qml_path.read_text(encoding="utf-8")
 
-        # Responsive breakpoints use settled width to avoid layout churn
-        self.assertIn("settledWidth <= 860", source)
-        self.assertIn("settledWidth >= 980", source)
+        # Only content insets follow settled breakpoints. The sidebar is now
+        # explicit pinned/hover state instead of the old narrow icon rail.
+        self.assertIn("settledWidth >= 1540", source)
+        self.assertIn("settledWidth <= 1460", source)
+        self.assertIn("if (width <= 980) sidebar.pinned = false", source)
+        self.assertIn("Layout.preferredWidth: sidebar.reservedWidth", source)
+        self.assertIn("keepOpen: projectMenu.opened", source)
         self.assertNotIn("Behavior on Layout.preferredWidth", source)
         self.assertIn(
             "anchors.leftMargin: root.compactSidebar ? 12 : 28",
