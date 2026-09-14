@@ -2448,7 +2448,7 @@ class AppController(QObject):
         self._release_notes_open = True
         self.releaseNotesRequested.emit({
             "startup": False, "currentVersion": __version__,
-            "entries": release_entries(__version__),
+            "entries": release_entries(__version__)[:10],
         })
 
     @Slot()

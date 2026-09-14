@@ -7,6 +7,7 @@ Rectangle {
     property var notes: []
     property var entries: []
     property bool history: false
+    property var expandedVersions: ({})
     readonly property var rows: buildRows()
     readonly property real contentHeight: flick.contentHeight
     readonly property real viewportHeight: flick.height
@@ -20,7 +21,13 @@ Rectangle {
         var result = []
         var groups = history ? entries : [{notes: notes}]
         for (var i = 0; i < groups.length; ++i) {
-            if (history) result.push({text: "v" + groups[i].version, heading: true})
+            if (history) {
+                var version = String(groups[i].version)
+                var expanded = expandedVersions[version] === true
+                result.push({text: "v" + version, heading: true, versionHeader: true,
+                             version: version, expanded: expanded})
+                if (!expanded) continue
+            }
             var lines = groups[i].notes || []
             for (var j = 0; j < lines.length; ++j) {
                 var parts = String(lines[j]).split(/\r?\n/)
@@ -35,7 +42,23 @@ Rectangle {
         if (!result.length) result.push({text: "此版本尚未提供更新记录。", heading: false})
         return result
     }
-    function resetPosition() { flick.contentY = 0 }
+    function resetPosition() {
+        var initial = {}
+        if (history && entries.length) initial[String(entries[0].version)] = true
+        expandedVersions = initial
+        flick.contentY = 0
+    }
+    function toggleVersion(version) {
+        var next = {}
+        for (var key in expandedVersions) next[key] = expandedVersions[key]
+        next[version] = !next[version]
+        expandedVersions = next
+        Qt.callLater(function() {
+            flick.contentY = Math.max(0, Math.min(flick.contentY, flick.contentHeight - flick.height))
+        })
+    }
+    onEntriesChanged: resetPosition()
+    onHistoryChanged: resetPosition()
 
     Flickable {
         id: flick
@@ -70,9 +93,40 @@ Rectangle {
             Repeater {
                 model: view.rows
                 Item {
+                    readonly property bool versionHeader: modelData.versionHeader === true
                     width: body.width
-                    implicitHeight: rowText.implicitHeight + (modelData.heading && index > 0 ? 8 : 0)
+                    implicitHeight: versionHeader ? 34 : rowText.implicitHeight + (modelData.heading && index > 0 ? 8 : 0)
                     height: implicitHeight
+                    Button {
+                        id: versionButton
+                        anchors.fill: parent
+                        visible: parent.versionHeader
+                        text: modelData.text
+                        Accessible.name: text + (modelData.expanded ? "，收起更新内容" : "，展开更新内容")
+                        onClicked: view.toggleVersion(modelData.version)
+                        background: Rectangle {
+                            radius: 5
+                            color: versionButton.hovered ? "#EEEEEB" : "#F6F6F4"
+                            border.width: versionButton.visualFocus ? 1 : 0
+                            border.color: "#99C7FF"
+                        }
+                        contentItem: Item {
+                            Text {
+                                anchors.left: parent.left; anchors.leftMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: versionButton.text
+                                font.pixelSize: 14; font.bold: true; color: "#242424"
+                            }
+                            Item {
+                                anchors.right: parent.right; anchors.rightMargin: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 8; height: 8
+                                rotation: modelData.expanded ? 90 : 0
+                                Rectangle { x: 3; y: 0; width: 1; height: 5; color: "#606060"; rotation: -45 }
+                                Rectangle { x: 3; y: 3; width: 1; height: 5; color: "#606060"; rotation: 45 }
+                            }
+                        }
+                    }
                     Text {
                         y: rowText.y
                         visible: !modelData.heading
@@ -80,6 +134,7 @@ Rectangle {
                     }
                     Text {
                         id: rowText
+                        visible: !parent.versionHeader
                         x: modelData.heading ? 0 : 14
                         y: modelData.heading && index > 0 ? 8 : 0
                         width: Math.max(0, parent.width - x)
