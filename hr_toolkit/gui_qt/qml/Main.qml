@@ -121,6 +121,16 @@ ApplicationWindow {
         visible: enabled && root.visibility !== Window.Maximized && root.visibility !== Window.FullScreen
         z: 40
     }
+    Rectangle {
+        objectName: "sidebarDivider"
+        x: sidebar.x + sidebar.width - width
+        y: 0
+        width: 1
+        height: parent.height
+        visible: sidebar.visible
+        color: "#EBE9E4"
+        z: 31
+    }
 
     RowLayout {
         anchors.fill: parent
@@ -458,7 +468,7 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.leftMargin: root.compactSidebar ? 12 : 28
                 anchors.rightMargin: root.compactSidebar ? 58 : (root.wideContentInsets ? 102 : 66)
-                anchors.topMargin: 28
+                anchors.topMargin: 8
                 anchors.bottomMargin: 14
                 spacing: 14
 

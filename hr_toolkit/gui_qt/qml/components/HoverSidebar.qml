@@ -15,7 +15,7 @@ Rectangle {
     visible: expanded || slide.running
     enabled: expanded
     color: "#F7F5F1"
-    border.color: "#EBE9E4"
+    border.width: 0
     clip: true
 
     function togglePinned() {
