@@ -43,6 +43,7 @@ PIN_TEST = (
 
 # Entries add caller coverage to the matching test_<filename>.py, when it exists.
 ROUTES = {
+    "hr_toolkit/common/template_mapping.py": "template_mapping header_aliases " + BUSINESS + " " + GUI,
     "hr_toolkit/common/paths.py": "paths app_update runlog runtime_checks " + STORE + " " + PROCESS,
     "hr_toolkit/common/inputs.py": "inputs " + BUSINESS + " " + STORE,
     "hr_toolkit/common/excel.py": "excel_helpers " + BUSINESS,

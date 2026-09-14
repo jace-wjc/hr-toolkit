@@ -338,17 +338,25 @@ def map_sheet(sheet, role, *, required=True, file="", source_sheets=None):
             selected_row = r
             break
     # 自定义名称扩展识别范围，不禁用调用方原有的工作表内容识别。
-    def matches(values, name):
-        aliases = {normalize_alias(v) for v in configured.get(name, spec["fields"][name])}
-        return [i for i, value in enumerate(values, 1) if normalize_alias(value) in aliases]
-    scores = [sum(bool(matches(row, name)) for name in required_names) for row in rows]
+    aliases_by_field = {
+        name: {normalize_alias(v) for v in configured.get(name, defaults)}
+        for name, defaults in spec["fields"].items()
+    }
+    normalized_rows = [[normalize_alias(value) for value in row] for row in rows]
+
+    def matches(normalized_values, name):
+        aliases = aliases_by_field[name]
+        return [i for i, value in enumerate(normalized_values, 1) if value in aliases]
+
+    scores = [sum(bool(matches(row, name)) for name in required_names) for row in normalized_rows]
     r = selected_row or (scores.index(max(scores)) + 1 if scores else 1)
     values = rows[r - 1] if rows else []
+    normalized_values = normalized_rows[r - 1] if rows else []
     if not required and not selected_row and (not scores or max(scores) < len(required_names)):
         return None
     changes, chosen, missing = {}, {}, []
     for name in spec["fields"]:
-        options = matches(values, name)
+        options = matches(normalized_values, name)
         explicit = saved.get(name)
         if explicit:
             col = int(explicit)
@@ -372,12 +380,12 @@ def map_sheet(sheet, role, *, required=True, file="", source_sheets=None):
     # 新映射不能占用另一个实际必需字段的列。
     for col, name in chosen.items():
         for other in spec["required"]:
-            if other != name and col in matches(values, other) and not saved.get(other):
+            if other != name and col in matches(normalized_values, other) and not saved.get(other):
                 missing.extend([name, other])
         # 明确选择的新列优先于原来的同义列，避免旧解析器随后又取回旧列。
         alternatives = {normalize_alias(v) for v in (*spec["fields"][name], name)}
-        for other_col, value in enumerate(values, 1):
-            if other_col != col and normalize_alias(value) in alternatives:
+        for other_col, value in enumerate(normalized_values, 1):
+            if other_col != col and value in alternatives:
                 if other_col in chosen:
                     missing.extend([name, chosen[other_col]])
                 else:

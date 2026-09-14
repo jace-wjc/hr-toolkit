@@ -16,6 +16,13 @@ SPEC.loader.exec_module(ci_scope)
 
 
 class CIScopeTests(unittest.TestCase):
+    def test_template_mapping_selects_its_business_and_gui_callers(self):
+        scope = ci_scope.select_scope(["hr_toolkit/common/template_mapping.py"])
+        self.assertTrue({"tests.test_template_mapping", "tests.test_header_aliases",
+                         "tests.test_social_security", "tests.test_archive_import",
+                         "tests.test_personnel_change_merge", "tests.test_qt_controller"}.issubset(scope["targets"]))
+        self.assertFalse(scope["full"])
+
     def test_documentation_only_skips_runtime_jobs(self):
         scope = ci_scope.select_scope(["README.md", "AGENTS.md"])
         self.assertFalse(scope["run"])

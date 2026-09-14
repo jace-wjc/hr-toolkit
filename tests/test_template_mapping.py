@@ -5,6 +5,7 @@ import inspect
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +33,20 @@ def invoke(tool, callback, rules=None):
 
 
 class TemplateMappingTest(unittest.TestCase):
+    def test_normalization_is_reused_without_changing_source_or_column_priority(self):
+        from hr_toolkit.common import template_mapping as mapping
+        marker = " 唯一未使用表头 "
+        ws = sheet(["公司", "姓名", "姓名", "身份证", marker], ["甲", "原姓名", "后姓名", "TEST-001", "值"])
+        with patch.object(mapping, "normalize_alias", wraps=mapping.normalize_alias) as normalize:
+            mapped = invoke("archive_import", lambda: map_sheet(ws, "transfer"))
+        self.assertEqual(sum(call.args == (marker,) for call in normalize.call_args_list), 1)
+        self.assertEqual(mapped.header_row, 1)
+        self.assertEqual(mapped.changes, {})
+        self.assertEqual(ws.cell(1, 5).value, marker)
+        self.assertEqual(mapped.cell(2, 2).value, "原姓名")
+        self.assertEqual(mapped.cell(2, 3).value, "后姓名")
+        ws.parent.close()
+
     def test_prompt_labels_do_not_change_internal_fields_or_source(self):
         ws = sheet(["名字", "证件编号"], ["示例人员", "TEST-001"], name="增员")
         ws.parent.create_sheet("说明", 0)
