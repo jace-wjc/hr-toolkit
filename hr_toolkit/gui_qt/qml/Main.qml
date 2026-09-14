@@ -119,6 +119,16 @@ ApplicationWindow {
         width: parent.width
         window: root
         sidebar: root.sidebarPanel
+        workspaceAvailable: controller.hasProject
+        workspaceExpanded: workspaceDrawer.opened
+        workspacePanelLeft: workspaceDrawer.x
+        onWorkspaceToggleRequested: {
+            if (workspaceDrawer.opened) workspaceDrawer.close()
+            else {
+                controller.setWorkspaceExpanded(true)
+                workspaceDrawer.open()
+            }
+        }
         nativeMac: root.nativeTitleIntegrated
         systemButtons: Qt.platform.os === "windows"
         z: 30
@@ -967,41 +977,6 @@ ApplicationWindow {
                 }
             }
 
-            Rectangle {
-                id: workspaceRail
-                objectName: "workspaceButton"
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                width: 46
-                height: 104
-                z: 8
-                visible: !workspaceDrawer.opened
-                color: workspaceRailMouse.containsMouse && controller.hasProject ? "#F0EEE8" : "#FAF9F6"
-                border.color: "#ECEAE4"
-                opacity: controller.hasProject ? 1.0 : 0.5
-
-                Text {
-                    anchors.centerIn: parent
-                    text: "项\n目\n文\n件"
-                    color: root.primary
-                    font.pixelSize: 13
-                    font.weight: Font.DemiBold
-                    horizontalAlignment: Text.AlignHCenter
-                    lineHeight: 1.15
-                }
-                MouseArea {
-                    id: workspaceRailMouse
-                    objectName: "workspaceButtonMouse"
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: controller.hasProject
-                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: {
-                        controller.setWorkspaceExpanded(true)
-                        workspaceDrawer.open()
-                    }
-                }
-            }
         }
     }
 
@@ -1298,10 +1273,12 @@ ApplicationWindow {
         // layer with the native window is cheap.  It must use live dimensions:
         // settledWidth/settledHeight intentionally stop changing during a
         // border drag and made the open panel appear frozen until mouse-up.
-        x: root.width - width
-        y: 0
+        readonly property int edgeInset: 8
+        x: root.width - width - edgeInset
+        // Keep Windows caption controls accessible above the panel.
+        y: (Qt.platform.os === "windows" ? windowChrome.height : 0) + edgeInset
         width: Math.min(340, root.width - 24)
-        height: root.height
+        height: root.height - y - edgeInset
         modal: false
         dim: false
         padding: 0
@@ -1313,7 +1290,7 @@ ApplicationWindow {
         enter: Transition {}
         exit: Transition {}
 
-        background: Rectangle { color: root.surface; border.color: root.border }
+        background: Rectangle { color: root.surface; border.color: root.border; radius: 12 }
         ColumnLayout {
             anchors.fill: parent
             anchors.leftMargin: 16
@@ -1325,7 +1302,6 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Text { Layout.fillWidth: true; text: "项目文件"; color: root.textMain; font.pixelSize: 18; font.weight: Font.DemiBold }
                 AppButton { text: "回收站"; variant: "link"; enabled: controller.hasProject; onClicked: { controller.requestProjectTrash(); trashDialog.open() } }
-                AppButton { text: "收起"; variant: "link"; onClicked: workspaceDrawer.close() }
             }
             Text { Layout.fillWidth: true; Layout.topMargin: 3; text: controller.projectName; color: root.primary; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight }
             RowLayout {
@@ -1446,7 +1422,7 @@ ApplicationWindow {
 
     Popup {
         id: workspaceAddMenu
-        x: Math.max(8, root.width - workspaceDrawer.width + 16)
+        x: Math.max(8, workspaceDrawer.x + 16)
         y: Math.min(root.height - height - 12, 260)
         width: 210
         padding: 8

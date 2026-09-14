@@ -8,6 +8,10 @@ Item {
     property var sidebar
     property bool nativeMac: false
     property bool systemButtons: false
+    property bool workspaceAvailable: false
+    property bool workspaceExpanded: false
+    property real workspacePanelLeft: 0
+    signal workspaceToggleRequested()
     readonly property bool triggerHovered: sidebarButton.hovered
     height: 40
 
@@ -40,6 +44,39 @@ Item {
         ToolTip.visible: hovered && chrome.sidebar.pinned
         ToolTip.delay: 700
         ToolTip.text: "收起左侧栏"
+    }
+    Button {
+        id: workspaceButton
+        objectName: "workspaceToggleButton"
+        anchors.right: parent.right
+        anchors.rightMargin: Math.max(chrome.systemButtons ? 148 : 10,
+                                      chrome.workspaceExpanded ? chrome.width - chrome.workspacePanelLeft + 10 : 0)
+        y: chrome.nativeMac ? 1 : 5; width: 32; height: 30
+        hoverEnabled: true
+        focusPolicy: Qt.StrongFocus
+        enabled: chrome.workspaceAvailable || chrome.workspaceExpanded
+        Accessible.name: chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件"
+        onClicked: chrome.workspaceToggleRequested()
+        background: Rectangle {
+            radius: 6
+            color: chrome.workspaceExpanded
+                   ? (workspaceButton.down ? "#B5D3F7" : "#CDE2FB")
+                   : (workspaceButton.down ? "#E3E0D9" : workspaceButton.hovered ? "#EBE8E1" : "transparent")
+            border.width: workspaceButton.visualFocus ? 1 : 0
+            border.color: "#78766E"
+        }
+        contentItem: Item {
+            Image {
+                anchors.centerIn: parent; width: 17; height: 17
+                source: "sidebar-simple.png"
+                mirror: true
+                opacity: workspaceButton.enabled ? 0.65 : 0.3
+                sourceSize.width: 34; sourceSize.height: 34
+            }
+        }
+        ToolTip.visible: hovered
+        ToolTip.delay: 700
+        ToolTip.text: chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件"
     }
     Row {
         anchors.right: parent.right
