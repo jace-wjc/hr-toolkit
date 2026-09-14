@@ -43,6 +43,81 @@ from hr_toolkit.update_runner import main as update_runner_main
 
 
 class AppUpdateTests(unittest.TestCase):
+    def test_cache_cleanup_keeps_ready_recent_unknown_and_locked_payloads(self) -> None:
+        from hr_toolkit import app_update
+        import json
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = time.time() - 4 * 86400
+            for name, filename in (("package-aaaaaaaa", "old.exe.download"),
+                                   ("package-bbbbbbbb", "ready.exe"),
+                                   ("package-cccccccc", "recent.exe"),
+                                   ("package-dddddddd", "user.xlsx")):
+                folder = root / name
+                folder.mkdir()
+                payload = folder / filename
+                payload.write_bytes(b"fixture")
+                if name != "package-cccccccc":
+                    os.utime(payload, (old, old))
+                    os.utime(folder, (old, old))
+            (root / "ready.json").write_text(json.dumps({"package": "package-bbbbbbbb/ready.exe"}))
+            with patch.object(app_update, "update_cache_dir", return_value=root):
+                with app_update._update_cache_lock(root) as acquired:
+                    self.assertTrue(acquired)
+                    self.assertEqual(app_update.cleanup_cached_updates(), 0)
+                    with self.assertRaises(UpdateError):
+                        app_update.load_ready_update("1.0.0")
+                self.assertEqual(app_update.cleanup_cached_updates(), 1)
+            self.assertFalse((root / "package-aaaaaaaa").exists())
+            for name in ("package-bbbbbbbb", "package-cccccccc", "package-dddddddd"):
+                self.assertTrue((root / name).exists())
+
+    def test_cache_cleanup_skips_malformed_metadata_and_linked_directories(self) -> None:
+        from hr_toolkit import app_update
+        import time
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside_dir:
+            root = Path(directory)
+            orphan = root / "package-aaaaaaaa"
+            orphan.mkdir()
+            payload = orphan / "old.zip"
+            payload.write_bytes(b"fixture")
+            old = time.time() - 4 * 86400
+            os.utime(payload, (old, old))
+            os.utime(orphan, (old, old))
+            (root / "ready.json").write_text("invalid")
+            with patch.object(app_update, "update_cache_dir", return_value=root):
+                self.assertEqual(app_update.cleanup_cached_updates(), 0)
+                self.assertTrue(payload.exists())
+                (root / "ready.json").unlink()
+                external = Path(outside_dir) / "keep.exe"
+                external.write_bytes(b"keep")
+                try:
+                    (root / "package-bbbbbbbb").symlink_to(outside_dir, target_is_directory=True)
+                except OSError:
+                    pass  # Windows may require elevation to create symlinks.
+                self.assertEqual(app_update.cleanup_cached_updates(), 1)
+                self.assertEqual(external.read_bytes(), b"keep")
+
+    def test_cache_download_holds_lock_and_preserves_old_ready_record_on_failure(self) -> None:
+        from hr_toolkit import app_update
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = {"platform": "invalid-platform", "package": "package-aaaaaaaa/old.exe"}
+            (root / "ready.json").write_text(json.dumps(record))
+            info = app_update.UpdateInfo("9.0.0", "https://gitee.com/setup.exe", "a" * 64, (), False, "https://gitee.com/manifest")
+            def interrupted(*args, **kwargs):
+                with app_update._update_cache_lock(root) as acquired:
+                    self.assertFalse(acquired)
+                raise UpdateCancelledError("fixture")
+            with patch.object(app_update, "update_cache_dir", return_value=root), patch.object(app_update, "download_update_package", side_effect=interrupted):
+                with self.assertRaises(UpdateCancelledError):
+                    app_update.download_cached_update(info, "1.0.0")
+                self.assertEqual(json.loads((root / "ready.json").read_text()), record)
+                with app_update._update_cache_lock(root) as acquired:
+                    self.assertTrue(acquired)
+
     def test_ready_update_survives_close_reuses_package_and_rejects_damage(self) -> None:
         from hr_toolkit import app_update
         import hashlib

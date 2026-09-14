@@ -21,6 +21,7 @@ from hr_toolkit.app_update import (
     UpdateInfo,
     check_for_update,
     cleanup_stale_update_files,
+    cleanup_cached_updates,
     download_cached_update,
     load_ready_update,
     launch_update_replacement,
@@ -1478,8 +1479,12 @@ class AppController(QObject):
                 self.openProject(str(path))
             else:
                 self.notificationRequested.emit("请重新选择工作项目", "上次记录的项目位置无效，请通过“打开项目”重新选择。", "warning")
+        def cleanup_updates():
+            cleanup_stale_update_files()
+            cleanup_cached_updates()
+
         threading.Thread(
-            target=cleanup_stale_update_files,
+            target=cleanup_updates,
             daemon=True,
             name="HRToolkit-update-cleanup",
         ).start()

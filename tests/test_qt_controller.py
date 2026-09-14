@@ -903,7 +903,7 @@ class QtControllerTests(unittest.TestCase):
         self.addCleanup(controller.close)
         notifications = []
         controller.notificationRequested.connect(lambda *args: notifications.append(args))
-        with patch.object(controller, "_settings_path", side_effect=OSError("bad settings location")), patch("hr_toolkit.gui_qt.controller.cleanup_stale_update_files"), patch("hr_toolkit.gui_qt.controller.runlog.log_exception"):
+        with patch.object(controller, "_settings_path", side_effect=OSError("bad settings location")), patch("hr_toolkit.gui_qt.controller.cleanup_stale_update_files"), patch("hr_toolkit.gui_qt.controller.cleanup_cached_updates"), patch("hr_toolkit.gui_qt.controller.runlog.log_exception"):
             controller._startup_loading = True
             controller._set_busy(True)
             controller._load_startup()
@@ -911,7 +911,7 @@ class QtControllerTests(unittest.TestCase):
             self.assertFalse(controller._startup_loading)
             self.assertFalse(AppController._save_workspace_preferences(controller))
         state = {"current_project": "Ř<", "recent_projects": [None, {}, "relative", "bad\x00path"]}
-        with patch.object(controller, "openProject") as opened, patch("hr_toolkit.gui_qt.controller.cleanup_stale_update_files"):
+        with patch.object(controller, "openProject") as opened, patch("hr_toolkit.gui_qt.controller.cleanup_stale_update_files"), patch("hr_toolkit.gui_qt.controller.cleanup_cached_updates"):
             controller._startup_cancelled = False
             controller._apply_startup(state, [], None)
             opened.assert_not_called()

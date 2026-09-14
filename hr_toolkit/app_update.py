@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -467,6 +468,55 @@ def update_cache_dir() -> Path:
 
 def load_ready_update(current_version: str) -> tuple[UpdateInfo, Path] | None:
     root = update_cache_dir()
+    if not root.exists():
+        return None
+    with _update_cache_lock(root) as acquired:
+        if not acquired:
+            raise UpdateError("更新缓存正在使用或暂不可用，请稍后重试。")
+        return _load_ready_update(current_version, root)
+
+
+def _plain_cache_path(path: Path, *, directory: bool = False) -> bool:
+    """Reject symlinks and Windows junctions on Python 3.8 as well as newer Qt stacks."""
+    info = path.lstat()
+    return not (getattr(info, "st_file_attributes", 0) & 0x400) and (
+        stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    )
+
+
+@contextmanager
+def _update_cache_lock(root: Path):
+    # A live downloader holds this OS lock until atomic ready.json publication.
+    # Process exit releases it, including interruption before .download cleanup.
+    handle = None
+    acquired = False
+    try:
+        if _plain_cache_path(root, directory=True):
+            lock = root / "cache.lock"
+            if not lock.is_symlink() and (not lock.exists() or _plain_cache_path(lock)):
+                handle = lock.open("a+b")
+                if handle.seek(0, os.SEEK_END) == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                if sys.platform == "win32":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+    except OSError:
+        pass
+    try:
+        yield acquired
+    finally:
+        # Closing the descriptor also releases its advisory byte/flock lock.
+        if handle is not None:
+            handle.close()
+
+
+def _load_ready_update(current_version: str, root: Path) -> tuple[UpdateInfo, Path] | None:
     record = root / "ready.json"
     if not record.is_file():
         return None
@@ -499,20 +549,73 @@ def load_ready_update(current_version: str) -> tuple[UpdateInfo, Path] | None:
 
 
 def download_cached_update(update: UpdateInfo, current_version: str, **kwargs) -> Path:
-    cached = load_ready_update(current_version)
-    if cached and cached[0].version == update.version and cached[0].sha256.lower() == update.sha256.lower():
-        return cached[1]
     root = update_cache_dir()
     root.mkdir(parents=True, exist_ok=True)
-    destination = Path(tempfile.mkdtemp(prefix="package-", dir=str(root)))
-    package = download_update_package(update, dest_dir=destination, **kwargs)
-    record = {"platform": platform_key(), "package": str(package.relative_to(root)), "update": asdict(update)}
-    # Atomic metadata publication: only fully downloaded and verified packages
-    # survive a normal close as restart-ready updates.
-    temporary = destination / "ready.json.tmp"
-    temporary.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
-    os.replace(temporary, root / "ready.json")
-    return package
+    with _update_cache_lock(root) as acquired:
+        if not acquired:
+            raise UpdateError("更新缓存正在使用或暂不可用，请稍后重试。")
+        cached = _load_ready_update(current_version, root)
+        if cached and cached[0].version == update.version and cached[0].sha256.lower() == update.sha256.lower():
+            return cached[1]
+        _cleanup_update_cache(root, max_age_days=3)
+        destination = Path(tempfile.mkdtemp(prefix="package-", dir=str(root)))
+        package = download_update_package(update, dest_dir=destination, **kwargs)
+        record = {"platform": platform_key(), "package": str(package.relative_to(root)), "update": asdict(update)}
+        # Only verified packages become restart-ready; retain existing ready data
+        # if a new download or metadata write fails.
+        temporary = destination / "ready.json.tmp"
+        temporary.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, root / "ready.json")
+        return package
+
+
+def cleanup_cached_updates(max_age_days: float = 3) -> int:
+    """Remove expired orphan payloads only; never recurse into project/user folders."""
+    root = update_cache_dir()
+    if not root.exists():
+        return 0
+    with _update_cache_lock(root) as acquired:
+        return _cleanup_update_cache(root, max_age_days) if acquired else 0
+
+
+def _cleanup_update_cache(root: Path, max_age_days: float) -> int:
+    removed = 0
+    try:
+        protected = None
+        record = root / "ready.json"
+        if record.exists():
+            if not _plain_cache_path(record) or record.stat().st_size > UPDATE_MANIFEST_MAX_BYTES:
+                return 0
+            relative = Path(json.loads(record.read_text(encoding="utf-8"))["package"])
+            if relative.is_absolute() or ".." in relative.parts or len(relative.parts) != 2:
+                return 0
+            # Protect even an invalid/checksum-mismatched ready package until
+            # replacement metadata exists; cleanup must not decide installability.
+            protected = relative.parts[0]
+        cutoff = time.time() - max(0, max_age_days) * 86400
+        for folder in root.iterdir():
+            if folder.name == protected or not re.fullmatch(r"package-[a-z0-9_]{8}", folder.name):
+                continue
+            try:
+                if not _plain_cache_path(folder, directory=True):
+                    continue
+                files = list(folder.iterdir())
+                if any(not _plain_cache_path(file) or not (
+                    file.suffix.lower() in (".exe", ".zip", ".download") or file.name == "ready.json.tmp"
+                ) for file in files):
+                    continue
+                if max([folder.stat().st_mtime] + [file.stat().st_mtime for file in files]) > cutoff:
+                    continue
+                # Flat, validated payloads only; no recursive deletion or symlink traversal.
+                for file in files:
+                    file.unlink()
+                folder.rmdir()
+                removed += 1
+            except OSError:
+                continue
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return removed
 
 
 def resolve_download_url(update: UpdateInfo, timeout: int = 10) -> str:
