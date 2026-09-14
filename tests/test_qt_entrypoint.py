@@ -378,6 +378,24 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("model: controller.tutorialGroups", source)
         self.assertIn("workspaceList.positionViewAtIndex(safeRow, ListView.Contain)", source)
 
+    def test_windows_keeps_native_frame_and_separate_panel_controls(self) -> None:
+        qml_dir = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
+        source = (qml_dir / "Main.qml").read_text(encoding="utf-8")
+        chrome = (qml_dir / "components" / "WindowChrome.qml").read_text(encoding="utf-8")
+        self.assertIn("flags: Qt.Window", source)
+        self.assertNotIn("Qt.FramelessWindowHint", source)
+        self.assertNotIn("WindowResizeEdges {", source)
+        self.assertIn('nativeWindows: Qt.platform.os === "windows"', source)
+        self.assertIn("systemButtons: false", source)
+        self.assertIn("y: edgeInset", source)
+        self.assertIn("chrome.nativeMac ? 82 : chrome.nativeWindows", chrome)
+        self.assertIn("chrome.sidebar.pinned ? Math.max(16, chrome.sidebar.width - width - 16) : 16", chrome)
+        self.assertIn("chrome.nativeMac || chrome.nativeWindows ? 5 : 9", chrome)
+        bootstrap = (qml_dir.parent / "main.py").read_text(encoding="utf-8")
+        self.assertIn("app.setWindowIcon(_application_icon())", bootstrap)
+        self.assertIn("root_window.setIcon(app.windowIcon())", bootstrap)
+        self.assertIn('title: "HR Workbench v" + controller.appVersion', source)
+
     def test_qt_is_the_default_desktop_renderer(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("HR_TOOLKIT_RENDERER", None)

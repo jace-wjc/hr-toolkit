@@ -1,6 +1,6 @@
 """Blend the macOS titlebar into the client area, retaining native controls.
 
-Windows uses Qt's own system move/resize API in QML (also Qt 5.15 / Win7).
+Windows retains its native caption and resize frame (also Qt 5.15 / Win7).
 No global hooks, keyboard interception, or replacement native window procedure.
 """
 from __future__ import annotations

@@ -17,11 +17,14 @@ ApplicationWindow {
     width: Math.min(preferredWindowWidth,
                     Math.max(minimumWidth, currentScreenAvailableWidth - initialWindowMargin))
     height: Math.min(preferredWindowHeight,
-                     Math.max(minimumHeight, currentScreenAvailableHeight - initialWindowMargin))
+                     Math.max(minimumHeight, currentScreenAvailableHeight - initialWindowMargin
+                              - (Qt.platform.os === "windows" ? 48 : 0)))
     visible: true
     color: "#FCFCFB"
     title: "HR Workbench v" + controller.appVersion
-    flags: Qt.platform.os === "windows" ? Qt.Window | Qt.FramelessWindowHint : Qt.Window
+    // Keep Windows' native caption, resize frame and DWM decorations. macOS
+    // still integrates its existing native titlebar through window_chrome.py.
+    flags: Qt.Window
     property bool nativeTitleIntegrated: false
     readonly property alias sidebarPanel: sidebar
 
@@ -130,15 +133,9 @@ ApplicationWindow {
             }
         }
         nativeMac: root.nativeTitleIntegrated
-        systemButtons: Qt.platform.os === "windows"
+        nativeWindows: Qt.platform.os === "windows"
+        systemButtons: false
         z: 30
-    }
-    WindowResizeEdges {
-        anchors.fill: parent
-        window: root
-        enabled: Qt.platform.os === "windows"
-        visible: enabled && root.visibility !== Window.Maximized && root.visibility !== Window.FullScreen
-        z: 40
     }
     Rectangle {
         objectName: "sidebarDivider"
@@ -1275,8 +1272,8 @@ ApplicationWindow {
         // border drag and made the open panel appear frozen until mouse-up.
         readonly property int edgeInset: 8
         x: root.width - width - edgeInset
-        // Keep Windows caption controls accessible above the panel.
-        y: (Qt.platform.os === "windows" ? windowChrome.height : 0) + edgeInset
+        // Native caption controls are outside the client area on Windows.
+        y: edgeInset
         width: Math.min(340, root.width - 24)
         height: root.height - y - edgeInset
         modal: false

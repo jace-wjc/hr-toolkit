@@ -1,3 +1,19 @@
+# Windows 原生窗口与面板开关：2026-09-14
+
+- 后续位置调整：Windows 左侧开关在固定展开时移至侧栏右上角，按钮距右边16逻辑像素；收起或悬停预览时回到左边16逻辑像素，位置过渡190毫秒。Mac 仍使用原位置。原生标题栏复用现有 app.setWindowIcon / root_window.setIcon 的内嵌 Logo，不重复绘制。此调整仍待 Windows 实机截图验收。
+
+- Source visual truth：用户 Windows 截图 `/var/folders/ng/s5d0j44s06z6zdc_qr9ylpv80000gn/T/codex-clipboard-702cd1df-39cf-47dc-aaf0-a23ee016bfcf.png`（1437×816）；Codex 官方参考 `https://developers.openai.com/images/codex/windows/codex-windows-dark.webp`（1919×1152）。只参考窗口分层，不照搬暗色主题或业务页面。
+- 实现范围：Windows 恢复 Qt 原生窗口框架、标题栏和系统按钮，移除客户端边缘缩放覆盖层；左右面板开关在标题栏下方，侧边留白16逻辑像素；右侧面板顶部8像素留白；初始高度为原生窗口装饰额外预留48逻辑像素。Mac 现有位置、窗口标记及原生标题栏整合代码保持行为不变。
+- 字体、颜色、图片质量与文案：沿用现有应用字体、配色、PNG 图标及业务文字；Windows 标题栏外观由系统主题决定，不引入新依赖或自绘模糊阴影。
+- 实现截图、视口、像素密度和状态：未取得 Windows 实机截图，尚不能归一化比较；未执行全图或局部视觉验收。
+- Findings / Open questions：当前环境为 macOS，无法验证 Win7 主题、Win11 圆角阴影、高 DPI、最大化还原和跨屏效果。原生效果受系统主题及桌面合成设置影响，不保证 Win7 与 Win11 外观相同。
+- Comparison history：已根据现有截图和官方参考实施，暂无 Windows 修改后截图；不能将 QML 编译结果当成视觉通过。
+- Implementation checklist：原生框架、按钮分层、面板位置、Mac 分支保留已修改；Windows 实机对照待完成。未构建、打包或发布。
+
+**final result: blocked**
+
+---
+
 # 项目文件筛选与搜索样式：2026-09-14
 
 - Source visual truth：`/var/folders/ng/s5d0j44s06z6zdc_qr9ylpv80000gn/T/codex-clipboard-8d24cf1a-0f85-40f7-973b-20328ecde8ff.png`（405×123）。

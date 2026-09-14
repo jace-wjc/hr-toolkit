@@ -7,6 +7,7 @@ Item {
     property var window
     property var sidebar
     property bool nativeMac: false
+    property bool nativeWindows: false
     property bool systemButtons: false
     property bool workspaceAvailable: false
     property bool workspaceExpanded: false
@@ -28,8 +29,16 @@ Item {
     Button {
         id: sidebarButton
         objectName: "sidebarToggleButton"
-        x: chrome.nativeMac ? 82 : 10
-        y: chrome.nativeMac ? 5 : 9; width: 32; height: 30
+        // Keep hover-preview's trigger stationary; only a pinned Windows
+        // sidebar places its collapse control beside the right divider.
+        x: chrome.nativeMac ? 82 : chrome.nativeWindows
+           ? (chrome.sidebar.pinned ? Math.max(16, chrome.sidebar.width - width - 16) : 16)
+           : 10
+        Behavior on x {
+            enabled: chrome.nativeWindows
+            NumberAnimation { duration: 190; easing.type: Easing.OutCubic }
+        }
+        y: chrome.nativeMac || chrome.nativeWindows ? 5 : 9; width: 32; height: 30
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         Accessible.name: chrome.sidebar.pinned ? "收起左侧栏" : "固定展开左侧栏"
@@ -49,9 +58,9 @@ Item {
         id: workspaceButton
         objectName: "workspaceToggleButton"
         anchors.right: parent.right
-        anchors.rightMargin: Math.max(chrome.systemButtons ? 148 : 10,
+        anchors.rightMargin: Math.max(chrome.systemButtons ? 148 : chrome.nativeWindows ? 16 : 10,
                                       chrome.workspaceExpanded ? chrome.width - chrome.workspacePanelLeft + 10 : 0)
-        y: chrome.nativeMac ? 5 : 9; width: 32; height: 30
+        y: chrome.nativeMac || chrome.nativeWindows ? 5 : 9; width: 32; height: 30
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         enabled: chrome.workspaceAvailable || chrome.workspaceExpanded
