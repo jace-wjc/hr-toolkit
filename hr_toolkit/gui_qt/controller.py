@@ -2438,10 +2438,10 @@ class AppController(QObject):
             return
         if kind == "none":
             self._update_busy = False
-            self._update_status = "当前已经是最新版本"
+            self._update_status = "没有新版本"
             self.updateChanged.emit()
             if getattr(self, "_update_manual", False):
-                self.notificationRequested.emit("当前已是最新版本", f"当前版本为 v{__version__}。", "success")
+                self.notificationRequested.emit("没有新版本", f"当前版本为 v{__version__}。", "success")
             return
         if kind == "available" and isinstance(payload, UpdateInfo):
             self._update_busy = False

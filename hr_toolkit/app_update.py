@@ -97,6 +97,10 @@ class UpdateError(RuntimeError):
     """Raised when update metadata, download, or launch fails."""
 
 
+class _PlatformUnavailableError(UpdateError):
+    """A valid platform manifest has no entry for the current platform."""
+
+
 class UpdateCancelledError(UpdateError):
     """Raised when update metadata, download, or launch is cancelled by the user."""
 
@@ -189,7 +193,13 @@ def check_for_update(current_version: str, manifest_url: str | None = None, plat
     for candidate_url in manifest_urls:
         try:
             manifest, resolved_manifest_url = load_update_manifest(candidate_url)
-            remote_version = manifest_version(manifest, platform=selected_platform)
+            try:
+                remote_version = manifest_version(manifest, platform=selected_platform)
+            except _PlatformUnavailableError:
+                # macOS 暂停发包时按没有新版本处理；Windows 通道缺失仍报错。
+                if selected_platform == "macos":
+                    return None
+                raise
             if not is_newer_version(remote_version, current_version):
                 return None
             update = parse_update_manifest(
@@ -778,7 +788,7 @@ def _platform_payload(manifest: dict[str, Any], platform: str) -> dict[str, Any]
             merged.pop("platforms", None)
             merged.update(payload)
             return merged
-    raise UpdateError(f"更新配置中没有 {platform} 平台的安装包。")
+    raise _PlatformUnavailableError(f"更新配置中没有 {platform} 平台的安装包。")
 
 
 def _normalize_notes(value: Any) -> tuple[str, ...]:

@@ -41,6 +41,22 @@ from hr_toolkit.update_runner import main as update_runner_main
 
 
 class AppUpdateTests(unittest.TestCase):
+    def test_macos_without_platform_entry_has_no_update(self) -> None:
+        manifest = {"version": "9.0.0", "platforms": {"windows": {"version": "9.0.0"}}}
+        with patch("hr_toolkit.app_update.load_update_manifest", return_value=(manifest, "https://gitee.com/latest.json")):
+            self.assertIsNone(check_for_update("1.0.0", "https://gitee.com/latest.json", "macos"))
+            with self.assertRaisesRegex(UpdateError, "windows-x64-win7"):
+                check_for_update("1.0.0", "https://gitee.com/latest.json", "windows-x64-win7")
+
+    def test_macos_network_and_invalid_package_still_report_errors(self) -> None:
+        with patch("hr_toolkit.app_update.load_update_manifest", side_effect=UpdateError("网络连接失败")):
+            with self.assertRaisesRegex(UpdateError, "网络连接失败"):
+                check_for_update("1.0.0", "https://gitee.com/latest.json", "macos")
+        manifest = {"version": "9.0.0", "platforms": {"macos": {"version": "9.0.0"}}}
+        with patch("hr_toolkit.app_update.load_update_manifest", return_value=(manifest, "https://gitee.com/latest.json")):
+            with self.assertRaisesRegex(UpdateError, "file_url"):
+                check_for_update("1.0.0", "https://gitee.com/latest.json", "macos")
+
     def _run_update_runner(self, args: list[str]) -> int:
         old_cwd = Path.cwd()
         try:
