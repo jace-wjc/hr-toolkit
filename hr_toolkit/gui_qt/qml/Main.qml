@@ -462,7 +462,11 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                         }
                     }
-                    AppButton { Layout.preferredWidth: 116; text: controller.updateBusy ? "检查中…" : "↻  检查更新"; enabled: !controller.updateBusy; onClicked: controller.requestUpdateCheck() }
+                    ColumnLayout {
+                        spacing: 4
+                        AppButton { Layout.preferredWidth: 116; text: controller.updateBusy ? "更新处理中…" : "↻  检查更新"; enabled: !controller.updateBusy; onClicked: controller.requestUpdateCheck() }
+                        AppButton { Layout.alignment: Qt.AlignRight; text: "更新记录"; variant: "link"; enabled: !controller.updateBusy; onClicked: controller.showReleaseNotes() }
+                    }
                 }
 
                 RowLayout {
@@ -1777,23 +1781,26 @@ ApplicationWindow {
         }
     }
 
-    AppDialog {
+    UpdateProgressDialog {
         id: updateProgressDialog
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: Math.min(520, root.settledWidth - 48)
-        title: "正在更新"
-        closePolicy: Popup.NoAutoClose
-        contentItem: ColumnLayout {
-            spacing: 12
-            Text { Layout.fillWidth: true; text: controller.updateStatus; color: root.textMain; font.pixelSize: 13; wrapMode: Text.Wrap }
-            ProgressBar { Layout.fillWidth: true; indeterminate: controller.updateProgress < 0; value: Math.max(0, controller.updateProgress) }
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                AppButton { text: "取消下载"; visible: controller.updateBusy && controller.updateProgress >= 0; onClicked: controller.cancelUpdate() }
-            }
-        }
+        iconSource: controller.updateIconSource
+        phase: controller.updatePhase
+        statusText: controller.updateStatus
+        progress: controller.updateProgress
+        canCancel: controller.updateCanCancel
+        onCancelRequested: controller.cancelUpdate()
+    }
+
+    ReleaseNotesDialog {
+        id: releaseNotesDialog
+        iconSource: controller.updateIconSource
+        onDismissed: controller.closeReleaseNotes()
+    }
+
+    UpdatePromptDialog {
+        id: updatePromptDialog
+        iconSource: controller.updateIconSource
+        onDecision: function(token, accepted) { controller.confirmAction(token, accepted) }
     }
 
     AppDialog {
@@ -1864,6 +1871,8 @@ ApplicationWindow {
         function onTemplateRulesRequested() { templateChoiceDialog.showRules(controller.templateRuleSections) }
         function onTemplateSelectionRequested() { templateChoiceDialog.showData(controller.templateSelectionData) }
         function onNotificationRequested(title, message, level) { notificationDialog.showMessage(title, message, level) }
+        function onUpdatePromptRequested(prompt) { updatePromptDialog.showPrompt(prompt) }
+        function onReleaseNotesRequested(details) { releaseNotesDialog.showNotes(details) }
         function onConfirmationRequested(title, message, token) {
             confirmationDialog.title = title
             confirmationDialog.bodyText = message
@@ -1879,10 +1888,7 @@ ApplicationWindow {
             textInputDialog.request(title, prompt, initialValue, token)
         }
         function onUpdateChanged() {
-            var downloading = controller.updateBusy && (
-                controller.updateStatus.indexOf("正在准备") === 0 ||
-                controller.updateStatus.indexOf("正在下载") === 0
-            )
+            var downloading = controller.updateBusy && controller.updatePhase !== "checking" && controller.updatePhase !== ""
             if (downloading && !updateProgressDialog.opened)
                 updateProgressDialog.open()
             else if (!controller.updateBusy && updateProgressDialog.opened)

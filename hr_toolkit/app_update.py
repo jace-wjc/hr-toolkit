@@ -386,6 +386,7 @@ def download_update_package(
     dest_dir: Path | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     cancel_event: Any | None = None,
+    stage_callback: Callable[[str], None] | None = None,
 ) -> Path:
     if update.update_mode != "auto":
         raise UpdateError("当前平台使用手动安装包，不能交给自动更新器。")
@@ -410,6 +411,8 @@ def download_update_package(
         temp_path.unlink(missing_ok=True)
         final_path.unlink(missing_ok=True)
         try:
+            if stage_callback is not None:
+                stage_callback("downloading")
             with _open_url(request, timeout=60) as response:
                 total = _response_content_length(response)
                 if total > UPDATE_PACKAGE_MAX_BYTES:
@@ -436,7 +439,11 @@ def download_update_package(
                 final_path.unlink(missing_ok=True)
                 raise UpdateCancelledError("用户已取消更新包下载。")
             os.replace(temp_path, final_path)
+            if stage_callback is not None:
+                stage_callback("verifying")
             actual_sha256 = sha256_file(final_path)
+            if cancel_event is not None and cancel_event.is_set():
+                raise UpdateCancelledError("用户已取消更新包下载。")
             if actual_sha256.lower() != update.sha256.lower():
                 raise UpdateError("更新包 SHA256 校验失败。")
             return final_path

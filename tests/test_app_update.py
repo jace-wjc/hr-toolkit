@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import io
 import copy
 import ssl
@@ -465,9 +467,22 @@ class AppUpdateTests(unittest.TestCase):
                 platform="windows",
             )
 
-            downloaded = download_update_package(update, dest_dir=tmp_dir / "download")
+            stages = []
+            downloaded = download_update_package(
+                update, dest_dir=tmp_dir / "download", stage_callback=stages.append,
+            )
 
             self.assertEqual(downloaded.read_bytes(), b"fake zip payload")
+            self.assertEqual(stages, ["downloading", "verifying"])
+
+            cancel_event = threading.Event()
+            with self.assertRaises(UpdateCancelledError):
+                download_update_package(
+                    update, dest_dir=tmp_dir / "cancel-during-verification",
+                    cancel_event=cancel_event,
+                    stage_callback=lambda phase: cancel_event.set() if phase == "verifying" else None,
+                )
+            self.assertFalse((tmp_dir / "cancel-during-verification" / source.name).exists())
 
     def test_download_package_falls_back_after_primary_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

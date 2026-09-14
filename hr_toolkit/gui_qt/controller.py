@@ -25,7 +25,9 @@ from hr_toolkit.app_update import (
     launch_update_replacement,
     resolve_download_url,
     update_check_enabled,
+    is_newer_version,
 )
+from hr_toolkit.release_notes import notes_for_version, release_entries
 from hr_toolkit.desktop_helpers import (
     default_workspace_project_name,
     desktop_dir,
@@ -117,6 +119,9 @@ class AppController(QObject):
     trashChanged = Signal()
     materialChanged = Signal()
     updateChanged = Signal()
+    updatePromptRequested = Signal("QVariantMap", arguments=["prompt"])
+    releaseNotesRequested = Signal("QVariantMap", arguments=["details"])
+    _updatePhaseIncoming = Signal(str)
     # Qt 5.15.2 rebuilds Connections handlers' argument tables from signal
     # metadata. Unnamed PySide2 arguments can crash QQmlBoundSignalExpression
     # during QML loading. Keep these names aligned with Main.qml; argument
@@ -264,6 +269,10 @@ class AppController(QObject):
         self._update_busy = False
         self._update_status = ""
         self._update_progress = -1.0
+        self._update_phase = ""
+        self._release_notes_seen_version = ""
+        self._release_notes_open = False
+        self._startup_notes_pending = False
         self._pending_update: UpdateInfo | None = None
         self._update_cancel_event: threading.Event | None = None
         self._workspace_scan_cancel_event: threading.Event | None = None
@@ -297,6 +306,7 @@ class AppController(QObject):
         self._trashActionFinished.connect(self._apply_trash_action)
         self._updateResult.connect(self._apply_update_result)
         self._updateProgressIncoming.connect(self._apply_update_progress)
+        self._updatePhaseIncoming.connect(self._apply_update_phase)
         self._inputItemsReady.connect(self._apply_input_items)
         self._invocationReady.connect(self._apply_invocation)
         self._startupReady.connect(self._apply_startup)
@@ -334,6 +344,11 @@ class AppController(QObject):
     @constant_property(str)
     def appVersion(self) -> str:
         return __version__
+
+    @constant_property(str)
+    def updateIconSource(self) -> str:
+        from hr_toolkit._icon_data import APP_ICON_PNGS_BASE64
+        return "data:image/png;base64," + max(APP_ICON_PNGS_BASE64.values(), key=len)
 
     @constant_property("QVariantList")
     def navGroups(self):
@@ -566,6 +581,14 @@ class AppController(QObject):
     @Property(float, notify=updateChanged)
     def updateProgress(self) -> float:
         return self._update_progress
+
+    @Property(str, notify=updateChanged)
+    def updatePhase(self) -> str:
+        return self._update_phase
+
+    @Property(bool, notify=updateChanged)
+    def updateCanCancel(self) -> bool:
+        return self._update_busy and self._update_cancel_event is not None and self._update_phase in ("preparing", "downloading", "verifying")
 
     @Property(bool, notify=busyChanged)
     def busy(self) -> bool:
@@ -1379,6 +1402,7 @@ class AppController(QObject):
             if isinstance(candidates, list):
                 self._recent_projects = [path for value in candidates if (path := absolute_path_hint(value)) is not None][:8]
         self._last_selected_dir = last_dir
+        self._release_notes_seen_version = str(state.get("release_notes_seen_version") or "")
         self._material_preferences = MaterialPreferences.from_payload(
             state.get("material_preferences")
         )
@@ -1415,8 +1439,11 @@ class AppController(QObject):
             daemon=True,
             name="HRToolkit-update-cleanup",
         ).start()
-        if update_check_enabled():
-            QTimer.singleShot(600, self.requestStartupUpdateCheck)
+        self._startup_notes_pending = bool(notes_for_version(__version__)) and (
+            not self._release_notes_seen_version
+            or is_newer_version(__version__, self._release_notes_seen_version)
+        )
+        QTimer.singleShot(600, self._show_startup_release_notes)
 
     def _save_workspace_preferences(self) -> bool:
         # Closing while a disconnected recent path is being checked must not
@@ -1445,6 +1472,7 @@ class AppController(QObject):
                 "last_selected_dir": str(self._last_selected_dir) if self._last_selected_dir is not None else None,
                 "salary_header_profiles": self._salary_header_profiles,
                 "header_name_rules": self._header_name_rules,
+                "release_notes_seen_version": self._release_notes_seen_version,
             }
         )
         try:
@@ -2398,6 +2426,41 @@ class AppController(QObject):
         threading.Thread(target=worker, daemon=True, name="HRToolkit-project-trash-move").start()
 
     @Slot()
+    def _show_startup_release_notes(self) -> None:
+        if self._closed or self._shutdown_requested:
+            return
+        if self._busy or self._workspace_busy or self._project_opening or self._update_busy or self._release_notes_open:
+            QTimer.singleShot(600, self._show_startup_release_notes)
+            return
+        if self._startup_notes_pending:
+            self._release_notes_open = True
+            self.releaseNotesRequested.emit({
+                "startup": True, "currentVersion": __version__,
+                "entries": [{"version": __version__, "notes": list(notes_for_version(__version__))}],
+            })
+        else:
+            self.requestStartupUpdateCheck()
+
+    @Slot()
+    def showReleaseNotes(self) -> None:
+        if self._update_busy or self._release_notes_open:
+            return
+        self._release_notes_open = True
+        self.releaseNotesRequested.emit({
+            "startup": False, "currentVersion": __version__,
+            "entries": release_entries(__version__),
+        })
+
+    @Slot()
+    def closeReleaseNotes(self) -> None:
+        self._release_notes_open = False
+        if self._startup_notes_pending:
+            self._startup_notes_pending = False
+            self._release_notes_seen_version = __version__
+            self._save_workspace_preferences()
+            QTimer.singleShot(600, self.requestStartupUpdateCheck)
+
+    @Slot()
     def requestStartupUpdateCheck(self) -> None:
         if update_check_enabled():
             self._start_update_check(False)
@@ -2413,6 +2476,7 @@ class AppController(QObject):
             return
         self._update_busy = True
         self._update_manual = bool(manual)
+        self._update_phase = "checking"
         self._update_status = "正在检查更新…"
         self._update_progress = -1.0
         self.updateChanged.emit()
@@ -2429,6 +2493,29 @@ class AppController(QObject):
 
     @Slot(str, object)
     def _apply_update_result(self, kind: str, payload) -> None:
+        if kind in ("check-error", "none", "available", "manual-ready", "download-error", "download-cancelled", "launch-error"):
+            self._update_phase = ""
+            self._update_cancel_event = None
+        if kind == "downloaded":
+            if self._update_cancel_event is not None and self._update_cancel_event.is_set():
+                self._apply_update_result("download-cancelled", None)
+                return
+            self._update_phase = "launching"
+            self._update_cancel_event = None
+            self._update_progress = -1.0
+            self._update_status = "正在打开安装程序…"
+            self.updateChanged.emit()
+
+            def launch_worker() -> None:
+                try:
+                    launch_update_replacement(payload)
+                except Exception as exc:
+                    self._updateResult.emit("launch-error", str(exc))
+                else:
+                    self._updateResult.emit("launched", None)
+
+            threading.Thread(target=launch_worker, daemon=True, name="HRToolkit-update-install").start()
+            return
         if kind == "check-error":
             self._update_busy = False
             self._update_status = "检查更新失败"
@@ -2441,24 +2528,21 @@ class AppController(QObject):
             self._update_status = "没有新版本"
             self.updateChanged.emit()
             if getattr(self, "_update_manual", False):
-                self.notificationRequested.emit("没有新版本", f"当前版本为 v{__version__}。", "success")
+                self.updatePromptRequested.emit({"available": False, "currentVersion": __version__})
             return
         if kind == "available" and isinstance(payload, UpdateInfo):
             self._update_busy = False
             self._pending_update = payload
             self._update_status = f"发现新版本 v{payload.version}"
             self.updateChanged.emit()
-            notes = "\n".join(f"• {item}" for item in (payload.notes or ("本次发布未填写更新说明。",)))
-            if payload.update_mode == "manual":
-                detail = "macOS 使用标准 DMG 手动更新。点击“是”后将打开下载地址。"
-            elif payload.mandatory:
-                detail = "这是必须安装的更新。选择“否”将退出程序。"
-            else:
-                detail = "建议尽快更新。选择“否”可以继续使用当前版本。"
             token = f"update:{time.monotonic_ns()}"
             self._pending_confirmation = token
             self._pending_confirmation_action = ("update", payload)
-            self.confirmationRequested.emit(f"发现新版本 v{payload.version}", f"{detail}\n\n{notes}", token)
+            self.updatePromptRequested.emit({
+                "available": True, "currentVersion": __version__, "version": payload.version,
+                "notes": list(payload.notes or ()), "mandatory": payload.mandatory,
+                "manual": payload.update_mode == "manual", "token": token,
+            })
             return
         if kind == "manual-ready" and isinstance(payload, str):
             self._update_busy = False
@@ -2497,6 +2581,8 @@ class AppController(QObject):
             return
         self._update_busy = True
         self._update_progress = -1.0
+        self._update_phase = "preparing"
+        self._update_cancel_event = threading.Event() if update.update_mode != "manual" else None
         self._update_status = f"正在准备 v{update.version}…"
         self.updateChanged.emit()
         if update.update_mode == "manual":
@@ -2510,7 +2596,7 @@ class AppController(QObject):
 
             threading.Thread(target=manual_worker, daemon=True, name="HRToolkit-update-url").start()
             return
-        self._update_cancel_event = threading.Event()
+        cancel_event = self._update_cancel_event
 
         def download_worker() -> None:
             last_emit = 0.0
@@ -2526,33 +2612,47 @@ class AppController(QObject):
                 package = download_update_package(
                     update,
                     progress_callback=progress,
-                    cancel_event=self._update_cancel_event,
+                    cancel_event=cancel_event,
+                    stage_callback=self._updatePhaseIncoming.emit,
                 )
-                launch_update_replacement(package)
             except UpdateCancelledError:
                 self._updateResult.emit("download-cancelled", None)
             except Exception as exc:
-                self._updateResult.emit("launch-error" if 'package' in locals() else "download-error", str(exc))
+                self._updateResult.emit("download-error", str(exc))
             else:
-                self._updateResult.emit("launched", None)
+                self._updateResult.emit("downloaded", package)
 
         threading.Thread(target=download_worker, daemon=True, name="HRToolkit-update-download").start()
 
     @Slot(int, int)
     def _apply_update_progress(self, downloaded: int, total: int) -> None:
+        if self._update_phase != "downloading":
+            return
         megabytes = downloaded / 1024 / 1024
         if total > 0:
             self._update_progress = min(1.0, downloaded / total)
-            self._update_status = f"正在下载：{self._update_progress * 100:.0f}%（{megabytes:.1f}/{total / 1024 / 1024:.1f} MB）"
+            self._update_status = f"{megabytes:.1f} / {total / 1024 / 1024:.1f} MB"
         else:
             self._update_progress = -1.0
-            self._update_status = f"正在下载：{megabytes:.1f} MB"
+            self._update_status = f"已下载 {megabytes:.1f} MB"
+        self.updateChanged.emit()
+
+    @Slot(str)
+    def _apply_update_phase(self, phase: str) -> None:
+        if self._update_phase == "cancelling":
+            return
+        self._update_phase = phase
+        self._update_progress = -1.0
+        self._update_status = "正在校验更新文件…" if phase == "verifying" else "正在连接下载地址…"
         self.updateChanged.emit()
 
     @Slot()
     def cancelUpdate(self) -> None:
-        if self._update_cancel_event is not None:
+        if self.updateCanCancel:
             self._update_cancel_event.set()
+            self._update_phase = "cancelling"
+            self._update_status = "正在取消下载，请稍候…"
+            self.updateChanged.emit()
 
     @Slot()
     def runOrCancel(self) -> None:

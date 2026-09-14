@@ -1,4 +1,25 @@
-# HR Toolkit 项目工作区设计验收
+# 更新提示样式：本次视觉验收待进行
+
+- 本轮补充：更新后首次启动说明、离线“更新记录”入口，以及下载／校验／启动安装程序的独立状态。
+- 更新中参考：本机 `/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Resources/SUStatus.nib`，以原生资源加载出 `/tmp/hr-update-reference.cNw43B/sparkle-status.png`（400×110 内容区；原生窗体含标题栏 400×139）。预览使用示例进度文字，并未下载或更新 ChatGPT。
+- 参考结构：左侧应用图标；右侧标题、细进度条；状态文字与取消按钮位于同一行。本轮实现为 `UpdateProgressDialog.qml`，保留本程序图标与中文。
+- Windows 安装阶段：`update_runner.py` 的独立轻量 Tk 安装进度窗口同步改为左图标、右标题／进度条／状态；不引入 Qt 依赖，不提供会中断文件替换的取消按钮。Windows 系统权限确认保持原生，不提前显示安装成功。
+- 更新说明来源：`hr_toolkit/release_notes.py`，发布清单与程序离线记录共用，历史版本未提供的内容不编造。
+
+- 参考图：用户提供的 `codex-clipboard-24b6c076-5782-46d0-9f58-8bb00c11ab0c.png`（259×232，无更新）；已通过浏览器查看 https://cdn3.ldstatic.com/original/4X/0/0/a/00adcf7c4b080943ebe86817bb5ceb2ec5f0bd76.png （1138×810，有更新）。
+- 实现：`hr_toolkit/gui_qt/qml/components/UpdatePromptDialog.qml`。无更新为紧凑卡片，有更新为图标、版本说明、更新内容和操作区。
+- 有意保留的差异：中文与本程序图标、浅色主题；不新增跳过版本或自动下载功能；强制更新拒绝按钮明确标为退出程序。
+- 实现截图、视口与密度归一化、全图和局部对照：尚未采集，不沿用下面历史工作区验收的结论。
+- 字体、间距、颜色、图标清晰度及文字换行：已按参考编写，尚未进行实际渲染对照。
+- 已执行：仅变更 Python 语法与 QML 编译检查。没有进行点击验收、Windows 实机验证、测试套件或打包。
+- 阻塞原因：项目当次默认验证范围仅允许最小语法与编译检查；后续需要在授权后补两种状态的截图与按钮行为验证。
+- 对照迭代：暂无实际渲染对照，不宣称像素级复刻已通过。
+
+**final result: blocked**
+
+---
+
+# HR Toolkit 项目工作区设计验收（历史记录，非本次更新提示验收）
 
 **Source visual truth**
 

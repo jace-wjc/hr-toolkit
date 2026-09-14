@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import stat
 import sys
@@ -237,7 +238,10 @@ def legacy_server_manifest(
     )
     normalized_notes = [str(note).strip() for note in (notes or []) if str(note).strip()]
     if not normalized_notes:
-        normalized_notes = [f"升级 HRToolkit 至 {version}"]
+        namespace = runpy.run_path(str(REPO_ROOT / "hr_toolkit" / "release_notes.py"))
+        normalized_notes = list(namespace["notes_for_version"](version))
+        if not normalized_notes:
+            raise ValueError(f"请先在 hr_toolkit/release_notes.py 填写 v{version} 的更新内容。")
     platform_name = "windows-x64-win7" if target == WINDOWS_TARGET_WIN7 else "windows"
     return {
         "version": version,

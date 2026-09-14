@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import urllib.parse
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
@@ -28,6 +29,16 @@ UPDATE_DOWNLOAD_BASE_URL = f"https://gitee.com/{UPDATE_REPOSITORY}/releases/down
 
 class ReleaseMetadataError(RuntimeError):
     """Raised when release assets or version metadata are inconsistent."""
+
+
+def bundled_release_notes(version: str) -> tuple[str, ...]:
+    # Read the same lightweight Python source that is bundled in the app. This
+    # script runs without installing the HR business dependencies on release CI.
+    namespace = runpy.run_path(str(REPO_ROOT / "hr_toolkit" / "release_notes.py"))
+    notes = namespace["notes_for_version"](version)
+    if not notes:
+        raise ReleaseMetadataError(f"请先在 hr_toolkit/release_notes.py 填写 v{version} 的更新内容。")
+    return notes
 
 
 def require_release_asset_under_limit(
@@ -344,9 +355,9 @@ def generate_release_metadata(
     _validate_asset_directory(assets_dir, asset_names)
     require_release_assets_under_limit(assets_dir / name for name in asset_names)
 
-    normalized_notes = tuple(note.strip() for note in (notes or (f"HR Toolkit v{version}",)) if note.strip())
+    normalized_notes = tuple(note.strip() for note in (notes if notes is not None else bundled_release_notes(version)) if note.strip())
     if not normalized_notes:
-        normalized_notes = (f"HR Toolkit v{version}",)
+        raise ReleaseMetadataError("更新内容不能为空。")
 
     manifest = build_latest_manifest(
         assets_dir,

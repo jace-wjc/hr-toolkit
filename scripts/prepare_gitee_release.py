@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from versioning import read_project_version
+from generate_release_metadata import bundled_release_notes
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="生成 Gitee 自动更新发布文件")
     parser.add_argument("--platform", choices=["windows", "macos"], default=_default_platform())
     parser.add_argument("--version", default=read_project_version(), help="发布版本号，默认读取 hr_toolkit.__version__")
-    parser.add_argument("--notes", nargs="*", default=["更新 HR工具箱"], help="更新说明，可写多条")
+    parser.add_argument("--notes", nargs="*", default=None, help="更新说明，默认读取随程序保存的版本记录")
     parser.add_argument("--optional", action="store_true", help="发布为可选更新，客户端可选择“稍后再说”；默认为强制更新")
     parser.add_argument("--app-dir", type=Path, default=REPO_ROOT / "dist" / "HRToolkit", help="PyInstaller 输出目录")
     parser.add_argument("--updater", type=Path, help="HRToolkitUpdater 文件路径；默认从 dist 中查找")
@@ -36,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bundle-dir", type=Path, default=DEFAULT_BUNDLE_DIR, help="生成给 ScriptHub 静态目录的一次性复制文件夹")
     parser.add_argument("--publish-dir", type=Path, help="可选：直接复制到 ScriptHub 的 fastApiProject/static/hr-toolkit 目录")
     args = parser.parse_args(argv)
+    notes = [note.strip() for note in (args.notes if args.notes is not None else bundled_release_notes(args.version)) if note.strip()]
+    if not notes:
+        raise SystemExit("更新内容不能为空。")
 
     app_dir = args.app_dir
     if not app_dir.exists() or not app_dir.is_dir():
@@ -57,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest = _load_manifest(manifest_path)
     manifest["version"] = args.version
     manifest["mandatory"] = not args.optional
-    manifest["notes"] = args.notes
+    manifest["notes"] = notes
     platforms = manifest.setdefault("platforms", {})
     platforms[args.platform] = {
         "file_url": f"{args.release_base_url.rstrip('/')}/{zip_path.name}",

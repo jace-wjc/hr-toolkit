@@ -121,7 +121,7 @@ class _UpdaterUI:
 
         self._events: queue.Queue[str | None] = queue.Queue()
         self._root = tkinter.Tk()
-        self._root.title("HR工具箱 更新")
+        self._root.title("HR Toolkit 更新")
         self._root.resizable(False, False)
         try:
             from hr_toolkit._icon_data import APP_ICON_PNGS_BASE64
@@ -136,27 +136,45 @@ class _UpdaterUI:
             pass
         # 安装中途关闭窗口可能留下半成品目录，禁用关闭按钮
         self._root.protocol("WM_DELETE_WINDOW", lambda: None)
-        body = tkinter.Frame(self._root, bg="#ffffff", padx=30, pady=24)
+        scale = max(1.0, min(2.0, float(self._root.tk.call("tk", "scaling")) / (96 / 72)))
+        px = lambda value: round(value * scale)
+        background = "#F8F8F8"
+        body = tkinter.Frame(self._root, bg=background, padx=px(20), pady=px(20))
         body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+        if getattr(self, "_icons", None):
+            # Reuse a small embedded image; no Qt runtime or image dependency is
+            # added to the standalone updater on older Windows machines.
+            icon = min(self._icons, key=lambda image: abs(image.width() - px(56)))
+            tkinter.Label(body, image=icon, bg=background, borderwidth=0).grid(
+                row=0, column=0, rowspan=3, sticky="nw", padx=(0, px(16)),
+            )
         tkinter.Label(
             body,
-            text="正在安装更新",
-            bg="#ffffff",
-            fg="#17202c",
-            font=("", 14, "bold"),
-        ).pack(anchor="w")
+            text="正在安装更新…",
+            bg=background,
+            fg="#242424",
+            font=("", -px(14), "bold"),
+        ).grid(row=0, column=1, sticky="w")
+        style = ttk.Style(self._root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        style.configure("Update.Horizontal.TProgressbar", background="#007AFF",
+                        troughcolor="#DEDEDE", borderwidth=0, thickness=px(6))
+        bar = ttk.Progressbar(body, mode="indeterminate", length=px(280),
+                              style="Update.Horizontal.TProgressbar")
+        bar.grid(row=1, column=1, sticky="ew", pady=(px(10), px(10)))
+        bar.start(30)
         self._status_label = tkinter.Label(
             body,
             text="请稍候，安装完成后程序会自动打开。",
-            bg="#ffffff",
-            fg="#4f5b68",
-            wraplength=320,
+            bg=background,
+            fg="#606060",
+            font=("", -px(12)),
+            wraplength=px(280),
             justify="left",
         )
-        self._status_label.pack(anchor="w", pady=(6, 14))
-        bar = ttk.Progressbar(body, mode="indeterminate", length=320)
-        bar.pack(fill="x")
-        bar.start(14)
+        self._status_label.grid(row=2, column=1, sticky="w")
         self._center()
         self._root.lift()
         self._root.attributes("-topmost", True)

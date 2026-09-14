@@ -24,6 +24,19 @@ class ReleaseMetadataTests(unittest.TestCase):
         for name in names:
             (root / name).write_bytes(("payload:" + name).encode("utf-8"))
 
+    def test_default_notes_match_the_installed_apps_offline_record(self) -> None:
+        from hr_toolkit import __version__
+        from hr_toolkit.release_notes import notes_for_version, release_entries
+
+        notes = release_metadata.bundled_release_notes(__version__)
+        self.assertTrue(notes)
+        self.assertEqual(notes, notes_for_version(__version__))
+        self.assertEqual(release_entries(__version__)[0]["notes"], list(notes))
+
+    def test_unrecorded_version_requires_release_notes(self) -> None:
+        with self.assertRaisesRegex(release_metadata.ReleaseMetadataError, "填写"):
+            release_metadata.bundled_release_notes("99999.0.0")
+
     def test_validate_version_rejects_non_strict_versions(self) -> None:
         for version in ("v0.2.1", "0.2", "01.2.3", "0.2.1-beta", "0.2.1+build"):
             with self.subTest(version=version):
@@ -138,6 +151,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                 tag=self.TAG,
                 repository=self.REPOSITORY,
                 project_version=self.VERSION,
+                notes=("测试更新内容",),
             )
 
             platforms = json.loads(latest_path.read_text(encoding="utf-8"))["platforms"]
@@ -166,6 +180,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                 tag=self.TAG,
                 repository=self.REPOSITORY,
                 project_version=self.VERSION,
+                notes=("测试更新内容",),
                 download_base_url=(
                     "https://gitee.com/optimistic-little-sunspot/hr-toolkit/releases/download"
                 ),
@@ -207,6 +222,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                 tag=self.TAG,
                 repository=self.REPOSITORY,
                 project_version=self.VERSION,
+                notes=("测试更新内容",),
                 download_base_url=(
                     "https://gitee.com/optimistic-little-sunspot/hr-toolkit/releases/download"
                 ),
@@ -239,6 +255,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                 tag=self.TAG,
                 repository=self.REPOSITORY,
                 project_version=self.VERSION,
+                notes=("测试更新内容",),
                 download_base_url=(
                     "https://gitee.com/optimistic-little-sunspot/hr-toolkit/releases/download"
                 ),
