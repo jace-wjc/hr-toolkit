@@ -163,26 +163,6 @@ ApplicationWindow {
                 anchors.bottomMargin: 14
                 spacing: 0
 
-                Item {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 70
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: root.compactSidebar ? 0 : 6
-                        anchors.topMargin: 10
-                        anchors.bottomMargin: 21
-                        spacing: 9
-                        BrandMark { Layout.preferredWidth: 26; Layout.preferredHeight: 26 }
-                        ColumnLayout {
-                            visible: !root.compactSidebar
-                            Layout.fillWidth: true
-                            spacing: 2
-                            Text { text: "HR Workbench"; color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
-                            Text { text: "人资运营自动化"; color: root.textFaint; font.pixelSize: 12 }
-                        }
-                    }
-                }
-
                 Card {
                     id: sidebarProjectCard
                     objectName: "sidebarProjectCard"
@@ -433,6 +413,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
                     spacing: 5
+                    BrandMark { Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
                     Text { visible: !root.compactSidebar; text: "v" + controller.appVersion; color: root.textDisabled; font.pixelSize: 10 }
                     Rectangle { visible: !root.compactSidebar; Layout.preferredWidth: 4; Layout.preferredHeight: 4; radius: 2; color: "#35A37B" }
                     Item { Layout.fillWidth: true }
