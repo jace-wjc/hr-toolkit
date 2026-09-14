@@ -1298,40 +1298,106 @@ ApplicationWindow {
             anchors.topMargin: 18
             anchors.bottomMargin: 14
             spacing: 8
-            RowLayout {
+            Text { Layout.fillWidth: true; text: controller.projectName; color: root.primary; font.pixelSize: 14; font.weight: Font.DemiBold; elide: Text.ElideRight; horizontalAlignment: Text.AlignHCenter }
+            Rectangle {
                 Layout.fillWidth: true
-                Text { Layout.fillWidth: true; text: "项目文件"; color: root.textMain; font.pixelSize: 18; font.weight: Font.DemiBold }
-                AppButton { text: "回收站"; variant: "link"; enabled: controller.hasProject; onClicked: { controller.requestProjectTrash(); trashDialog.open() } }
+                Layout.preferredHeight: 34
+                radius: 8
+                color: "#FFFFFF"
+                border.color: root.border
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    spacing: 2
+                    Repeater {
+                        model: [{value: "all", label: "全部文件"}, {value: "tool", label: "当前功能"}]
+                        Button {
+                            id: scopeButton
+                            readonly property bool selected: controller.workspaceScope === modelData.value
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            text: modelData.label
+                            hoverEnabled: true
+                            focusPolicy: Qt.StrongFocus
+                            Accessible.checkable: true
+                            Accessible.checked: selected
+                            onClicked: controller.setWorkspaceScope(modelData.value)
+                            contentItem: Text {
+                                text: scopeButton.text
+                                color: scopeButton.selected ? root.primary : root.textMuted
+                                font.pixelSize: 13
+                                font.weight: scopeButton.selected ? Font.DemiBold : Font.Normal
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                radius: 6
+                                color: scopeButton.selected ? root.primarySoft : scopeButton.hovered ? root.navHover : "transparent"
+                                border.width: scopeButton.visualFocus ? 1 : 0
+                                border.color: root.primary
+                            }
+                        }
+                    }
+                }
             }
-            Text { Layout.fillWidth: true; Layout.topMargin: 3; text: controller.projectName; color: root.primary; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight }
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.bottomMargin: 4
-                spacing: 7
-                AppButton { text: "切换项目"; onClicked: { workspaceDrawer.close(); projectMenu.open() } }
-                AppButton { text: "打开文件夹"; enabled: controller.hasProject; onClicked: controller.openProjectFolder() }
-                Item { Layout.fillWidth: true }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-                AppButton { Layout.fillWidth: true; text: "全部文件"; variant: controller.workspaceScope === "all" ? "tonal" : "secondary"; onClicked: controller.setWorkspaceScope("all") }
-                AppButton { Layout.fillWidth: true; text: "当前功能"; variant: controller.workspaceScope === "tool" ? "tonal" : "secondary"; onClicked: controller.setWorkspaceScope("tool") }
-            }
-            Text { Layout.fillWidth: true; text: "按文件名查找"; color: root.textFaint; font.pixelSize: 11 }
             AppTextField {
+                id: workspaceSearchField
+                objectName: "workspaceSearchField"
                 Layout.fillWidth: true
+                Layout.preferredHeight: 38
+                leftPadding: 38
                 placeholderText: "输入文件名"
+                Accessible.name: "按文件名查找"
                 onTextEdited: controller.setWorkspaceSearch(text)
+                background: Rectangle {
+                    radius: 9
+                    color: "#F7F6F4"
+                    border.color: workspaceSearchField.activeFocus ? root.primary : "#F0EFED"
+                }
+                Image {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 16; height: 16
+                    source: "components/magnifying-glass.png"
+                    sourceSize.width: 32; sourceSize.height: 32
+                    opacity: 0.45
+                }
             }
             RowLayout {
                 Layout.fillWidth: true
                 Layout.topMargin: 2
                 spacing: 7
-                AppButton { text: "添加"; variant: "tonal"; enabled: controller.projectWritable && !controller.busy && !controller.workspaceBusy; onClicked: workspaceAddMenu.open() }
-                AppButton { text: "刷新"; variant: "link"; onClicked: controller.refreshWorkspace() }
+                AppButton {
+                    id: workspaceAddButton
+                    text: "添加"
+                    variant: "link"
+                    Layout.preferredWidth: 66
+                    Accessible.name: text
+                    enabled: controller.projectWritable && !controller.busy && !controller.workspaceBusy
+                    onClicked: workspaceAddMenu.open()
+                    contentItem: RowLayout {
+                        spacing: 7
+                        Image { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: "components/plus-circle-green.png"; sourceSize.width: 28; sourceSize.height: 28; opacity: workspaceAddButton.enabled ? 1 : 0.3 }
+                        Text { Layout.fillWidth: true; text: workspaceAddButton.text; color: workspaceAddButton.enabled ? root.primary : root.textDisabled; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
                 AppButton { visible: controller.workspaceBusy; text: "取消导入"; variant: "link"; onClicked: controller.cancelWorkspaceImport() }
                 Item { Layout.fillWidth: true }
+                AppButton {
+                    id: workspaceRefreshButton
+                    text: "刷新"
+                    variant: "link"
+                    Layout.preferredWidth: 66
+                    Accessible.name: text
+                    onClicked: controller.refreshWorkspace()
+                    contentItem: RowLayout {
+                        spacing: 7
+                        Image { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: "components/arrows-clockwise-green.png"; sourceSize.width: 28; sourceSize.height: 28 }
+                        Text { Layout.fillWidth: true; text: workspaceRefreshButton.text; color: root.primary; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
             }
             Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.borderFaint }
             Item {
@@ -1414,6 +1480,7 @@ ApplicationWindow {
                         AppButton { text: "定位"; variant: "link"; enabled: controller.workspaceSelectionAvailable; onClicked: controller.revealWorkspaceSelection() }
                         AppButton { text: "移到回收站"; variant: "link"; enabled: controller.workspaceSelectionAvailable && controller.projectWritable && !controller.busy && !controller.workspaceBusy; onClicked: controller.requestMoveSelectedBatchToTrash() }
                         Item { Layout.fillWidth: true }
+                        AppButton { text: "回收站"; variant: "link"; enabled: controller.hasProject; onClicked: { controller.requestProjectTrash(); trashDialog.open() } }
                     }
                 }
             }

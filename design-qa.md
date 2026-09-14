@@ -1,3 +1,18 @@
+# 项目文件筛选与搜索样式：2026-09-14
+
+- Source visual truth：`/var/folders/ng/s5d0j44s06z6zdc_qr9ylpv80000gn/T/codex-clipboard-8d24cf1a-0f85-40f7-973b-20328ecde8ff.png`（405×123）。
+- 实现：`/tmp/hr-project-panel.sb7gyQ/full.png`（1400×780，Mac 原生 QML、1×）及 `panel.png`（340×764 面板区域）。未打开项目，默认选中全部文件。
+- 同次图像输入比较参考局部与面板局部：按用户要求保持切换在上、搜索在下，不照搬参考顺序。参考约365像素宽的控件适配现有308逻辑像素内容宽，保留 HR 13像素字体；不将截图宽度差异视作布局问题。
+- 字体与文案：顶部项目名称居中；切换选中项加粗，未选中项灰色；搜索提示不变，移除重复的搜索说明标签，保留无障碍名称。
+- 间距与颜色：切换为单一圆角外框、内部浅绿选中底色；下方搜索为浅灰圆角背景，左侧放大镜图标。未发现挤压、截断或遮挡，首轮视觉对照通过。
+- 资产：复用现有 Phosphor MIT 图标体系，新放大镜采用官方 SVG 与96像素 PNG，实际使用 PNG；不新增运行时 SVG 依赖。
+- 行为边界：保留 setWorkspaceScope 与 setWorkspaceSearch 调用；不改数据、文件或搜索实现。实际 QML 加载与截图通过，未运行测试套件、打包或 Windows 实机验证；未实测有项目时的搜索结果。退出预览时出现 macOS 输入法服务 mach port 日志，无 QML 加载错误。
+- Findings：本次样式范围内无 P0/P1/P2 问题。Implementation checklist：名称居中、分段切换、搜索图标、搜索在下，全部完成。
+
+**final result: passed**
+
+---
+
 # Claude 背景配色：2026-09-14 局部调整
 
 - Source visual truth：`/var/folders/ng/s5d0j44s06z6zdc_qr9ylpv80000gn/T/codex-clipboard-c09e50c6-dace-47ca-afaa-905c56ccca51.png`，1851×1000。
