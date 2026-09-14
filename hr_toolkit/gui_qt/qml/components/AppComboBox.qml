@@ -44,13 +44,14 @@ ComboBox {
     }
 
     background: Rectangle {
+        radius: 6
         color: control.enabled ? "#FAF9F6" : "#F2F0EA"
         border.width: 1
         border.color: control.activeFocus ? "#17715B" : "#ECEAE4"
     }
 
     delegate: ItemDelegate {
-        width: control.width
+        width: control.popup.availableWidth
         height: 34
         highlighted: control.highlightedIndex === index
         contentItem: Text {
@@ -61,6 +62,7 @@ ComboBox {
             elide: Text.ElideRight
         }
         background: Rectangle {
+            radius: 4
             color: parent.highlighted ? "#E4EFEA" : (parent.hovered ? "#F0EEE8" : "#FFFFFF")
         }
     }
@@ -68,8 +70,9 @@ ComboBox {
     popup: Popup {
         y: control.height - 1
         width: control.width
-        implicitHeight: Math.min(contentItem.implicitHeight + 2, 260)
-        padding: 1
+        implicitHeight: Math.min(contentItem.implicitHeight + topPadding + bottomPadding, 260)
+        // Inset the list so scrolling rows cannot cover the rounded corners.
+        padding: 6
         contentItem: ListView {
             clip: true
             implicitHeight: contentHeight
@@ -78,6 +81,7 @@ ComboBox {
             ScrollIndicator.vertical: ScrollIndicator {}
         }
         background: Rectangle {
+            radius: 6
             color: "#FFFFFF"
             border.color: "#ECEAE4"
             border.width: 1

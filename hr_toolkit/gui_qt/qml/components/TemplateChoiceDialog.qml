@@ -424,8 +424,8 @@ AppDialog {
                 }
                 Label { text: "3. 告诉工具，各项内容在哪一列"; font.bold: true; font.pixelSize: 14 }
                 Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "已认出的必需列会预先选好。金额、小时、天数要与原列含义一致，这里不会换算。"; color: "#55534D"; font.pixelSize: 12 }
-                TextField { id: search; Layout.fillWidth: true; visible: extra.checked && Object.keys(dialog.role.fields).length > 8; placeholderText: "要找哪一项？例如：公司、金额"; Accessible.name: "查找需要对应的内容" }
-                TextField { id: columnSearch; Layout.fillWidth: true; visible: dialog.columnChoices.length > 16; placeholderText: "原表列太多？输入列名或内容，缩小下拉选项范围"; Accessible.name: "筛选原表中的列" }
+                AppTextField { id: search; Layout.fillWidth: true; visible: extra.checked && Object.keys(dialog.role.fields).length > 8; placeholderText: "要找哪一项？例如：公司、金额"; Accessible.name: "查找需要对应的内容" }
+                AppTextField { id: columnSearch; Layout.fillWidth: true; visible: dialog.columnChoices.length > 16; placeholderText: "原表列太多？输入列名或内容，缩小下拉选项范围"; Accessible.name: "筛选原表中的列" }
                 AppCheckBox { id: extra; text: "查看其他可选内容（没有就不用选）"; onToggled: if (!checked) search.text = "" }
                 Repeater {
                     model: Object.keys(dialog.role.fields)

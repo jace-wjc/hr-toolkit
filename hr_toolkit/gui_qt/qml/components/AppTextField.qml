@@ -17,7 +17,7 @@ TextField {
     font.pixelSize: 13
 
     background: Rectangle {
-        radius: 0
+        radius: 6
         color: control.enabled ? "#FAF9F6" : "#F2F0EA"
         border.width: 1
         border.color: control.activeFocus ? "#17715B" : "#ECEAE4"

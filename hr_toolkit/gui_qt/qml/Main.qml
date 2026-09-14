@@ -832,6 +832,7 @@ ApplicationWindow {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 36
                                         color: root.surfaceAlt
+                                        radius: 6
                                         border.width: 1
                                         border.color: root.border
                                         Text { anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; text: controller.hasProject ? "当前项目 / 本次处理结果" : "请先新建或打开工作项目"; color: controller.hasProject ? root.textFaint : root.textDisabled; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
