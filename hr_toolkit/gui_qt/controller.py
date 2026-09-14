@@ -105,6 +105,8 @@ class AppController(QObject):
     salaryMappingChanged = Signal()
     salaryMappingRequested = Signal()
     salaryMappingClosed = Signal()
+    templateRulesRequested = Signal()
+    templateSelectionRequested = Signal()
     workspaceBusyChanged = Signal()
     workspaceChanged = Signal()
     workspaceSelectionChanged = Signal()
@@ -216,6 +218,9 @@ class AppController(QObject):
         self._pending_preview: dict[str, Any] | None = None
         self._salary_header_profiles: dict[str, dict[str, Any]] = {}
         self._header_name_rules: dict[str, dict[str, Any]] = {}
+        self._template_issue: dict[str, Any] = {}
+        self._template_settings_tool = ""
+        self._template_issue_project = ""
         self._salary_pending: ToolInvocation | None = None
         self._salary_project_key = ""
         self._salary_inspection: dict[str, Any] = {}
@@ -2641,6 +2646,73 @@ class AppController(QObject):
     def salaryMappingData(self) -> dict[str, Any]:
         return self._salary_inspection
 
+    @Property(bool, notify=specChanged)
+    def supportsTemplateRules(self) -> bool:
+        from hr_toolkit.common.template_mapping import SUPPORTED_TOOLS
+        return self._spec.tool_id in SUPPORTED_TOOLS
+
+    @Property("QVariantList", notify=specChanged)
+    def templateRuleSections(self):
+        from hr_toolkit.common.template_mapping import sections
+        return sections(self._template_settings_tool, self._header_name_rules.get(self._template_settings_tool, {}))
+
+    @Property("QVariantMap", notify=templateSelectionRequested)
+    def templateSelectionData(self):
+        return self._template_issue
+
+    @Slot()
+    def reviewTemplateRules(self):
+        if self._busy or not self.supportsTemplateRules:
+            return
+        self._template_settings_tool = self._spec.tool_id
+        self.templateRulesRequested.emit()
+
+    @Slot(str)
+    def saveTemplateRules(self, payload):
+        if self._busy or self._template_settings_tool != self._spec.tool_id:
+            return
+        from hr_toolkit.common.template_mapping import catalog, clean_rules
+        from hr_toolkit.common.header_aliases import normalize_alias
+        try:
+            values = json.loads(payload)
+            specs = catalog(self._template_settings_tool)
+            defaults = {r + "|" + n: a for r, s in specs.items() for n, a in s["fields"].items()}
+            # 未改过的可选字段不因打开设置窗口而变为必填。
+            values["fields"] = {k: v for k, v in values.get("fields", {}).items()
+                                if {normalize_alias(x) for x in v} != {normalize_alias(x) for x in defaults.get(k, [])}}
+            rules = clean_rules(self._template_settings_tool, values)
+            previous = dict(self._header_name_rules)
+            old = clean_rules(self._template_settings_tool, previous.get(self._template_settings_tool, {}))
+            if rules["fields"] == old["fields"] and rules["sheets"] == old["sheets"]:
+                rules["profiles"] = old["profiles"]
+            self._header_name_rules[self._template_settings_tool] = rules
+            if not self._save_workspace_preferences():
+                self._header_name_rules = previous
+                raise ValueError("保存失败，请重试")
+            self.notificationRequested.emit("名称规则已保存", "请重新点击开始处理。不同工具的设置互不影响。", "success")
+        except (ValueError, TypeError, KeyError) as exc:
+            self.notificationRequested.emit("名称规则未保存", str(exc), "warning")
+
+    @Slot(str)
+    def saveTemplateChoice(self, payload):
+        if self._busy:
+            return
+        from hr_toolkit.common.template_mapping import save_choice
+        try:
+            tool = self._template_issue.get("tool")
+            if tool != self._spec.tool_id or self._template_issue_project != str(self._project_path):
+                raise ValueError("当前工具或项目已改变，请重新开始处理")
+            rules = save_choice(tool, self._header_name_rules.get(tool, {}), self._template_issue, json.loads(payload))
+            previous = dict(self._header_name_rules)
+            self._header_name_rules[tool] = rules
+            if not self._save_workspace_preferences():
+                self._header_name_rules = previous
+                raise ValueError("对应关系未能保存，请重试")
+            self.notificationRequested.emit("对应关系已保存", "请重新点击开始处理；同样表头的模板下次会自动使用这套对应关系。", "success")
+        except (ValueError, TypeError, KeyError) as exc:
+            self.notificationRequested.emit("对应关系未保存", str(exc), "warning")
+            self.templateSelectionRequested.emit()
+
     @Property("QVariantList", notify=salaryMappingChanged)
     def salaryAliasSections(self) -> list[dict[str, Any]]:
         from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, ALIASES, FIELD_LABELS, SHEET_LABELS, alias_rules
@@ -3030,6 +3102,11 @@ class AppController(QObject):
         store = self._project_store
         if store is None:
             return
+        from hr_toolkit.common.template_mapping import SUPPORTED_TOOLS
+        if invocation.tool_id in SUPPORTED_TOOLS:
+            invocation = replace(invocation, kwargs={**invocation.kwargs,
+                "template_rules": json.loads(json.dumps(self._header_name_rules.get(invocation.tool_id, {}), ensure_ascii=False))})
+            self._template_issue_project = str(self._project_path)
         request = RunRequest(
             tool_id=invocation.tool_id,
             tool_name=invocation.tool_name,
@@ -3147,6 +3224,19 @@ class AppController(QObject):
             self.runProgressChanged.emit()
         self._last_run_by_key[self._state_key()] = (datetime.now().strftime("%H:%M"), False)
         self.specChanged.emit()
+        from hr_toolkit.common.template_mapping import ERROR_PREFIX
+        if ERROR_PREFIX in message:
+            try:
+                issue, _ = json.JSONDecoder().raw_decode(message.split(ERROR_PREFIX, 1)[1])
+                if issue.get("tool") == self._spec.tool_id:
+                    self._template_issue = issue
+                    self._append_log("需要确认模板对应关系：" + issue.get("message", ""), "warning")
+                    self._flush_logs()
+                    self.templateSelectionRequested.emit()
+                    self.refreshWorkspace()
+                    return
+            except (ValueError, TypeError, AttributeError):
+                pass
         self._append_log(f"处理失败：{message}", "error")
         self._flush_logs()
         self.notificationRequested.emit("处理失败", message, "error")

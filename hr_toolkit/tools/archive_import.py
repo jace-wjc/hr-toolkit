@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import Workbook, load_workbook
+from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -263,6 +264,7 @@ class ArchiveSheetLayout:
     headers: dict[str, int]
 
 
+@template_tool("archive_import")
 def import_archive_transfers(
     input_path: str | Path | list[str | Path],
     target_path: str | Path | None,
@@ -561,7 +563,8 @@ def _read_transfer_file(file_path: Path) -> tuple[list[ArchiveTransferRecord], l
     warnings: list[str] = []
     try:
         ws = _find_transfer_sheet(workbook)
-        header_row = _find_header_row(ws, (HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD))
+        ws = map_sheet(ws, "transfer", file=file_path.name)
+        header_row = getattr(ws, "header_row", None) or _find_header_row(ws, (HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD))
         headers = _read_headers(ws, header_row)
         required = [HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD]
         missing = [header for header in required if header not in headers]
@@ -602,12 +605,22 @@ def _read_transfer_file(file_path: Path) -> tuple[list[ArchiveTransferRecord], l
 
 
 def _find_transfer_sheet(workbook) -> Worksheet:
+    selected = choose_sheet(workbook.worksheets, "transfer", required=False)
+    if selected is not None:
+        return selected
     for ws in workbook.worksheets:
+        if active():
+            mapped = map_sheet(ws, "transfer", required=False)
+            if mapped is not None:
+                return ws
+            continue
         try:
             _find_header_row(ws, (HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD))
             return ws
         except ValueError:
             continue
+    if active():
+        request_selection(workbook.worksheets, ["transfer"], message="请选择档案移交工作表及公司、姓名、身份证对应列")
     raise ValueError("未找到包含“公司、姓名、身份证”的档案移交表。")
 
 

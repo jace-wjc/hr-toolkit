@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import Workbook, load_workbook
+from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection, ignored_sheet, preview, assigned_role
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
@@ -227,6 +228,7 @@ class ChangeSheetLayout:
     headers: dict[str, int]
 
 
+@template_tool("personnel_change_merge")
 def merge_personnel_changes(
     input_dir: str | Path | list[str | Path],
     output_dir: str | Path,
@@ -514,16 +516,33 @@ def _read_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow]], list
     workbook = load_workbook(file_path, data_only=True)
     try:
         file_period = _detect_period([file_path])
+        recognized = False
+        used_sheets = set()
         for sheet_name in TARGET_SHEETS:
             ws = _find_source_sheet(workbook, sheet_name)
+            ws = choose_sheet(workbook.worksheets, sheet_name, ws, required=False, file=file_path.name, allow_absent=True)
+            if ws is not None and assigned_role(ws, TARGET_SHEETS) not in (None, sheet_name):
+                ws = None
             if ws is None:
                 if _looks_like_change_workbook(workbook):
                     warnings.append(f"{file_path.name} 缺少工作表：{sheet_name}")
                 continue
+            recognized = True
+            used_sheets.add(ws.title)
+            ws = map_sheet(ws, sheet_name, file=file_path.name)
             layout = _detect_sheet_layout(ws)
             rows_by_sheet[sheet_name].extend(
                 _read_data_rows(ws, layout, file_path.name, target_sheet=sheet_name, file_period=file_period, warnings=warnings)
             )
+        if active():
+            for candidate in workbook.worksheets:
+                if candidate.title in used_sheets or ignored_sheet(candidate, file_path.name):
+                    continue
+                if any(any(value for value in row) for row in preview(candidate)):
+                    request_selection([candidate], TARGET_SHEETS, file=file_path.name,
+                                      message="该工作表未对应异动类型，请选择用途；说明页等非业务表可选择不参与处理", allow_ignore=True)
+        if active() and not recognized:
+            request_selection(workbook.worksheets, TARGET_SHEETS, file=file_path.name, message="未识别到异动工作表，请选择它对应增员、减员、转正还是调动")
     finally:
         workbook.close()
     return rows_by_sheet, warnings
@@ -561,7 +580,7 @@ def _read_summary_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow
 
 
 def _detect_sheet_layout(ws: Worksheet) -> ChangeSheetLayout:
-    header_row = _find_header_row(ws)
+    header_row = getattr(ws, "header_row", None) or _find_header_row(ws)
     return ChangeSheetLayout(
         sheet_name=ws.title,
         header_row=header_row,

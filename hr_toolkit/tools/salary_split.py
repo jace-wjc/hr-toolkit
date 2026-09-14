@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import load_workbook
+from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet
 from openpyxl.cell.cell import MergedCell
 from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils import get_column_letter
@@ -200,6 +201,7 @@ class SalarySheetLayout:
     amount_end_col: int
 
 
+@template_tool("salary_split")
 def split_salary_by_company(
     input_path: str | Path,
     output_dir: str | Path,
@@ -299,11 +301,17 @@ def _find_detail_max_col(ws: Worksheet, header_row: int) -> int:
 
 
 def _detect_layout(workbook) -> SalarySheetLayout:
-    detail_sheet_name = _find_sheet_name(workbook.sheetnames, DETAIL_SHEET_KEYWORD)
-    summary_sheet_name = _find_sheet_name(workbook.sheetnames, SUMMARY_SHEET_KEYWORD)
-    detail_ws = workbook[detail_sheet_name]
+    detail = next((ws for ws in workbook.worksheets if DETAIL_SHEET_KEYWORD in ws.title), None)
+    summary = next((ws for ws in workbook.worksheets if SUMMARY_SHEET_KEYWORD in ws.title), None)
+    detail = choose_sheet(workbook.worksheets, "detail", detail)
+    summary = choose_sheet(workbook.worksheets, "summary", summary)
+    detail_sheet_name = detail.title if detail is not None else _find_sheet_name(workbook.sheetnames, DETAIL_SHEET_KEYWORD)
+    summary_sheet_name = summary.title if summary is not None else _find_sheet_name(workbook.sheetnames, SUMMARY_SHEET_KEYWORD)
+    if detail_sheet_name == summary_sheet_name:
+        raise ValueError("工资明细和工资汇总不能选择同一工作表")
+    detail_ws = map_sheet(workbook[detail_sheet_name], "detail")
 
-    header_row = _find_header_row(detail_ws, HEADER_COMPANY_SYNONYMS)
+    header_row = getattr(detail_ws, "header_row", None) or _find_header_row(detail_ws, HEADER_COMPANY_SYNONYMS)
     headers = _read_headers(detail_ws, header_row)
 
     company_col = _match_header_col(headers, HEADER_COMPANY_SYNONYMS)

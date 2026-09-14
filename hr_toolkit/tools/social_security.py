@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import load_workbook
+from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.cell_range import CellRange
@@ -318,6 +319,7 @@ class SocialSecurityResult:
         }
 
 
+@template_tool("social_security")
 def generate_social_security_reports(
     input_path: str | Path | list[str | Path],
     roster_path: str | Path,
@@ -503,8 +505,9 @@ def _read_roster(roster_path: Path, temp_dir: Path) -> dict[str, RosterPerson]:
     workbook = load_workbook(working_path, data_only=True, read_only=True)
     try:
         # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
-        ws = SheetGrid(workbook[workbook.sheetnames[0]])
-        header_row = _find_header_row(ws, (ROSTER_NAME, ROSTER_ID))
+        selected = choose_sheet(workbook.worksheets, "roster", workbook[workbook.sheetnames[0]], file=roster_path.name)
+        ws = map_sheet(SheetGrid(selected), "roster", file=roster_path.name, source_sheets=workbook.worksheets)
+        header_row = getattr(ws, "header_row", None) or _find_header_row(ws, (ROSTER_NAME, ROSTER_ID))
         headers = _read_headers(ws, header_row)
         people: dict[str, RosterPerson] = {}
         for row_index in range(header_row + 1, (ws.max_row or 0) + 1):
@@ -546,8 +549,14 @@ def _read_xls_roster(roster_path: Path) -> dict[str, RosterPerson]:
     except ImportError as exc:
         raise RuntimeError("读取 .xls 参保人员花名册需要 xlrd，请先安装依赖。") from exc
     book = xlrd.open_workbook(roster_path)
-    for sheet in book.sheets():
-        header_row = _find_xls_roster_header_row(sheet)
+    selected = choose_sheet(book.sheets(), "roster", required=False, file=roster_path.name)
+    candidates = [selected] if selected is not None else book.sheets()
+    for sheet in candidates:
+        if active():
+            sheet = map_sheet(sheet, "roster", required=selected is not None or len(candidates) == 1, file=roster_path.name)
+            if sheet is None:
+                continue
+        header_row = sheet.header_row - 1 if hasattr(sheet, "header_row") else _find_xls_roster_header_row(sheet)
         if header_row is None:
             continue
         headers = {_normalize_header(value): index for index, value in enumerate(sheet.row_values(header_row)) if _cell_text(value)}
@@ -580,6 +589,8 @@ def _read_xls_roster(roster_path: Path) -> dict[str, RosterPerson]:
             )
         if people:
             return people
+    if active():
+        request_selection(book.sheets(), ["roster"], file=roster_path.name, message="请选择参保人员花名册及对应列")
     raise ValueError("参保人员花名册中未识别到人员数据。")
 
 
@@ -599,8 +610,9 @@ def _read_payment_file(file_path: Path) -> list[SocialPaymentLine]:
     workbook = load_workbook(file_path, data_only=True, read_only=True)
     try:
         # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
-        ws = SheetGrid(workbook[workbook.sheetnames[0]])
-        header_row = _find_payment_header_row(ws)
+        selected = choose_sheet(workbook.worksheets, "payment", workbook[workbook.sheetnames[0]], file=file_path.name)
+        ws = map_sheet(SheetGrid(selected), "payment", file=file_path.name, source_sheets=workbook.worksheets)
+        header_row = getattr(ws, "header_row", None) or _find_payment_header_row(ws)
         context = _with_sheet_fee_period(context, [
             [ws.cell(row, col).value for col in range(1, ws.max_column + 1)]
             for row in range(1, header_row)
@@ -610,6 +622,7 @@ def _read_payment_file(file_path: Path) -> list[SocialPaymentLine]:
             [ws.cell(header_row + 1, col).value for col in range(1, ws.max_column + 1)],
             first_column=1,
         )
+        _require_payment_amount_mapping(ws, headers, header_row, file_path.name)
         if "参保费种" in headers and ("征收品目" in headers or "险种" in headers):
             return _read_long_sheet(ws, headers, header_row, context)
         if _is_single_kind_sheet(headers):
@@ -627,8 +640,14 @@ def _read_xls_payment_file(file_path: Path, context: SourceContext) -> list[Soci
     except ImportError as exc:
         raise RuntimeError("读取 .xls 社保清单需要 xlrd，请先安装依赖。") from exc
     book = xlrd.open_workbook(file_path)
-    for sheet in book.sheets():
-        header_row = _find_xls_header_row(sheet)
+    selected = choose_sheet(book.sheets(), "payment", required=False, file=file_path.name)
+    candidates = [selected] if selected is not None else book.sheets()
+    for sheet in candidates:
+        if active():
+            sheet = map_sheet(sheet, "payment", required=selected is not None or len(candidates) == 1, file=file_path.name)
+            if sheet is None:
+                continue
+        header_row = sheet.header_row - 1 if hasattr(sheet, "header_row") else _find_xls_header_row(sheet)
         if header_row is None:
             continue
         context = _with_sheet_fee_period(context, [sheet.row_values(row) for row in range(header_row)])
@@ -637,6 +656,7 @@ def _read_xls_payment_file(file_path: Path, context: SourceContext) -> list[Soci
             sheet.row_values(header_row + 1) if header_row + 1 < sheet.nrows else [],
             first_column=0,
         )
+        _require_payment_amount_mapping(sheet, headers, header_row + 1, file_path.name)
         if "参保费种" in headers and ("征收品目" in headers or "险种" in headers):
             return _read_xls_long_sheet(sheet, headers, header_row, context)
         if _is_single_kind_sheet(headers):
@@ -644,7 +664,19 @@ def _read_xls_payment_file(file_path: Path, context: SourceContext) -> list[Soci
         if _has_wide_amount_columns(headers):
             return _read_xls_wide_sheet(sheet, headers, header_row, context)
         return _read_xls_single_kind_sheet(sheet, headers, header_row, context)
+    if active():
+        request_selection(book.sheets(), ["payment"], file=file_path.name, message="请选择社保缴费工作表及对应列")
     raise ValueError("未找到包含姓名和身份证的表头。")
+
+
+def _require_payment_amount_mapping(sheet, headers, row, file_name):
+    if not active() or any("应缴费额" in name for name in headers):
+        return
+    from hr_toolkit.common.template_mapping import catalog
+    amount_fields = [name for name in catalog("social_security")["payment"]["fields"] if "应缴费额" in name]
+    request_selection([getattr(sheet, "source", sheet)], ["payment"], file=file_name, row=row,
+                      message="未找到缴费金额列。请对应原表金额；个人、单位及各险种不要混选，不能将缺失金额按零统计。",
+                      one_of={"payment": amount_fields})
 
 
 def _find_xls_header_row(sheet) -> int | None:

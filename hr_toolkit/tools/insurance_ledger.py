@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import load_workbook
+from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -125,6 +126,7 @@ class InsuranceLedgerResult:
         }
 
 
+@template_tool("insurance_ledger")
 def generate_insurance_ledger(
     input_path: str | Path | list[str | Path],
     roster_path: str | Path,
@@ -292,10 +294,19 @@ def _read_roster(
     people: OrderedDict[str, RosterPerson] = OrderedDict()
     try:
         worksheets = [workbook["花名册"]] if "花名册" in workbook.sheetnames else workbook.worksheets
+        selected = choose_sheet(workbook.worksheets, "roster", required=False, file=source_name)
+        if selected is not None:
+            worksheets = [selected]
+        found_sheet = False
         for ws in worksheets:
-            header_row = _find_roster_header_row(ws)
+            if active():
+                ws = map_sheet(ws, "roster", required=selected is not None or len(worksheets) == 1, file=source_name)
+                if ws is None:
+                    continue
+            header_row = getattr(ws, "header_row", None) or _find_roster_header_row(ws)
             if header_row is None:
                 continue
+            found_sheet = True
             footer_start = _find_roster_footer_start(ws, header_row + 1)
             headers = _read_headers_first(ws, header_row)
             for row_index in range(header_row + 1, footer_start):
@@ -346,6 +357,8 @@ def _read_roster(
                     warnings.append(f"花名册身份证重复但姓名不同：{id_card}，已保留首次记录 {people[id_card].name}。")
                     continue
                 people[id_card] = person
+        if active() and not found_sheet:
+            request_selection(workbook.worksheets, ["roster"], file=source_name, message="请选择花名册工作表及姓名、身份证对应列")
     finally:
         workbook.close()
     if not people:
@@ -407,17 +420,28 @@ def _read_policy_file(
     entries: list[PolicyEntry] = []
     seen: set[tuple[str, str]] = set()
     try:
-        for worksheet in workbook.worksheets:
+        selected = choose_sheet(workbook.worksheets, "policy", required=False, file=file_path.name)
+        candidates = [selected] if selected is not None else workbook.worksheets
+        found_sheet = False
+        for worksheet in candidates:
             # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
             ws = SheetGrid(worksheet)
-            header_row = _find_policy_header_row(ws)
+            if active():
+                ws = map_sheet(ws, "policy", required=selected is not None or len(candidates) == 1, file=file_path.name)
+                if ws is None:
+                    continue
+            header_row = getattr(ws, "header_row", None) or _find_policy_header_row(ws)
             if header_row is None:
                 continue
+            found_sheet = True
             policy_no = _find_policy_no(ws, file_path)
             headers = _read_headers_first(ws, header_row)
             name_col = _first_header_col(headers, ("雇员姓名", "姓名", "被保险人姓名"))
             id_col = _first_header_col(headers, ("身份证号码", "证件号", "证件号码", "身份证号"))
             amount_col = _first_header_col(headers, ("每人伤残死亡限额", "伤残死亡限额", "死亡伤残限额"))
+            if active() and amount_col is None and not policy_no.upper().startswith("PEAC"):
+                request_selection([worksheet], ["policy"], file=file_path.name, row=header_row,
+                                  message="未找到保额列，请选择每人伤残死亡限额对应列", required_fields={"policy": ["每人伤残死亡限额"]})
             if name_col is None or id_col is None:
                 continue
             for row_index in range(header_row + 1, (ws.max_row or 0) + 1):
@@ -445,6 +469,8 @@ def _read_policy_file(
                         source_row=row_index,
                     )
                 )
+        if active() and not found_sheet:
+            request_selection(workbook.worksheets, ["policy"], file=file_path.name, message="请选择保单人员工作表及对应列")
     finally:
         workbook.close()
     return entries
@@ -715,17 +741,18 @@ def _write_roster_warning_workbook(
                 continue
             ws = workbook[person.sheet_name]
             if person.sheet_name not in header_cache:
-                header_row = _find_roster_header_row(ws)
+                input_view = map_sheet(ws, "roster", file=source_workbook.name)
+                header_row = getattr(input_view, "header_row", None) or _find_roster_header_row(input_view)
                 if header_row is None:
                     header_cache[person.sheet_name] = (0, None, 0)
                     continue
-                headers = _read_headers_first(ws, header_row)
+                headers = _read_headers_first(input_view, header_row)
                 header_cache[person.sheet_name] = (header_row, headers, 0)
             header_row, headers, warning_col = header_cache[person.sheet_name]
             if header_row == 0:
                 continue
             if warning_col == 0:
-                warning_col = _last_header_column(ws, header_row) + 1
+                warning_col = max(_last_header_column(ws, header_row), max(headers.values(), default=0)) + 1
                 ws.cell(header_row, warning_col).value = "保险预警"
                 ws.cell(header_row, warning_col).fill = PatternFill("solid", fgColor="FCE4D6")
                 ws.cell(header_row, warning_col).font = Font(name="宋体", size=10, bold=True)
@@ -790,7 +817,7 @@ def _format_table(ws: Worksheet, min_row: int, max_row: int, max_col: int) -> No
 
 def _read_headers_first(ws: Worksheet | SheetGrid, header_row: int) -> dict[str, int]:
     headers: dict[str, int] = {}
-    max_col = min(ws.max_column or 0, 160)
+    max_col = min(ws.max_column or 0, max(160, max(getattr(ws, "changes", {}), default=0)))
     for col_index in range(1, max_col + 1):
         header = _normalize_header(ws.cell(header_row, col_index).value)
         if header and header not in headers:

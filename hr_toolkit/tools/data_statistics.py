@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import load_workbook
+from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, assigned_role, active, request_selection, ignored_sheet
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
@@ -214,6 +215,7 @@ class DataStatisticsResult:
         }
 
 
+@template_tool("data_statistics")
 def generate_data_statistics_reports(
     input_path: str | Path | list[str | Path],
     output_dir: str | Path,
@@ -438,16 +440,29 @@ def _read_statistics_file(file_path: Path, warnings: list[str]) -> tuple[list[At
     monthly_records: list[ReportRecord] = []
     workbook = load_workbook(file_path, data_only=True, read_only=True)
     try:
+        recognized_sheet = False
         for ws in workbook.worksheets:
             # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
             grid = SheetGrid(ws)
+            if ignored_sheet(grid, file_path.name):
+                warnings.append(f"{file_path.name} 工作表「{grid.title}」按已确认设置不参与处理。")
+                recognized_sheet = True
+                continue
             if grid.dimension_recovered:
                 warnings.append(
                     f"{file_path.name} 工作表「{grid.title}」的导出范围 "
                     f"{grid.declared_dimension or '未知'} 不完整，已自动扫描并恢复为 "
                     f"{grid.actual_dimension}。"
                 )
-            header_row = _find_header_row(grid)
+            if active():
+                mapped = _adapt_statistics_grid(grid, file_path.name)
+                if mapped is None:
+                    if any(any(v is not None and str(v).strip() for v in row) for row in grid._rows[:30]):
+                        request_selection([grid], ["attendance", "attendance_summary", "weekly", "monthly"], file=file_path.name,
+                                          message="此工作表的用途未识别，请选择对应关系；说明页等非业务表可明确选择不参与处理", allow_ignore=True)
+                    continue
+                grid = mapped
+            header_row = getattr(grid, "header_row", None) or _find_header_row(grid)
             if header_row is None:
                 # 候选 sheet 表头（前 20 行内），便于排查「未识别」类问题
                 headers_preview = _collect_preview_headers(grid)
@@ -458,14 +473,18 @@ def _read_statistics_file(file_path: Path, warnings: list[str]) -> tuple[list[At
                 continue
             headers = _read_headers(grid, header_row)
             if _is_attendance_sheet(headers):
+                recognized_sheet = True
                 attendance_rows.extend(_read_attendance_sheet(grid, headers, header_row, file_path.name, warnings=warnings))
             elif _is_summary_attendance_sheet(headers):
+                recognized_sheet = True
                 attendance_rows.extend(_read_summary_attendance_sheet(grid, headers, header_row, file_path.name, warnings=warnings))
             elif _is_report_sheet(headers):
-                report_type = _report_type_from_name(file_path.name, grid.title)
+                mapped_role = getattr(grid, "mapping_role", None)
+                report_type = mapped_role if mapped_role in {"weekly", "monthly"} else _report_type_from_name(file_path.name, grid.title)
                 if report_type is None:
                     warnings.append(f"{file_path.name} 未能判断是周报还是月报，已跳过。")
                     continue
+                recognized_sheet = True
                 records = _read_report_sheet(grid, headers, header_row, file_path.name, report_type)
                 if report_type == "weekly":
                     weekly_records.extend(records)
@@ -478,11 +497,47 @@ def _read_statistics_file(file_path: Path, warnings: list[str]) -> tuple[list[At
                     f"{file_path.name} 工作表「{grid.title}」表头不在已知考勤/周月报模板内，已跳过。"
                     f" 识别到的表头（{len(header_names)}）：{header_names[:8]}{'...' if len(header_names) > 8 else ''}"
                 )
+        if active() and not recognized_sheet:
+            request_selection(workbook.worksheets, ["attendance", "attendance_summary", "weekly", "monthly"],
+                              file=file_path.name, message="请选择该表用于每日考勤、汇总考勤、周报还是月报，并对应实际列")
     finally:
         workbook.close()
     if not attendance_rows and not weekly_records and not monthly_records:
         warnings.extend(_missing_formula_cache_warnings(file_path))
     return attendance_rows, weekly_records, monthly_records
+
+
+def _adapt_statistics_grid(grid, file_name):
+    roles = ["attendance", "attendance_summary", "weekly", "monthly"]
+    role = assigned_role(grid, roles)
+    if role:
+        mapped = map_sheet(grid, role, file=file_name)
+        headers = _read_headers(mapped, mapped.header_row)
+        valid = (_is_attendance_sheet(headers) if role == "attendance" else
+                 _is_summary_attendance_sheet(headers) if role == "attendance_summary" else _is_report_sheet(headers))
+        if not valid:
+            request_selection([grid], [role], file=file_name, row=mapped.header_row,
+                              message="所选列仍不满足该表用途，请核对日期、应出勤等对应列")
+        return mapped
+    for candidate in ("attendance", "attendance_summary", "weekly", "monthly"):
+        mapped = map_sheet(grid, candidate, required=False, file=file_name)
+        if mapped is None:
+            continue
+        headers = _read_headers(mapped, mapped.header_row)
+        if candidate == "attendance" and _is_attendance_sheet(headers):
+            return mapped
+        if candidate == "attendance_summary" and _is_summary_attendance_sheet(headers):
+            return mapped
+        if candidate in {"weekly", "monthly"} and _is_report_sheet(headers):
+            report_type = _report_type_from_name(file_name, grid.title)
+            if report_type is None:
+                request_selection([grid], ["weekly", "monthly"], file=file_name, row=mapped.header_row,
+                                  message="已找到汇报记录，请确认这是周报还是月报")
+            return map_sheet(grid, report_type, file=file_name)
+    # 有人员列的表不能因为其他必需列改名而被当作说明页跳过。
+    if any(_normalize_header(v) in {"姓名", "汇报人"} for row in grid._rows[:30] for v in row):
+        request_selection([grid], roles, file=file_name, message="已找到人员列，但其他必需列未匹配，请选择对应关系", allow_ignore=True)
+    return None
 
 
 def _missing_formula_cache_warnings(file_path: Path) -> list[str]:
@@ -588,7 +643,7 @@ def _find_header_row(grid: SheetGrid) -> int | None:
 
 def _read_headers(grid: SheetGrid, header_row: int) -> dict[str, int]:
     headers: dict[str, int] = {}
-    max_col = min(grid.max_column or 0, 120)
+    max_col = min(grid.max_column or 0, max(120, max(getattr(grid, "changes", {}), default=0)))
     for col_index in range(1, max_col + 1):
         header = _normalize_header(grid.value(header_row, col_index))
         if header:
@@ -1026,9 +1081,15 @@ def _read_expected_reporters(staff_path: Path, temp_dir: Path, warnings: list[st
     workbook = load_workbook(workbook_path, data_only=True, read_only=True)
     reporters: OrderedDict[str, ExpectedReporter] = OrderedDict()
     try:
-        for ws in workbook.worksheets:
+        selected = choose_sheet(workbook.worksheets, "staff", required=False, file=staff_path.name)
+        candidates = [selected] if selected is not None else workbook.worksheets
+        for ws in candidates:
             grid = SheetGrid(ws)
-            header_row = _find_expected_reporter_header_row(grid)
+            if active():
+                grid = map_sheet(grid, "staff", required=selected is not None or len(candidates) == 1, file=staff_path.name)
+                if grid is None:
+                    continue
+            header_row = getattr(grid, "header_row", None) or _find_expected_reporter_header_row(grid)
             if header_row is None:
                 continue
             headers = _read_headers(grid, header_row)
@@ -1056,6 +1117,8 @@ def _read_expected_reporters(staff_path: Path, temp_dir: Path, warnings: list[st
                 if name not in reporters:
                     reporters[name] = reporter
         if staff_path and not reporters:
+            if active():
+                request_selection(workbook.worksheets, ["staff"], file=staff_path.name, message="请选择应汇报人员名单及姓名对应列")
             warnings.append(f"{staff_path.name} 未识别到应汇报人员名单，请确认表头包含“姓名”或“汇报人”。")
     finally:
         workbook.close()
