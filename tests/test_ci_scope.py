@@ -16,6 +16,15 @@ SPEC.loader.exec_module(ci_scope)
 
 
 class CIScopeTests(unittest.TestCase):
+    def test_input_selection_routes_include_controller_and_policy(self):
+        for path in ("hr_toolkit/gui_qt/input_selection.py", "hr_toolkit/gui_qt/controller.py",
+                     "hr_toolkit/gui_qt/form_specs.py", "hr_toolkit/gui_qt/qml/components/FileDropTarget.qml"):
+            with self.subTest(path=path):
+                scope = ci_scope.select_scope([path])
+                self.assertTrue({"tests.test_input_selection", "tests.test_qt_controller",
+                                 "tests.test_qt_entrypoint"}.issubset(scope["targets"]))
+                self.assertFalse(scope["full"])
+
     def test_template_mapping_selects_its_business_and_gui_callers(self):
         scope = ci_scope.select_scope(["hr_toolkit/common/template_mapping.py"])
         self.assertTrue({"tests.test_template_mapping", "tests.test_header_aliases",

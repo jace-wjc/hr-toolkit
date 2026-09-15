@@ -681,6 +681,7 @@ ApplicationWindow {
                         spacing: 14
 
                         Card {
+                            id: primaryUploadCard
                             Layout.fillWidth: true
                             Layout.preferredHeight: uploadColumn.implicitHeight + 32
                             ColumnLayout {
@@ -696,6 +697,25 @@ ApplicationWindow {
                                     Layout.minimumHeight: 26
                                     Text { text: controller.inputLabel; color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
                                     Text { Layout.fillWidth: true; text: controller.inputHint; color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { Layout.fillWidth: true; text: controller.inputDropHint; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+                                    AppButton {
+                                        objectName: "continueInputButton"
+                                        visible: inputList.count > 0
+                                        enabled: controller.selectionEnabled
+                                        text: controller.inputAllowsMultiple ? "继续添加" : "更换"
+                                        variant: "link"
+                                        onClicked: {
+                                            if (controller.inputAllowsFolder && controller.inputAllowsFiles) {
+                                                addInputPopup.appendMode = true
+                                                addInputPopup.open()
+                                            } else if (controller.inputAllowsFolder) controller.appendInputFolder()
+                                            else controller.appendInputFiles()
+                                        }
+                                    }
+                                    AppButton { objectName: "clearInputsButton"; visible: inputList.count > 0; enabled: controller.selectionEnabled; text: "清空"; variant: "link"; onClicked: controller.clearInputs() }
                                 }
                                 Rectangle {
                                     Layout.fillWidth: true
@@ -758,7 +778,7 @@ ApplicationWindow {
                                                     Text { Layout.fillWidth: true; text: name; color: root.textMain; font.pixelSize: 12; elide: Text.ElideMiddle }
                                                     Text { Layout.fillWidth: true; text: path; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideMiddle }
                                                 }
-                                                AppButton { text: "移除"; variant: "link"; implicitWidth: 54; implicitHeight: 30; onClicked: controller.removeInput(index) }
+                                                AppButton { text: "移除"; variant: "link"; enabled: controller.selectionEnabled; implicitWidth: 54; implicitHeight: 30; onClicked: controller.removeInput(index) }
                                             }
                                             MouseArea { id: fileMouse; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                                         }
@@ -767,11 +787,13 @@ ApplicationWindow {
                                     MouseArea {
                                         anchors.fill: parent
                                         visible: inputList.count === 0
+                                        enabled: controller.selectionEnabled
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: {
-                                            if (controller.inputAllowsFiles && controller.inputAllowsFolder)
+                                            if (controller.inputAllowsFiles && controller.inputAllowsFolder) {
+                                                addInputPopup.appendMode = false
                                                 addInputPopup.open()
-                                            else if (controller.inputAllowsFolder)
+                                            } else if (controller.inputAllowsFolder)
                                                 controller.chooseInputFolder()
                                             else
                                                 controller.chooseInputFiles()
@@ -780,6 +802,7 @@ ApplicationWindow {
 
                                     Popup {
                                         id: addInputPopup
+                                        property bool appendMode: false
                                         x: Math.max(8, (parent.width - width) / 2)
                                         y: Math.max(8, (parent.height - height) / 2)
                                         width: 230
@@ -788,11 +811,32 @@ ApplicationWindow {
                                         background: Rectangle { radius: 10; color: "#FFFFFF"; border.color: root.border }
                                         contentItem: ColumnLayout {
                                             spacing: 4
-                                            AppButton { Layout.fillWidth: true; text: "添加文件 / 压缩包"; onClicked: { addInputPopup.close(); controller.chooseInputFiles() } }
-                                            AppButton { Layout.fillWidth: true; text: "添加文件夹"; onClicked: { addInputPopup.close(); controller.chooseInputFolder() } }
+                                            AppButton { Layout.fillWidth: true; enabled: controller.selectionEnabled; text: "添加文件 / 压缩包"; onClicked: { addInputPopup.close(); if (addInputPopup.appendMode) controller.appendInputFiles(); else controller.chooseInputFiles() } }
+                                            AppButton { Layout.fillWidth: true; enabled: controller.selectionEnabled; text: "添加文件夹"; onClicked: { addInputPopup.close(); if (addInputPopup.appendMode) controller.appendInputFolder(); else controller.chooseInputFolder() } }
                                         }
                                     }
                                 }
+                                Text {
+                                    id: inputSelectionFeedback
+                                    Layout.fillWidth: true
+                                    property var feedback: controller.selectionFeedback.input || ({})
+                                    visible: !!feedback.text
+                                    text: feedback.text || ""
+                                    textFormat: Text.PlainText; wrapMode: Text.Wrap
+                                    maximumLineCount: 6; elide: Text.ElideRight
+                                    font.pixelSize: 12; color: feedback.error ? "#A63C2C" : root.textMuted
+                                    ToolTip.visible: inputFeedbackHover.hovered && truncated
+                                    ToolTip.text: text
+                                    HoverHandler { id: inputFeedbackHover }
+                                }
+                                AppButton { visible: controller.selectionChecking; text: "取消资料检查"; variant: "link"; onClicked: controller.cancelSelectionCheck() }
+                            }
+                            FileDropTarget {
+                                objectName: "primaryInputDropTarget"
+                                anchors.fill: parent; z: 2
+                                backend: controller; role: "input"
+                                canReceive: controller.selectionEnabled
+                                contextKey: controller.currentTool + ":" + controller.currentVariant
                             }
                         }
 
@@ -808,19 +852,47 @@ ApplicationWindow {
                                 anchors.bottomMargin: 22
                                 spacing: 11
 
-                                RowLayout {
+                                Item {
                                     Layout.fillWidth: true
+                                    Layout.preferredHeight: supportSelectionColumn.implicitHeight + 16
                                     visible: controller.hasSupportField
-                                    spacing: 10
-                                    Text { Layout.preferredWidth: 145; text: controller.supportLabel; color: root.textMain; font.pixelSize: 13 }
-                                    Item {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 30
-                                        Text { anchors.fill: parent; text: controller.supportPath || "未选择"; color: controller.supportPath ? root.textMain : root.textFaint; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
+                                    ColumnLayout {
+                                        id: supportSelectionColumn
+                                        anchors.fill: parent; anchors.margins: 8; spacing: 4
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 10
+                                            Text { Layout.preferredWidth: 145; text: controller.supportLabel; color: root.textMain; font.pixelSize: 13 }
+                                            Item {
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 30
+                                                Text { anchors.fill: parent; text: controller.supportPath || "未选择"; color: controller.supportPath ? root.textMain : root.textFaint; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
+                                            }
+                                            AppButton { enabled: controller.selectionEnabled; text: controller.currentTool === "material_collector" ? "选择文件" : controller.supportButtonText; variant: "link"; onClicked: controller.chooseSupportFile() }
+                                            AppButton { enabled: controller.selectionEnabled; visible: controller.supportAllowsFolder; text: "选择文件夹"; variant: "link"; onClicked: controller.chooseSupportFolder() }
+                                            AppButton { enabled: controller.selectionEnabled; visible: !!controller.supportPath; text: "清除"; variant: "link"; onClicked: controller.clearSupport() }
+                                        }
+                                        Text { Layout.fillWidth: true; text: controller.supportDropHint; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+                                        Text {
+                                            id: supportSelectionFeedback
+                                            Layout.fillWidth: true
+                                            property var feedback: controller.selectionFeedback.support || ({})
+                                            visible: !!feedback.text
+                                            text: feedback.text || ""
+                                            textFormat: Text.PlainText; wrapMode: Text.Wrap
+                                            maximumLineCount: 6; elide: Text.ElideRight
+                                            font.pixelSize: 12; color: feedback.error ? "#A63C2C" : root.textMuted
+                                            ToolTip.visible: supportFeedbackHover.hovered && truncated
+                                            ToolTip.text: text
+                                            HoverHandler { id: supportFeedbackHover }
+                                        }
                                     }
-                                    AppButton { text: controller.currentTool === "material_collector" ? "选择文件" : controller.supportButtonText; variant: "link"; onClicked: controller.chooseSupportFile() }
-                                    AppButton { visible: controller.supportAllowsFolder; text: "选择文件夹"; variant: "link"; onClicked: controller.chooseSupportFolder() }
-                                    AppButton { visible: !!controller.supportPath; text: "清除"; variant: "link"; onClicked: controller.clearSupport() }
+                                    FileDropTarget {
+                                        objectName: "supportInputDropTarget"
+                                        anchors.fill: parent; z: 2
+                                        backend: controller; role: "support"
+                                        canReceive: controller.selectionEnabled && controller.hasSupportField
+                                        contextKey: controller.currentTool + ":" + controller.currentVariant
+                                    }
                                 }
 
                                 RowLayout {
@@ -1005,7 +1077,7 @@ ApplicationWindow {
                                 // controller explains the required next step.  A
                                 // running action must also stay clickable so it can
                                 // always be stopped safely.
-                                enabled: controller.busy || (!controller.workspaceBusy && !controller.updateBlocksTools)
+                                enabled: controller.busy || (!controller.workspaceBusy && !controller.updateBlocksTools && !controller.selectionChecking)
                                 implicitWidth: 132
                                 implicitHeight: 40
                                 onClicked: controller.runOrCancel()

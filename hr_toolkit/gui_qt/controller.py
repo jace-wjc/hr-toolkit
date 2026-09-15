@@ -16,6 +16,7 @@ from typing import Any
 
 from hr_toolkit import __version__, runlog
 from hr_toolkit.common.paths import absolute_path_hint, path_text_error, user_app_data_dir, user_home_dir
+from hr_toolkit.common.inputs import ARCHIVE_FILE_DIALOG_PATTERN
 from hr_toolkit.app_update import (
     UpdateCancelledError,
     UpdateInfo,
@@ -62,6 +63,7 @@ from .compat import (
 )
 from .form_specs import (
     DEFAULT_VARIANTS,
+    EXCEL_SUFFIXES,
     FormValidationError,
     ToolInvocation,
     build_invocation,
@@ -70,6 +72,7 @@ from .form_specs import (
     variants_for,
 )
 from .models import HistoryModel, InputFileModel, LogModel, TrashModel, WorkspaceModel
+from .input_selection import selection_hint, selection_mode, validate_selection
 
 
 NAV_GROUPS = (
@@ -115,6 +118,8 @@ class AppController(QObject):
     workspaceChanged = Signal()
     workspaceSelectionChanged = Signal()
     supportChanged = Signal()
+    selectionStateChanged = Signal()
+    dropPreviewReady = Signal("QVariantMap", arguments=["preview"])
     formRevisionChanged = Signal()
     lastResultChanged = Signal()
     historyChanged = Signal()
@@ -158,6 +163,8 @@ class AppController(QObject):
     _updateResult = Signal(str, object)
     _updateProgressIncoming = Signal(int, int)
     _inputItemsReady = Signal(int, object)
+    _selectionReady = Signal(object, object, str)
+    _dropPreviewResult = Signal(object, str)
     _invocationReady = Signal(object, object, bool)
     _startupReady = Signal(object, object, object)
 
@@ -173,6 +180,13 @@ class AppController(QObject):
         self._input_model = InputFileModel(self)
         self._input_generation = 0
         self._input_metadata: dict[Path, dict[str, Any]] = {}
+        self._selection_request = None
+        self._selection_messages: dict[tuple[str, str], dict[str, tuple[str, bool]]] = {}
+        self._drop_preview_request = None
+        self._drop_preview_pending = None
+        self._drop_preview_lock = threading.Lock()
+        self._drop_preview_running = False
+        self._drop_preview_serial = 0
         self._input_scan_lock = threading.Lock()
         self._input_scan_pending = None
         self._input_scan_running = False
@@ -317,6 +331,11 @@ class AppController(QObject):
         self._updateProgressIncoming.connect(self._apply_update_progress)
         self._updatePhaseIncoming.connect(self._apply_update_phase)
         self._inputItemsReady.connect(self._apply_input_items)
+        self._selectionReady.connect(self._apply_selection)
+        self._dropPreviewResult.connect(self._apply_drop_preview)
+        for state_signal in (self.specChanged, self.formRevisionChanged, self.projectChanged,
+                             self.busyChanged, self.workspaceBusyChanged, self.updateChanged):
+            state_signal.connect(self._selection_environment_changed)
         self._invocationReady.connect(self._apply_invocation)
         self._startupReady.connect(self._apply_startup)
 
@@ -1070,12 +1089,264 @@ class AppController(QObject):
         except Exception:
             pass
 
+    def _selection_block_reason(self) -> str:
+        if self._closed or self._shutdown_requested:
+            return "工具正在退出，暂不能添加资料。"
+        if self.updateBlocksTools:
+            return self.updateBlockMessage
+        if self._busy or self._workspace_busy or self._project_opening:
+            return "正在处理或保存项目资料，请稍后再添加。"
+        return ""
+
+    @Property(bool, notify=selectionStateChanged)
+    def selectionEnabled(self) -> bool:
+        return self._selection_request is None and not self._selection_block_reason()
+
+    @Property(bool, notify=selectionStateChanged)
+    def selectionChecking(self) -> bool:
+        return self._selection_request is not None
+
+    @Property(str, notify=specChanged)
+    def inputDropHint(self) -> str:
+        return "可拖入" + selection_hint(self._spec.input_mode) + "，也可点击选择"
+
+    @Property(str, notify=specChanged)
+    def supportDropHint(self) -> str:
+        return "可拖入" + selection_hint(self._spec.support_mode) if self.hasSupportField else ""
+
+    @Property("QVariantMap", notify=selectionStateChanged)
+    def selectionFeedback(self):
+        return {role: {"text": text, "error": error}
+                for role, (text, error) in self._selection_messages.get(self._state_key(), {}).items()}
+
+    def _selection_context(self):
+        return (self._state_key(), self._project_generation, self._form_revision,
+                self._input_generation, self.supportPath)
+
+    def _selection_message(self, role: str, text: str, error: bool = False) -> None:
+        self._selection_messages.setdefault(self._state_key(), {})[role] = (text, error)
+        self.selectionStateChanged.emit()
+
+    @Slot()
+    def _selection_environment_changed(self) -> None:
+        request = self._selection_request
+        if request and (request["context"] != self._selection_context() or self._selection_block_reason()):
+            request["cancel"].set()
+        preview = self._drop_preview_request
+        if preview and (preview["context"] != self._selection_context() or not self.selectionEnabled):
+            self.cancelDropPreview(preview["token"])
+        self.selectionStateChanged.emit()
+
+    @staticmethod
+    def _local_drop_paths(urls) -> list[Path]:
+        paths = []
+        for value in urls:
+            url = value if isinstance(value, QUrl) else QUrl(str(value))
+            if not url.isValid() or not url.isLocalFile() or not url.toLocalFile() or url.hasQuery() or url.hasFragment():
+                raise ValueError("请先将附件保存到本地；这里不接收网页、文字或未下载的附件。")
+            text = url.toLocalFile()
+            if "\x00" in text or not Path(text).is_absolute():
+                raise ValueError("无法识别本地文件位置，请重新选择。")
+            paths.append(Path(text))
+        return paths
+
+    @Slot(str, "QVariantList", result="QVariantMap")
+    def describeDrop(self, role: str, urls) -> dict[str, Any]:
+        """Only inspect URL metadata here; never touch disk during drag-over."""
+        try:
+            if not self.selectionEnabled:
+                raise ValueError(self._selection_block_reason() or "正在检查上一批资料，请稍后再拖入。")
+            if role == "support" and not self.hasSupportField:
+                raise ValueError("当前模式没有配套资料输入区。")
+            mode = selection_mode(self._spec, role)
+            paths = self._local_drop_paths(urls)
+            if not paths:
+                raise ValueError("请先将附件保存到本地后再拖入。")
+            if mode != "excel_archive_multi" and len(paths) != 1:
+                raise ValueError("这里只接收" + selection_hint(mode) + "，不能一次拖入多项。")
+            # File-only targets can reject incompatible names without stat().
+            # Targets allowing folders must inspect metadata in the worker:
+            # a perfectly valid folder can itself be named "资料.exe".
+            if mode in {"excel_single", "excel_file"} and any(path.suffix.lower() not in EXCEL_SUFFIXES for path in paths):
+                raise ValueError("不支持此类型，这里只接收 1 个 Excel 文件（.xlsx / .xls）。")
+            label = self.inputLabel if role == "input" else self.supportLabel
+            replacing = bool(self.supportPath) if role == "support" else (not self.inputAllowsMultiple and bool(self._input_states[self._state_key()]))
+            action = "替换" if replacing else "设置" if role == "support" else "添加"
+            return {"accepted": True, "message": f"松开后{action}：{label}"}
+        except ValueError as exc:
+            return {"accepted": False, "message": str(exc)}
+
+    @Slot(str, "QVariantList", result="QVariantMap")
+    def beginDropPreview(self, role: str, urls) -> dict[str, Any]:
+        if self._drop_preview_request:
+            self.cancelDropPreview(self._drop_preview_request["token"])
+        initial = self.describeDrop(role, urls)
+        if not initial["accepted"]:
+            return {**initial, "pending": False, "token": ""}
+        self._drop_preview_serial += 1
+        token = str(self._drop_preview_serial)
+        request = {"token": token, "role": role, "paths": self._local_drop_paths(urls),
+                   "mode": selection_mode(self._spec, role), "context": self._selection_context(),
+                   "cancel": threading.Event(), "message": initial["message"], "accepted": False}
+        self._drop_preview_request = request
+        with self._drop_preview_lock:
+            # Keep one worker and only the latest waiting hover request. Moving
+            # between targets must not create a thread/queue per drag event.
+            self._drop_preview_pending = request
+            start = not self._drop_preview_running
+            self._drop_preview_running = True
+        if start:
+            try:
+                threading.Thread(target=self._check_drop_previews, daemon=True,
+                                 name="HRToolkit-drop-preview").start()
+            except Exception:
+                with self._drop_preview_lock:
+                    self._drop_preview_running = False
+                self.cancelDropPreview(token)
+                return {"accepted": False, "pending": False, "token": "",
+                        "message": "暂时无法检查资料，请使用点击选择。"}
+        return {"accepted": False, "pending": True, "token": token,
+                "message": "正在检查资料类型，请稍候再松手…"}
+
+    def _check_drop_previews(self) -> None:
+        while True:
+            with self._drop_preview_lock:
+                request = self._drop_preview_pending
+                self._drop_preview_pending = None
+                if request is None or self._closed:
+                    self._drop_preview_running = False
+                    return
+            try:
+                validate_selection(request["paths"], request["mode"], request["cancel"].is_set)
+                error = ""
+            except Exception as exc:
+                error = str(exc).replace("本次未添加，原选择保持不变。\n", "无法放入此区域：\n", 1)
+            if not self._closed and not request["cancel"].is_set():
+                self._dropPreviewResult.emit(request, error)
+
+    @Slot(object, str)
+    def _apply_drop_preview(self, request, error: str) -> None:
+        if (request is not self._drop_preview_request or request["cancel"].is_set()
+                or request["context"] != self._selection_context() or not self.selectionEnabled):
+            return
+        request["accepted"] = not error
+        self.dropPreviewReady.emit({"token": request["token"], "pending": False,
+                                    "accepted": not error, "message": error or request["message"]})
+
+    @Slot(str)
+    def cancelDropPreview(self, token: str) -> None:
+        request = self._drop_preview_request
+        if request is None or request["token"] != token:
+            return
+        request["cancel"].set()
+        self._drop_preview_request = None
+        with self._drop_preview_lock:
+            if self._drop_preview_pending is request:
+                self._drop_preview_pending = None
+        self.dropPreviewReady.emit({"token": token, "pending": False, "accepted": False, "message": ""})
+
+    @Slot(str, str, "QVariantList", result=bool)
+    def finishDropPreview(self, token: str, role: str, urls) -> bool:
+        request = self._drop_preview_request
+        if (request is None or request["token"] != token or request["role"] != role
+                or not request["accepted"] or request["cancel"].is_set()
+                or request["context"] != self._selection_context() or not self.selectionEnabled):
+            return False
+        try:
+            paths = self._local_drop_paths(urls)
+        except ValueError:
+            return False
+        if paths != request["paths"]:
+            return False
+        self.cancelDropPreview(token)
+        # Recheck after drop as a safety net for files deleted/moved since hover.
+        self._submit_selection(role, paths, replace=role == "support" or not self.inputAllowsMultiple)
+        return self.selectionChecking
+
+    @Slot(str, "QVariantList")
+    def addDroppedUrls(self, role: str, urls) -> None:
+        preview = self.describeDrop(role, urls)
+        if not preview["accepted"]:
+            if role in {"input", "support"}:
+                self._selection_message(role, preview["message"], True)
+            return
+        self._submit_selection(role, self._local_drop_paths(urls),
+                               replace=role == "support" or not self.inputAllowsMultiple)
+
+    def _submit_selection(self, role: str, paths: list[Path], *, replace: bool) -> None:
+        if not self.selectionEnabled:
+            return
+        mode = selection_mode(self._spec, role)
+        request = {"context": self._selection_context(), "role": role,
+                   "replace": replace, "cancel": threading.Event()}
+        self._selection_request = request
+        self._selection_message(role, "正在检查所选资料…")
+
+        def worker() -> None:
+            try:
+                selected = validate_selection(paths, mode, request["cancel"].is_set)
+                error = ""
+            except Exception as exc:
+                selected, error = [], str(exc)
+            if not self._closed:
+                self._selectionReady.emit(request, selected, error)
+
+        try:
+            threading.Thread(target=worker, daemon=True, name="HRToolkit-input-selection").start()
+        except Exception:
+            self._selection_request = None
+            self._selection_message(role, "暂时无法检查资料，请稍后重试。", True)
+
+    @Slot(object, object, str)
+    def _apply_selection(self, request, paths, error: str) -> None:
+        if request is not self._selection_request:
+            return
+        self._selection_request = None
+        role = request["role"]
+        # A user can navigate away and back while a network path is checking.
+        if self._closed or request["context"] != self._selection_context():
+            self._selection_messages.get(request["context"][0], {}).pop(role, None)
+            self.selectionStateChanged.emit()
+            return
+        if request["cancel"].is_set() or self._selection_block_reason():
+            self._selection_message(role, "本次检查已取消，原选择保持不变。")
+            return
+        if error:
+            self._selection_message(role, error, True)
+            return
+        if role == "support":
+            self._support_states[self._state_key()] = str(paths[0])
+            self.supportChanged.emit()
+            message = "已设置" + self.supportLabel + "。"
+        else:
+            before = len(self._input_states[self._state_key()])
+            self._set_inputs(paths, replace=request["replace"])
+            count = len(self._input_states[self._state_key()])
+            added = count if request["replace"] else count - before
+            message = f"已{'选择' if request['replace'] else '添加'} {added} 项资料，当前共 {count} 项。"
+            if not added:
+                message = "这些资料已在列表中，未重复添加。"
+        self._selection_message(role, message)
+
+    @Slot()
+    def cancelSelectionCheck(self) -> None:
+        if self._selection_request is not None:
+            self._selection_request["cancel"].set()
+            self._selection_message(self._selection_request["role"], "已请求取消，等待当前路径检查退出…")
+
     @Slot()
     def chooseInputFiles(self) -> None:
-        if self._busy or not self.inputAllowsFiles:
+        self._choose_input_files(append=False)
+
+    @Slot()
+    def appendInputFiles(self) -> None:
+        self._choose_input_files(append=True)
+
+    def _choose_input_files(self, *, append: bool) -> None:
+        if not self.selectionEnabled or not self.inputAllowsFiles:
             return
         parent = self._dialog_parent()
-        file_filter = "Excel 或压缩包 (*.xlsx *.xls *.zip *.rar *.7z *.tar *.gz *.tgz);;所有文件 (*)"
+        file_filter = f"Excel 或压缩包 (*.xlsx *.xls {ARCHIVE_FILE_DIALOG_PATTERN});;所有文件 (*)"
         initial_dir = self._file_dialog_initial_dir()
         if self._spec.input_mode == "excel_single":
             filename, _selected = QFileDialog.getOpenFileName(
@@ -1089,21 +1360,25 @@ class AppController(QObject):
             paths = [Path(filename) for filename in filenames]
         if paths:
             self._remember_file_dialog_path(paths)
-            self._set_inputs(paths, replace=self._spec.tool_id == "data_statistics" or not self.inputAllowsMultiple)
+            self._submit_selection("input", paths, replace=not self.inputAllowsMultiple or (self._spec.tool_id == "data_statistics" and not append))
 
     @Slot()
     def chooseInputFolder(self) -> None:
-        if self._busy or not self.inputAllowsFolder:
+        self._choose_input_folder(append=False)
+
+    @Slot()
+    def appendInputFolder(self) -> None:
+        self._choose_input_folder(append=True)
+
+    def _choose_input_folder(self, *, append: bool) -> None:
+        if not self.selectionEnabled or not self.inputAllowsFolder:
             return
         selected = QFileDialog.getExistingDirectory(
             self._dialog_parent(), self._spec.input_drop_title, self._file_dialog_initial_dir()
         )
         if selected:
             self._remember_file_dialog_path(selected)
-            self._set_inputs(
-                [Path(selected)],
-                replace=self._spec.tool_id == "data_statistics" or not self.inputAllowsMultiple,
-            )
+            self._submit_selection("input", [Path(selected)], replace=not self.inputAllowsMultiple or (self._spec.tool_id == "data_statistics" and not append))
 
     def _set_inputs(self, paths: list[Path], *, replace: bool) -> None:
         key = self._state_key()
@@ -1179,53 +1454,54 @@ class AppController(QObject):
 
     @Slot(int)
     def removeInput(self, index: int) -> None:
-        if self._busy:
+        if not self.selectionEnabled:
             return
         values = self._input_states[self._state_key()]
         if 0 <= index < len(values):
             del values[index]
             self._sync_input_model()
+            self._selection_message("input", "")
 
     @Slot()
     def clearInputs(self) -> None:
-        if self._busy:
+        if not self.selectionEnabled:
             return
         self._input_states[self._state_key()].clear()
         self._sync_input_model()
+        self._selection_message("input", "已清空选择，原文件未删除。")
 
     @Slot()
     def chooseSupportFile(self) -> None:
-        if self._busy or not self._spec.support_id:
+        if not self.selectionEnabled or not self.hasSupportField:
             return
         file_filter = "Excel 工作簿 (*.xlsx *.xls);;所有文件 (*)"
         if self._spec.support_mode == "excel_archive_or_folder":
-            file_filter = "Excel 或压缩包 (*.xlsx *.xls *.zip *.rar *.7z *.tar *.gz *.tgz);;所有文件 (*)"
+            file_filter = f"Excel 或压缩包 (*.xlsx *.xls {ARCHIVE_FILE_DIALOG_PATTERN});;所有文件 (*)"
         filename, _selected = QFileDialog.getOpenFileName(
             self._dialog_parent(), self._spec.support_label, self._file_dialog_initial_dir(), file_filter
         )
         if filename:
             self._remember_file_dialog_path(filename)
-            self._support_states[self._state_key()] = filename
-            self.supportChanged.emit()
+            self._submit_selection("support", [Path(filename)], replace=True)
 
     @Slot()
     def chooseSupportFolder(self) -> None:
-        if self._busy or not self.supportAllowsFolder:
+        if not self.selectionEnabled or not self.hasSupportField or not self.supportAllowsFolder:
             return
         selected = QFileDialog.getExistingDirectory(
             self._dialog_parent(), self._spec.support_label, self._file_dialog_initial_dir()
         )
         if selected:
             self._remember_file_dialog_path(selected)
-            self._support_states[self._state_key()] = selected
-            self.supportChanged.emit()
+            self._submit_selection("support", [Path(selected)], replace=True)
 
     @Slot()
     def clearSupport(self) -> None:
-        if self._busy:
+        if not self.selectionEnabled:
             return
         self._support_states[self._state_key()] = ""
         self.supportChanged.emit()
+        self._selection_message("support", "")
 
     @Slot(result=str)
     @Slot(str, result=str)
@@ -2660,6 +2936,9 @@ class AppController(QObject):
         self.updateChanged.emit()
 
     def _block_run_for_update(self) -> bool:
+        if self.selectionChecking:
+            self.notificationRequested.emit("正在检查资料", "请等待资料检查完成，或先取消本次检查。", "warning")
+            return True
         if not self.updateBlocksTools:
             return False
         self.notificationRequested.emit(
@@ -3608,6 +3887,10 @@ class AppController(QObject):
         if self._shutdown_requested or self._closed:
             return
         self._shutdown_requested = True
+        if self._drop_preview_request is not None:
+            self.cancelDropPreview(self._drop_preview_request["token"])
+        if self._selection_request is not None:
+            self._selection_request["cancel"].set()
         self._shutdown_wait_started = time.monotonic()
         if self._preview_cancel_event is not None:
             self._preview_cancel_event.set()
@@ -3679,6 +3962,10 @@ class AppController(QObject):
         if hasattr(self, "_log_flush_timer") and self._log_flush_timer.isActive():
             self._log_flush_timer.stop()
         self._closed = True
+        if self._drop_preview_request is not None:
+            self.cancelDropPreview(self._drop_preview_request["token"])
+        if self._selection_request is not None:
+            self._selection_request["cancel"].set()
         with self._workspace_read_lock:
             self._workspace_read_jobs.clear()
         if self._preview_cancel_event is not None:

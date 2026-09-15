@@ -314,6 +314,24 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertNotIn("SetWindowLongPtrW", source)
         self.assertNotIn("WM_PAINT", source)
 
+    def test_file_drop_targets_are_separate_and_do_not_add_polling(self) -> None:
+        qml_root = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
+        source = (qml_root / "Main.qml").read_text(encoding="utf-8")
+        target = (qml_root / "components" / "FileDropTarget.qml").read_text(encoding="utf-8")
+        for name in ("primaryInputDropTarget", "supportInputDropTarget", "continueInputButton", "clearInputsButton"):
+            self.assertIn('objectName: "' + name + '"', source)
+        self.assertIn('backend: controller; role: "input"', source)
+        self.assertIn('backend: controller; role: "support"', source)
+        self.assertIn("controller.appendInputFiles()", source)
+        self.assertIn("controller.appendInputFolder()", source)
+        self.assertIn("drop.accept(Qt.CopyAction)", target)
+        self.assertIn("dropTarget.enteredContext === dropTarget.contextKey", target)
+        self.assertIn("beginDropPreview(dropTarget.role, drag.urls)", target)
+        self.assertIn("finishDropPreview(dropTarget.feedback.token, dropTarget.role, drop.urls)", target)
+        self.assertNotIn("addDroppedUrls", target)
+        self.assertNotIn("Timer {", target)
+        self.assertNotIn("ShaderEffect", target)
+
     def test_live_resize_keeps_layout_breakpoints_and_workspace_stable(self) -> None:
         qml_path = (
             Path(__file__).resolve().parents[1]
@@ -351,7 +369,7 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn('objectName: "runButton"', source)
         self.assertNotIn('objectName: "workspaceButtonMouse"', source)
         self.assertNotIn('text: "项\\n目\\n文\\n件"', source)
-        self.assertIn("enabled: controller.busy || (!controller.workspaceBusy && !controller.updateBlocksTools)", source)
+        self.assertIn("enabled: controller.busy || (!controller.workspaceBusy && !controller.updateBlocksTools && !controller.selectionChecking)", source)
         self.assertIn("text: controller.updateBlockMessage", source)
         self.assertNotIn("UpdateProgressDialog {", source)
         self.assertIn("readonly property int preferredWindowWidth: 1400", source)

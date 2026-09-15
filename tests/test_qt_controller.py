@@ -47,6 +47,140 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_drop_preview_uses_local_urls_without_disk_access(self) -> None:
+        from hr_toolkit.gui_qt.compat import QUrl
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        path = Path(tempfile.gettempdir()) / "员工 名册#100%.xlsx"
+        url = QUrl.fromLocalFile(str(path)).toString()
+        with patch.object(Path, "stat", side_effect=AssertionError("drag hover must not stat")):
+            self.assertTrue(controller.describeDrop("support", [url])["accepted"])
+            self.assertEqual(controller._local_drop_paths([url]), [path])
+            self.assertFalse(controller.describeDrop("support", [url, url])["accepted"])
+            self.assertFalse(controller.describeDrop("input", ["https://example.com/a.xlsx"])["accepted"])
+            self.assertFalse(controller.describeDrop("input", ["文字"])["accepted"])
+            self.assertFalse(controller.describeDrop("support", [QUrl.fromLocalFile(str(path.with_suffix(".exe"))).toString()])["accepted"])
+
+    def test_hover_type_error_is_reported_before_drop_without_changing_selection(self) -> None:
+        from hr_toolkit.gui_qt.compat import QUrl
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        previews = []
+        controller.dropPreviewReady.connect(previews.append)
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / "安装程序.exe"
+            exe.touch()
+            urls = [QUrl.fromLocalFile(str(exe)).toString()]
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread"):
+                initial = controller.beginDropPreview("input", urls)
+                self.assertTrue(initial["pending"])
+                self.assertFalse(initial["accepted"])
+                controller._check_drop_previews()
+                self.assertFalse(previews[-1]["accepted"])
+                self.assertIn("安装程序.exe", previews[-1]["message"])
+                self.assertFalse(controller.finishDropPreview(initial["token"], "input", urls))
+                self.assertFalse(controller.selectionChecking)
+                self.assertEqual(controller.selectionFeedback, {})
+                self.assertEqual(controller._input_states[controller._state_key()], [])
+
+    def test_hover_checks_actual_folder_type_and_requires_matching_completed_preview(self) -> None:
+        from hr_toolkit.gui_qt.compat import QUrl
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        previews = []
+        controller.dropPreviewReady.connect(previews.append)
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp) / "资料.exe"
+            folder.mkdir()
+            urls = [QUrl.fromLocalFile(str(folder)).toString()]
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread"):
+                initial = controller.beginDropPreview("input", urls)
+                self.assertFalse(controller.finishDropPreview(initial["token"], "input", urls))
+                controller._check_drop_previews()
+                self.assertTrue(previews[-1]["accepted"])
+                self.assertFalse(controller.finishDropPreview(initial["token"], "support", urls))
+                self.assertFalse(controller.finishDropPreview(initial["token"], "input", []))
+                self.assertTrue(controller.finishDropPreview(initial["token"], "input", urls))
+                self.assertTrue(controller.selectionChecking)
+
+    def test_hover_uses_one_worker_and_ignores_exited_target_results(self) -> None:
+        from hr_toolkit.gui_qt.compat import QUrl
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        previews = []
+        controller.dropPreviewReady.connect(previews.append)
+        urls = [QUrl.fromLocalFile(str(Path(tempfile.gettempdir()) / "名单.xlsx")).toString()]
+        with patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker:
+            controller.beginDropPreview("input", urls)
+            old = controller._drop_preview_request
+            current = controller.beginDropPreview("support", urls)
+            self.assertEqual(worker.return_value.start.call_count, 1)
+            self.assertTrue(old["cancel"].is_set())
+            previews.clear()
+            controller._apply_drop_preview(old, "过期错误")
+            self.assertEqual(previews, [])
+            controller.cancelDropPreview(current["token"])
+            self.assertIsNone(controller._drop_preview_pending)
+            self.assertFalse(controller.finishDropPreview(current["token"], "support", urls))
+
+    def test_drop_selection_is_atomic_and_support_does_not_change_inputs(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as temp:
+            first, roster = Path(temp) / "缴费.xlsx", Path(temp) / "名单.xlsx"
+            first.touch(); roster.touch()
+            controller._set_inputs([first], replace=True)
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread"):
+                controller._submit_selection("support", [roster], replace=True)
+                request = controller._selection_request
+                controller._apply_selection(request, [roster], "")
+                self.assertEqual(controller.supportPath, str(roster))
+                self.assertEqual(controller._input_states[controller._state_key()], [first])
+                controller._submit_selection("input", [roster], replace=True)
+                controller._apply_selection(controller._selection_request, [], "资料无法访问")
+                self.assertEqual(controller._input_states[controller._state_key()], [first])
+                self.assertTrue(controller.selectionFeedback["input"]["error"])
+
+    def test_pending_selection_blocks_runs_and_discards_stale_or_cancelled_results(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        source = Path(tempfile.gettempdir()) / "工资.xlsx"
+        with patch("hr_toolkit.gui_qt.controller.threading.Thread"):
+            controller._submit_selection("input", [source], replace=False)
+            request = controller._selection_request
+            self.assertTrue(controller.selectionChecking)
+            self.assertFalse(controller.selectionEnabled)
+            self.assertTrue(controller._block_run_for_update())
+            controller.selectTool("salary_merge")
+            controller._apply_selection(request, [source], "")
+            self.assertEqual(controller._input_states[controller._state_key()], [])
+            controller._submit_selection("input", [source], replace=False)
+            request = controller._selection_request
+            controller.cancelSelectionCheck()
+            controller._apply_selection(request, [source], "")
+            self.assertEqual(controller._input_states[controller._state_key()], [])
+            self.assertFalse(controller.selectionChecking)
+            controller._update_busy = True
+            controller._update_phase = "downloading"
+            self.assertFalse(controller.selectionEnabled)
+            controller._submit_selection("input", [source], replace=False)
+            self.assertIsNone(controller._selection_request)
+
+    def test_attendance_explicit_append_does_not_use_legacy_replace(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("data_statistics")
+        filename = str(Path(tempfile.gettempdir()) / "考勤.xlsx")
+        with patch.object(controller, "_submit_selection") as submit, \
+             patch.object(controller, "_file_dialog_initial_dir", return_value=""), \
+             patch.object(controller, "_remember_file_dialog_path"), \
+             patch("hr_toolkit.gui_qt.controller.QFileDialog.getOpenFileNames", return_value=([filename], "")):
+            controller._dialog_parent = lambda: None
+            controller.chooseInputFiles()
+            self.assertTrue(submit.call_args.kwargs["replace"])
+            controller.appendInputFiles()
+            self.assertFalse(submit.call_args.kwargs["replace"])
+
     def test_background_update_downloads_immediately_but_manual_check_prompts(self) -> None:
         from hr_toolkit.app_update import UpdateInfo
         info = UpdateInfo("9.0.0", "https://gitee.com/setup.exe", "a" * 64, (), True, "https://gitee.com/manifest")
