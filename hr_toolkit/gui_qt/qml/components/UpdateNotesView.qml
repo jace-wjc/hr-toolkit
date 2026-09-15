@@ -48,7 +48,8 @@ Rectangle {
                     var text = parts[k].trim().replace(/^#{1,6}\s+/, "").replace(/^[-*•]\s+/, "")
                     if (!text) continue
                     var category = text.replace(/[：:]$/, "")
-                    result.push({text: text, heading: category === "功能更新" || category === "问题修复"})
+                    result.push({text: text, heading: category === "功能更新" || category === "问题修复"
+                                 || category === "界面与布局" || category === "性能优化"})
                 }
             }
         }
