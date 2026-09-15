@@ -4,13 +4,17 @@ import QtQuick.Layouts 1.15
 
 Dialog {
     id: dialog
+    objectName: "releaseNotesDialog"
     property url iconSource
     property var details: ({entries: []})
     signal dismissed()
     modal: true
     closePolicy: Popup.CloseOnEscape
     width: Math.min(580, parent ? parent.width - 32 : 580)
-    height: Math.min(implicitHeight, 520, parent ? parent.height * 0.84 : 520)
+    // Size from intrinsic sections, never from the allocated scroll viewport.
+    readonly property real naturalContentHeight: summaryRow.implicitHeight + 18 + notesView.implicitHeight
+    height: Math.min(naturalContentHeight + topPadding + bottomPadding + footer.implicitHeight + spacing,
+                     520, parent ? parent.height * 0.84 : 520)
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
     padding: 20; spacing: 18
@@ -22,10 +26,11 @@ Dialog {
     function showNotes(value) { details = value; open() }
     onOpened: { notesView.resetPosition(); done.forceActiveFocus() }
     onClosed: dismissed()
-    contentItem: ColumnLayout {
+    contentItem: Column {
         spacing: 18
         RowLayout {
-            Layout.fillWidth: true; spacing: 18
+            id: summaryRow
+            width: dialog.availableWidth; spacing: 18
             Image { Layout.preferredWidth: 56; Layout.preferredHeight: 56; source: dialog.iconSource; sourceSize.width: 112; sourceSize.height: 112; fillMode: Image.PreserveAspectFit; smooth: true }
             ColumnLayout {
                 Layout.fillWidth: true; spacing: 8
@@ -36,9 +41,8 @@ Dialog {
         UpdateNotesView {
             id: notesView
             objectName: "historyNotesView"
-            Layout.fillWidth: true; Layout.fillHeight: true
-            Layout.minimumHeight: 0
-            Layout.preferredHeight: implicitHeight
+            width: dialog.availableWidth
+            height: Math.max(0, Math.min(implicitHeight, dialog.contentItem.height - summaryRow.implicitHeight - 18))
             history: true
             entries: dialog.details.entries || []
         }

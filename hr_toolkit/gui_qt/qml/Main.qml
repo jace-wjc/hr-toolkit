@@ -683,6 +683,12 @@ ApplicationWindow {
                     objectName: "mainScroll"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    Layout.minimumHeight: 0
+                    // The viewport takes the space left by the header. Its
+                    // intrinsic size must not feed the scrolling content's
+                    // height-for-width back into the surrounding layout.
+                    implicitWidth: 0
+                    implicitHeight: 0
                     Layout.topMargin: 0
                     clip: true
                     contentWidth: availableWidth
@@ -709,34 +715,34 @@ ApplicationWindow {
                         value: Flickable.StopAtBounds
                     }
 
-                    ColumnLayout {
+                    Column {
                         id: contentColumn
                         objectName: "contentColumn"
                         width: Math.min(root.contentMaxWidth, mainScroll.availableWidth)
-                        height: implicitHeight
                         x: Math.max(0, (mainScroll.availableWidth - width) / 2)
                         spacing: 14
 
                         Card {
                             id: primaryUploadCard
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: uploadColumn.implicitHeight + 32
-                            ColumnLayout {
+                            width: contentColumn.width
+                            height: uploadColumn.implicitHeight + 32
+                            Column {
                                 id: uploadColumn
-                                anchors.fill: parent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
                                 anchors.leftMargin: 20
                                 anchors.rightMargin: 20
                                 anchors.topMargin: 16
-                                anchors.bottomMargin: 18
                                 spacing: 10
                                 RowLayout {
-                                    Layout.fillWidth: true
-                                    Layout.minimumHeight: 26
+                                    width: uploadColumn.width
+                                    height: Math.max(26, implicitHeight)
                                     Text { text: controller.inputLabel; color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
                                     Text { Layout.fillWidth: true; text: controller.inputHint; color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
                                 }
                                 RowLayout {
-                                    Layout.fillWidth: true
+                                    width: uploadColumn.width
                                     Text { Layout.fillWidth: true; text: controller.inputDropHint; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
                                     AppButton {
                                         objectName: "continueInputButton"
@@ -755,8 +761,8 @@ ApplicationWindow {
                                     AppButton { objectName: "clearInputsButton"; visible: inputList.count > 0; enabled: controller.selectionEnabled; text: "清空"; variant: "link"; onClicked: controller.clearInputs() }
                                 }
                                 Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: inputList.count > 0 ? Math.min(260, Math.max(54, inputList.count * 46)) : 118
+                                    width: uploadColumn.width
+                                    height: inputList.count > 0 ? Math.min(260, Math.max(54, inputList.count * 46)) : 118
                                     radius: 12
                                     color: "#FBFAF7"
                                     border.width: 0
@@ -870,7 +876,7 @@ ApplicationWindow {
                                 }
                                 Text {
                                     id: inputSelectionFeedback
-                                    Layout.fillWidth: true
+                                    width: uploadColumn.width
                                     property var feedback: controller.selectionFeedback.input || ({})
                                     visible: !!feedback.text
                                     text: feedback.text || ""
@@ -894,8 +900,8 @@ ApplicationWindow {
 
                         Card {
                             id: formCard
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: formColumn.implicitHeight + 54 + (formScroll.needsHorizontalScroll ? 14 : 0)
+                            width: contentColumn.width
+                            height: formColumn.implicitHeight + 54 + (formScroll.needsHorizontalScroll ? 14 : 0)
                             Flickable {
                                 id: formScroll
                                 objectName: "formScroll"
@@ -929,17 +935,16 @@ ApplicationWindow {
                                     interactive: true
                                 }
                             }
-                            ColumnLayout {
+                            Column {
                                 id: formColumn
                                 objectName: "formColumn"
                                 parent: formScroll.contentItem
                                 width: formScroll.contentWidth
-                                height: implicitHeight
                                 spacing: 11
 
                                 Item {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: supportSelectionColumn.implicitHeight + 16
+                                    width: formColumn.width
+                                    height: supportSelectionColumn.implicitHeight + 16
                                     visible: controller.hasSupportField
                                     ColumnLayout {
                                         id: supportSelectionColumn
@@ -997,7 +1002,7 @@ ApplicationWindow {
                                 }
 
                                 RowLayout {
-                                    Layout.fillWidth: true
+                                    width: formColumn.width
                                     visible: controller.currentTool !== "folder_rename"
                                     spacing: 10
                                     Text { Layout.preferredWidth: 145; text: "结果位置"; color: root.textMain; font.pixelSize: 13 }
@@ -1015,10 +1020,10 @@ ApplicationWindow {
                                     AppButton { text: "打开已有"; variant: "link"; visible: !controller.hasProject; enabled: controller.selectionEnabled; onClicked: controller.openProjectDialog() }
                                 }
 
-                                ColumnLayout {
+                                Column {
                                     id: materialOptions
-                                    Layout.fillWidth: true
-                                    Layout.topMargin: 9
+                                    width: formColumn.width
+                                    topPadding: 9
                                     visible: controller.currentTool === "material_collector"
                                     spacing: 5
                                     readonly property var libraryField: root.fieldById("library_mode")
@@ -1029,7 +1034,7 @@ ApplicationWindow {
                                     readonly property bool flatOcr: String(libraryField.value) === "flat_ocr"
 
                                     Text {
-                                        Layout.fillWidth: true
+                                        width: materialOptions.width
                                         text: "资料检索与打包设置"
                                         color: root.textMain
                                         font.pixelSize: 13
@@ -1037,13 +1042,13 @@ ApplicationWindow {
                                     }
 
                                     Rectangle {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: materialOptionsColumn.implicitHeight + 28
+                                        width: materialOptions.width
+                                        height: materialOptionsColumn.implicitHeight + 28
                                         color: root.surface
                                         border.width: 1
                                         border.color: root.border
 
-                                        ColumnLayout {
+                                        Column {
                                             id: materialOptionsColumn
                                             anchors.left: parent.left
                                             anchors.right: parent.right
@@ -1052,7 +1057,7 @@ ApplicationWindow {
                                             spacing: 10
 
                                             RowLayout {
-                                                Layout.fillWidth: true
+                                                width: materialOptionsColumn.width
                                                 spacing: 8
                                                 Text { Layout.preferredWidth: 66; text: "资料库形式"; color: root.textMain; font.pixelSize: 13 }
                                                 AppComboBox {
@@ -1073,7 +1078,7 @@ ApplicationWindow {
                                             }
 
                                             RowLayout {
-                                                Layout.fillWidth: true
+                                                width: materialOptionsColumn.width
                                                 spacing: 8
                                                 Text { Layout.preferredWidth: 66; text: "目标人员"; color: root.textMain; font.pixelSize: 13 }
                                                 AppTextField {
@@ -1094,8 +1099,8 @@ ApplicationWindow {
                                             }
 
                                             Text {
-                                                Layout.fillWidth: true
-                                                Layout.leftMargin: 74
+                                                x: 74
+                                                width: Math.max(0, materialOptionsColumn.width - x)
                                                 text: "输入姓名或身份证（多人用逗号隔开，如“张三, 李四”）；留空则按名单表格处理"
                                                 color: root.textFaint
                                                 font.pixelSize: 11
@@ -1103,7 +1108,7 @@ ApplicationWindow {
                                             }
 
                                             RowLayout {
-                                                Layout.fillWidth: true
+                                                width: materialOptionsColumn.width
                                                 spacing: 8
                                                 Text { Layout.preferredWidth: 66; text: "打包设置"; color: root.textMain; font.pixelSize: 13; Layout.alignment: Qt.AlignTop; topPadding: 5 }
                                                 Flow {
@@ -1131,8 +1136,8 @@ ApplicationWindow {
                                             }
 
                                             Text {
-                                                Layout.fillWidth: true
-                                                Layout.leftMargin: 74
+                                                x: 74
+                                                width: Math.max(0, materialOptionsColumn.width - x)
                                                 visible: !!materialOptions.collectAllField.value
                                                 text: materialOptions.flatOcr ? "取消勾选「全部」后，可只提取指定材料；索引仍会覆盖整个资料库" : "取消勾选「全部」后可按需勾选材料类型（如身份证、劳动合同等）"
                                                 color: root.textFaint
@@ -1141,14 +1146,14 @@ ApplicationWindow {
                                             }
 
                                             Loader {
-                                                Layout.fillWidth: true
+                                                width: materialOptionsColumn.width
                                                 visible: !materialOptions.collectAllField.value
                                                 active: visible
                                                 property var field: root.fieldById("material_types")
                                                 sourceComponent: materialCollectorTypesComponent
                                             }
                                             Text {
-                                                Layout.fillWidth: true
+                                                width: materialOptionsColumn.width
                                                 readonly property var feedback: controller.selectionFeedback.material_types || ({})
                                                 visible: !!feedback.text; text: feedback.text || ""
                                                 textFormat: Text.PlainText; wrapMode: Text.Wrap
@@ -1161,7 +1166,7 @@ ApplicationWindow {
                                 Repeater {
                                     model: controller.currentTool === "material_collector" ? [] : root.formSnapshot.fields
                                     delegate: Loader {
-                                        Layout.fillWidth: true
+                                        width: formColumn.width
                                         visible: modelData.visible
                                         active: visible
                                         property var field: modelData
@@ -1178,7 +1183,7 @@ ApplicationWindow {
                         }
 
                         RowLayout {
-                            Layout.fillWidth: true
+                            width: contentColumn.width
                             spacing: 12
                             AppButton {
                                 objectName: "runButton"
@@ -1203,14 +1208,14 @@ ApplicationWindow {
 
                         Text {
                             visible: controller.updateBlocksTools
-                            Layout.fillWidth: true; wrapMode: Text.Wrap
+                            width: contentColumn.width; wrapMode: Text.Wrap
                             text: controller.updateBlockMessage
                             color: root.primary; font.pixelSize: 12
                         }
 
                         Text {
                             objectName: "taskStageText"
-                            Layout.fillWidth: true
+                            width: contentColumn.width
                             visible: controller.busy && controller.currentTool !== "material_collector"
                             text: controller.runProgressMessage + (controller.runProgressTotal > 0
                                 ? "（当前阶段 " + controller.runProgressCurrent + "/" + controller.runProgressTotal + "）" : "")
@@ -1221,7 +1226,7 @@ ApplicationWindow {
                         Card {
                             objectName: "resultNoticesCard"
                             visible: controller.resultNoticeCount > 0
-                            Layout.fillWidth: true; Layout.preferredHeight: 218
+                            width: contentColumn.width; height: 218
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 14
                                 RowLayout {
@@ -1263,7 +1268,7 @@ ApplicationWindow {
                         }
 
                         MaterialRunProgress {
-                            Layout.fillWidth: true
+                            width: contentColumn.width
                             visible: controller.currentTool === "material_collector" && controller.runProgressVisible
                             completed: controller.runProgressCurrent
                             total: controller.runProgressTotal
@@ -1274,8 +1279,8 @@ ApplicationWindow {
                         }
 
                         Card {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 220
+                            width: contentColumn.width
+                            height: 220
                             ColumnLayout {
                                 anchors.fill: parent
                                 anchors.margins: 17
@@ -1341,7 +1346,7 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        Item { Layout.fillWidth: true; Layout.preferredHeight: 4 }
+                        Item { width: contentColumn.width; height: 4 }
                     }
                 }
             }

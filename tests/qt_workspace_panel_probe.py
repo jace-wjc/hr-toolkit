@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import json
 import tempfile
+import time
 
 os.environ.update(QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software", QT_QUICK_CONTROLS_STYLE="Basic", HR_TOOLKIT_SKIP_UPDATE="1")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -31,6 +32,24 @@ def wait_for_events(milliseconds):
     QTimer.singleShot(milliseconds, loop.quit)
     execute = getattr(loop, "exec", None) or loop.exec_
     execute()
+
+
+def capture_window(window):
+    picture = window.grabWindow()
+    if picture.isNull():
+        # Qt 5's macOS software backend exposes the window but cannot grab
+        # its backing store. Render the same content through the item API.
+        grab = window.contentItem().grabToImage()
+        assert grab, "Unable to request a rendered content image"
+        ready = []
+        grab.ready.connect(lambda: ready.append(True))
+        deadline = time.monotonic() + 2
+        while not ready and time.monotonic() < deadline:
+            wait_for_events(10)
+        assert ready, "Timed out rendering the content image"
+        picture = grab.image()
+    assert not picture.isNull(), "Both window and content capture failed"
+    return picture
 
 
 class Controller(AppController):
@@ -71,16 +90,29 @@ def main():
     content = root.findChild(QObject, "contentColumn")
     chrome_button = root.findChild(QObject, "workspaceToggleButton")
     form_scroll = root.findChild(QObject, "formScroll")
+    # Qt 5 may apply screen/DPI sizing during creation and start with the
+    # sidebar collapsed. The threshold scenarios explicitly require it pinned.
+    root.setWidth(1400)
+    root.setHeight(820)
+    sidebar.setProperty("pinned", True)
     frames = []
+    visual_refs = []
+    warning_contexts = []
+    reported_error_count = 0
 
     def nodes(item):
         return [item] + [node for child in item.childItems() for node in nodes(child)]
 
     def check_controls():
-        for item in nodes(pane):
-            ancestor = item.parentItem()
+        items = nodes(pane)
+        # PySide2 can invalidate retained child wrappers when a temporary
+        # ancestor wrapper is collected, even while the QML item is alive.
+        # Keep the traversed visual hierarchy alive for this isolated probe.
+        visual_refs.extend(items)
+        for item in items:
+            ancestor = item
             in_scrolling_form = False
-            while ancestor:
+            while ancestor and ancestor != pane:
                 if ancestor == form_scroll and form_scroll.property("needsHorizontalScroll"):
                     in_scrolling_form = True
                     break
@@ -96,8 +128,16 @@ def main():
                 assert x >= -1 and x + item.width() <= pane.width() + 1, (
                     controller.currentTool, root.width(), item.metaObject().className(),
                     item.property("text"), x, item.width(), pane.width())
+        bottom = 0
+        for section in content.childItems():
+            if section.isVisible() and section.height() > 0:
+                assert section.y() >= bottom - 1, "Content cards overlap vertically"
+                assert section.width() <= content.width() + 1
+                bottom = section.y() + section.height()
+        assert bottom <= content.height() + 1, "Last content card is outside the scrolling extent"
 
     def sample(duration=230):
+        nonlocal reported_error_count
         widths = []
         for _ in range(max(1, duration // 10)):
             wait_for_events(10)
@@ -110,7 +150,12 @@ def main():
                 assert pane.width() >= 639, "Right pane squeezed the core below its budget"
             assert chrome_button.x() + chrome_button.width() <= panel.x() + 1
             widths.append(panel.width())
-        assert not errors, errors[:8]
+        # Collect warnings across scenarios, then fail at the end. A single
+        # old-Qt warning must not hide the next affected tool from the CI log.
+        if len(errors) > reported_error_count:
+            warning_contexts.append((controller.currentTool, root.width(), root.height(),
+                                     errors[reported_error_count:]))
+            reported_error_count = len(errors)
         frames.append({"window": root.width(), "center": pane.width(), "right": panel.width(),
                        "opened": panel.property("opened"), "requested": controller.workspaceExpanded,
                        "tool": controller.currentTool})
@@ -128,6 +173,8 @@ def main():
          "mandatory": True, "notes": ["用于检查更新说明换行及滚动。" * 6] * 80},
         {"available": True, "version": "0.9.8", "currentVersion": "0.9.7",
          "notes": ["用于检查更新说明换行及滚动。" * 6] * 80},
+        {"available": True, "version": "0.9.8", "currentVersion": "0.9.7",
+         "mandatory": True, "notes": []},
     ):
         update_prompt.showPrompt(prompt)
         for width, window_height in ((760, 600), (760, 820), (1400, 820)):
@@ -152,6 +199,22 @@ def main():
                     assert section.mapToScene(QPointF(0, section.height())).y() <= footer_top, (
                         "Update prompt content overlaps its buttons", width, window_height)
         update_prompt.close()
+    history = root.findChild(QObject, "releaseNotesDialog")
+    history.showNotes({"currentVersion": "0.9.7", "entries": [
+        {"version": "0.9.7", "notes": ["很长的更新记录需要正确换行。" * 6] * 80},
+        {"version": "0.9.6", "notes": ["短更新说明"]},
+    ]})
+    for width, window_height in ((760, 600), (760, 820), (1400, 820)):
+        root.setWidth(width); root.setHeight(window_height)
+        sample(50)
+        body = history.property("contentItem")
+        footer = history.property("footer")
+        assert 0 < history.property("height") <= min(520, root.height() * 0.84)
+        for section in body.childItems():
+            if section.isVisible():
+                assert section.y() + section.height() <= body.height() + 1
+                assert section.mapToScene(QPointF(0, section.height())).y() <= footer.mapToScene(QPointF(0, 0)).y()
+    history.close()
     sample(30)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier,
         QPoint(int(chrome_button.x() + chrome_button.width() / 2), int(chrome_button.y() + chrome_button.height() / 2)))
@@ -204,9 +267,18 @@ def main():
         for width in (1400, 1240, 760):
             root.setWidth(width); sample()
             check_controls()
-            picture = root.grabWindow()
-            assert not picture.isNull()
+            picture = capture_window(root)
             picture.save(str(output / (tool + "-" + str(width) + ".png")))
+    controller.selectTool("material_collector")
+    for mode in ("person_folder", "flat_ocr"):
+        controller.setFieldValue("library_mode", mode)
+        for collect_all in (False, True):
+            controller.setFieldValue("collect_all", collect_all)
+            for width in (760, 1400):
+                root.setWidth(width); sample()
+                check_controls()
+    sample(30)
+    assert not errors, warning_contexts or errors
     (output / "geometry.json").write_text(json.dumps(frames, ensure_ascii=False, indent=2), encoding="utf-8")
     print("responsive workspace: non-overlap, animation, hysteresis, restore, focus and core widths OK", flush=True)
     print(str(output), flush=True)
