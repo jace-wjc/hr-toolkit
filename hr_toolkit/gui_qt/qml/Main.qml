@@ -97,17 +97,21 @@ ApplicationWindow {
             wideContentInsets = false
     }
 
-    function fieldById(fieldId) {
-        // Reading the revision makes every dedicated binding update after the
-        // controller changes a dependent field without mirroring business
-        // state in QML.
+    readonly property var formSnapshot: {
+        // Own one plain-JS snapshot per revision. Consumers must not each
+        // rebuild the Python QVariantList or retain a property-backed sequence.
         var revision = controller.formRevision
-        var fields = controller.formFields
+        var fields = JSON.parse(JSON.stringify(controller.formFields))
+        var byId = {}
         for (var index = 0; index < fields.length; ++index) {
-            if (String(fields[index].id) === fieldId)
-                return fields[index]
+            byId[String(fields[index].id)] = fields[index]
         }
-        return ({ "id": fieldId, "value": "", "options": [], "visible": false })
+        return ({ "fields": fields, "byId": byId })
+    }
+
+    function fieldById(fieldId) {
+        return formSnapshot.byId[fieldId]
+            || ({ "id": fieldId, "value": "", "options": [], "visible": false })
     }
 
     function choiceIndex(field) {
@@ -1116,7 +1120,7 @@ ApplicationWindow {
                                 }
 
                                 Repeater {
-                                    model: controller.currentTool === "material_collector" ? [] : controller.formFields
+                                    model: controller.currentTool === "material_collector" ? [] : root.formSnapshot.fields
                                     delegate: Loader {
                                         Layout.fillWidth: true
                                         visible: modelData.visible
@@ -1392,7 +1396,7 @@ ApplicationWindow {
             AppCheckBox {
                 text: field.label
                 checked: !!field.value
-                enabled: !(field.id === "use_ocr_cache" && controller.formFields.some(function(item) { return item.id === "library_mode" && item.value === "flat_ocr" }))
+                enabled: !(field.id === "use_ocr_cache" && root.fieldById("library_mode").value === "flat_ocr")
                 onToggled: controller.setFieldValue(field.id, checked)
             }
             Item { Layout.fillWidth: true }
