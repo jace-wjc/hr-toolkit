@@ -47,6 +47,32 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_notice_filter_reuse_never_keeps_rows_from_previous_result(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("material_collector")
+        controller.refreshWorkspace = lambda: None
+        old = ["OCR 缓存写入失败：旧文件", "照片人员归属冲突，未提取：a.jpg"]
+        controller._apply_run_success({"warnings": old}, tempfile.gettempdir(), 1, False)
+        controller.setResultNoticeFilter("运行提醒")
+        resets = []
+        controller.resultNoticeModel.modelReset.connect(lambda: resets.append(True))
+        controller.setResultNoticeFilter("运行提醒")
+        self.assertEqual(resets, [])
+        controller.setResultNoticeFilter("全部")
+        self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], old)
+        controller.setResultNoticeFilter("运行提醒")
+        self.assertEqual(controller.resultNoticeModel.item_at(0)["text"], old[0])
+
+        new = ["OCR 缓存写入失败：新文件"]
+        controller._apply_run_success({"warnings": new}, tempfile.gettempdir(), 1, False)
+        controller.setResultNoticeFilter("运行提醒")
+        self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], new)
+        controller._apply_run_success({"warnings": []}, tempfile.gettempdir(), 1, False)
+        controller.setResultNoticeFilter("运行提醒")
+        self.assertEqual(controller.resultNoticeModel.items(), [])
+
+
     def test_workspace_metadata_refresh_preserves_rows_and_structural_reset(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

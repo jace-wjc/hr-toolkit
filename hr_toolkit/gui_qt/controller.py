@@ -267,6 +267,7 @@ class AppController(QObject):
         self._last_result_availability = (False, False)
         self._result_notices = ObjectListModel(("text", "category"), self)
         self._result_notice_rows = []
+        self._result_notice_groups: dict[str, list[dict[str, Any]]] = {}
         self._result_notice_filter = "全部"
         self._result_notice_counts = {}
         self._stop_requested = False
@@ -821,8 +822,17 @@ class AppController(QObject):
     def setResultNoticeFilter(self, category: str) -> None:
         if not self.canOpenLastResult or category not in {"全部", *self._result_notice_counts}:
             return
+        if category == self._result_notice_filter:
+            return
+        if category == "全部":
+            rows = self._result_notice_rows
+        else:
+            rows = self._result_notice_groups.get(category)
+            if rows is None:
+                rows = [row for row in self._result_notice_rows if row["category"] == category]
+                self._result_notice_groups[category] = rows
         self._result_notice_filter = category
-        self._result_notices.set_items([row for row in self._result_notice_rows if category == "全部" or row["category"] == category])
+        self._result_notices.set_items(rows)
         self._notify_last_result_changed(force=True)
 
     @staticmethod
@@ -3980,6 +3990,7 @@ class AppController(QObject):
         self._result_files = []
         self._result_notices.clear()
         self._result_notice_rows = []
+        self._result_notice_groups.clear()
         self._result_notice_counts = {}
         self._result_notice_filter = "全部"
         self._notify_last_result_changed(force=True)
@@ -4070,6 +4081,7 @@ class AppController(QObject):
         self.specChanged.emit()
         warnings = list(payload.get("warnings", [])) if isinstance(payload, dict) else []
         self._result_notice_rows = [{"text": str(warning), "category": self._notice_category(self._spec.tool_id, str(warning))} for warning in warnings]
+        self._result_notice_groups.clear()
         self._result_notice_counts = {}
         for row in self._result_notice_rows:
             category = row["category"]
