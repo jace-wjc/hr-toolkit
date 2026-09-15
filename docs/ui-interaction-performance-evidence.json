@@ -1,0 +1,312 @@
+{
+  "baseline_commit": "025709d",
+  "environment": "macOS, Qt 6.11.2, offscreen/software; not target Windows FPS",
+  "measurement_notes": [
+    "Three independent process pairs, alternating baseline/current order; medians within each process, then median across processes.",
+    "Workspace: 10000 rows, one detail edit repeated 40 times. Notices: 30000 rows, repeated filter 40 times, three-filter cycle 20 times. Settings: 40 unchanged saves.",
+    "Notes: imports/fonts warmed; create plus three event-processing passes, 3 samples for 10 and 1000 lines, one 10-version sample per process.",
+    "Wave: 5 warmed samples of 4000 QML JS paint calls per process, 3 process pairs; fake context for timing, real Canvas for pixel comparison. Excludes GPU and texture costs."
+  ],
+  "measurements": [
+    {
+      "scenario": "workspace",
+      "metric": "median_ms",
+      "baseline_rounds": [
+        2.103,
+        2.2168,
+        2.1324
+      ],
+      "baseline_median_ms": 2.1324,
+      "current_rounds": [
+        0.9272,
+        0.9213,
+        0.9766
+      ],
+      "current_median_ms": 0.9272
+    },
+    {
+      "scenario": "notices",
+      "metric": "repeat_median_ms",
+      "baseline_rounds": [
+        2.1452,
+        1.9819,
+        1.9285
+      ],
+      "baseline_median_ms": 1.9819,
+      "current_rounds": [
+        0.0004,
+        0.0004,
+        0.0004
+      ],
+      "current_median_ms": 0.0004
+    },
+    {
+      "scenario": "notices",
+      "metric": "three_filters_median_ms",
+      "baseline_rounds": [
+        7.0609,
+        7.2517,
+        6.8197
+      ],
+      "baseline_median_ms": 7.0609,
+      "current_rounds": [
+        5.4904,
+        5.2109,
+        5.4415
+      ],
+      "current_median_ms": 5.4415
+    },
+    {
+      "scenario": "settings",
+      "metric": "repeat_median_ms",
+      "baseline_rounds": [
+        0.141,
+        0.1571,
+        0.1382
+      ],
+      "baseline_median_ms": 0.141,
+      "current_rounds": [
+        0.0192,
+        0.0192,
+        0.0196
+      ],
+      "current_median_ms": 0.0192
+    },
+    {
+      "scenario": "notes_10",
+      "metric": "create_ms",
+      "baseline_rounds": [
+        2.012,
+        2.145,
+        1.872
+      ],
+      "baseline_median_ms": 2.012,
+      "current_rounds": [
+        1.326,
+        1.287,
+        1.256
+      ],
+      "current_median_ms": 1.287
+    },
+    {
+      "scenario": "notes_1000",
+      "metric": "create_ms",
+      "baseline_rounds": [
+        139.389,
+        133.876,
+        125.945
+      ],
+      "baseline_median_ms": 133.876,
+      "current_rounds": [
+        72.51,
+        72.341,
+        72.046
+      ],
+      "current_median_ms": 72.341
+    },
+    {
+      "scenario": "notes_history",
+      "metric": "create_ms",
+      "baseline_rounds": [
+        4.647,
+        4.381,
+        4.157
+      ],
+      "baseline_median_ms": 4.381,
+      "current_rounds": [
+        3.308,
+        3.724,
+        3.386
+      ],
+      "current_median_ms": 3.386
+    }
+  ],
+  "wave_js_ms": {
+    "baseline": [
+      75.514,
+      74.885,
+      74.609
+    ],
+    "current": [
+      59.012,
+      58.612,
+      59.004
+    ]
+  },
+  "model_reset_counts": {
+    "baseline": {
+      "workspace": {
+        "median_ms": 2.103,
+        "resets": 40
+      },
+      "notices": {
+        "repeat_median_ms": 2.1452,
+        "repeat_resets": 40,
+        "three_filters_median_ms": 7.0609
+      },
+      "settings": {
+        "repeat_median_ms": 0.141,
+        "replaces": 40
+      }
+    },
+    "current": {
+      "workspace": {
+        "median_ms": 0.9272,
+        "resets": 0
+      },
+      "notices": {
+        "repeat_median_ms": 0.0004,
+        "repeat_resets": 0,
+        "three_filters_median_ms": 5.4904
+      },
+      "settings": {
+        "repeat_median_ms": 0.0192,
+        "replaces": 0
+      }
+    }
+  },
+  "notes_geometry_pixels_and_objects": {
+    "baseline": {
+      "notes_10": {
+        "create_ms": 2.012,
+        "objects": 117,
+        "buttons": 11,
+        "contentHeight": 332.3999999999999,
+        "implicitHeight": 320.0,
+        "pixel_sha256": "285815613334a7a57cc014d264a84920f91681da67e0bac1bedb7794b420a52b"
+      },
+      "notes_1000": {
+        "create_ms": 139.389,
+        "objects": 10017,
+        "buttons": 1001,
+        "contentHeight": 31220.400000000503,
+        "implicitHeight": 320.0,
+        "pixel_sha256": "00fc40b8a4c084552918f2b69a74dfaadaf94d914349752bfdd4e80173eeff5a"
+      },
+      "notes_history": {
+        "create_ms": 4.647,
+        "objects": 197,
+        "buttons": 19,
+        "contentHeight": 738.0,
+        "implicitHeight": 320.0,
+        "pixel_sha256": "ef8973c2d053c5fa77e3b69733fb52e76a0b29e5fea19e684015cdb7522e1f4e"
+      }
+    },
+    "current": {
+      "notes_10": {
+        "create_ms": 1.326,
+        "objects": 51,
+        "buttons": 0,
+        "contentHeight": 332.3999999999999,
+        "implicitHeight": 320.0,
+        "pixel_sha256": "285815613334a7a57cc014d264a84920f91681da67e0bac1bedb7794b420a52b"
+      },
+      "notes_1000": {
+        "create_ms": 72.51,
+        "objects": 4011,
+        "buttons": 0,
+        "contentHeight": 31220.400000000503,
+        "implicitHeight": 320.0,
+        "pixel_sha256": "00fc40b8a4c084552918f2b69a74dfaadaf94d914349752bfdd4e80173eeff5a"
+      },
+      "notes_history": {
+        "create_ms": 3.308,
+        "objects": 153,
+        "buttons": 10,
+        "contentHeight": 738.0,
+        "implicitHeight": 320.0,
+        "pixel_sha256": "ef8973c2d053c5fa77e3b69733fb52e76a0b29e5fea19e684015cdb7522e1f4e"
+      }
+    }
+  },
+  "wave_pixels_equal": true,
+  "wave_checksum_equal": true,
+  "notes_interactions_equal": true,
+  "notes_interaction_states": [
+    {
+      "label": "initial",
+      "height": 182.8,
+      "y": -0.0,
+      "buttons": [
+        "v2.0",
+        "v1.0"
+      ],
+      "pixels": "bf814458df82cb2eea30dcc5cf959f1ca5090c166d6816cb192b19f3e97ffb81"
+    },
+    {
+      "label": "mouse_collapse",
+      "height": 80.0,
+      "y": -0.0,
+      "buttons": [
+        "v2.0",
+        "v1.0"
+      ],
+      "pixels": "20df72ff86130986cfcc9878dadd89938a4ddf0be0b166d1cf1987d9dce040a8"
+    },
+    {
+      "label": "mouse_expand",
+      "height": 182.8,
+      "y": -0.0,
+      "buttons": [
+        "v2.0",
+        "v1.0"
+      ],
+      "pixels": "bf814458df82cb2eea30dcc5cf959f1ca5090c166d6816cb192b19f3e97ffb81"
+    },
+    {
+      "label": "keyboard_expand",
+      "height": 254.39999999999998,
+      "y": -0.0,
+      "buttons": [
+        "v2.0",
+        "v1.0"
+      ],
+      "pixels": "d0d9b3920ab58688787e12effabd1547aa0795839cc62b4c39facd1487ebc8e9"
+    },
+    {
+      "label": "resize",
+      "height": 254.39999999999998,
+      "y": -0.0,
+      "buttons": [
+        "v2.0",
+        "v1.0"
+      ],
+      "pixels": "acc8e0ec936195f6e0b35a1c4424d5e30b77677a6eb57952b0cbaa5c372b30a3"
+    },
+    {
+      "label": "scroll_end",
+      "height": 254.39999999999998,
+      "y": 122.39999999999998,
+      "buttons": [
+        "v2.0",
+        "v1.0"
+      ],
+      "pixels": "bd9def1bc686758fc84f5dab04b00f5314a33d2e063ac5a22bb9acbd4a9a0e97"
+    },
+    {
+      "label": "scroll_home",
+      "height": 254.39999999999998,
+      "y": 0.0,
+      "buttons": [
+        "v2.0",
+        "v1.0"
+      ],
+      "pixels": "acc8e0ec936195f6e0b35a1c4424d5e30b77677a6eb57952b0cbaa5c372b30a3"
+    },
+    {
+      "label": "tab_to_header",
+      "height": 254.39999999999998,
+      "y": 0.0,
+      "buttons": [
+        "v2.0",
+        "v1.0"
+      ],
+      "pixels": "973635a8e6d5e866e3d35438e36664cb928f6ddb7dcb20c9d48fa4fb28ff6c89"
+    }
+  ],
+  "source_sha256": {
+    "hr_toolkit/gui_qt/controller.py": "b2addf2a836d32a902ad2073e8522e88d938c9802e6ac820cdf771279217decb",
+    "hr_toolkit/gui_qt/qml/Main.qml": "a1663cd8edfce8760dcfc722ef9bcd533ef10666a42245b8549d13494c15d8d1",
+    "hr_toolkit/gui_qt/qml/components/UpdateNotesView.qml": "292fffb203cf90912320efe82f9c3de29d3b085d351b232b70d3217f07a4a304"
+  }
+}
