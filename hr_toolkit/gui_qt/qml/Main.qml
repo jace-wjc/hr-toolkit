@@ -1157,7 +1157,7 @@ ApplicationWindow {
                         Card {
                             objectName: "resultNoticesCard"
                             visible: controller.resultNoticeCount > 0
-                            Layout.fillWidth: true; Layout.preferredHeight: 176
+                            Layout.fillWidth: true; Layout.preferredHeight: 218
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 14
                                 RowLayout {
@@ -1167,6 +1167,18 @@ ApplicationWindow {
                                     AppButton { text: "复制全部"; variant: "link"; onClicked: controller.copyResultNotices() }
                                 }
                                 Text { Layout.fillWidth: true; text: "请按原文核对；条数不代表异常人数。"; color: root.textMuted; font.pixelSize: 11 }
+                                Flow {
+                                    Layout.fillWidth: true; Layout.preferredHeight: childrenRect.height
+                                    spacing: 4
+                                    Repeater {
+                                        model: controller.resultNoticeCategories
+                                        AppButton {
+                                            text: modelData.name + " " + modelData.count
+                                            variant: controller.resultNoticeFilter === modelData.name ? "tonal" : "link"
+                                            onClicked: controller.setResultNoticeFilter(modelData.name)
+                                        }
+                                    }
+                                }
                                 ListView {
                                     Layout.fillWidth: true; Layout.fillHeight: true
                                     clip: true; reuseItems: true; cacheBuffer: 100
@@ -1175,7 +1187,7 @@ ApplicationWindow {
                                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                     delegate: Text {
                                         width: ListView.view.width; height: implicitHeight + 6
-                                        text: model.text; textFormat: Text.PlainText
+                                        text: "【" + model.category + "】" + model.text; textFormat: Text.PlainText
                                         wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
                                         color: root.textMain; font.pixelSize: 12
                                         ToolTip.visible: noticeHover.hovered && truncated

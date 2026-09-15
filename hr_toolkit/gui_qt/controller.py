@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import sys
 import threading
@@ -262,7 +263,10 @@ class AppController(QObject):
         self._last_result_dir: Path | None = None
         self._result_context = None
         self._result_files: list[Path] = []
-        self._result_notices = ObjectListModel(("text",), self)
+        self._result_notices = ObjectListModel(("text", "category"), self)
+        self._result_notice_rows = []
+        self._result_notice_filter = "全部"
+        self._result_notice_counts = {}
         self._stop_requested = False
         self._last_selected_dir: Path | None = None
         self._last_run_by_key: dict[tuple[str, str], tuple[str, bool]] = {}
@@ -777,7 +781,42 @@ class AppController(QObject):
 
     @Property(int, notify=lastResultChanged)
     def resultNoticeCount(self) -> int:
-        return self._result_notices.rowCount() if self.canOpenLastResult else 0
+        return len(self._result_notice_rows) if self.canOpenLastResult else 0
+
+    @Property("QVariantList", notify=lastResultChanged)
+    def resultNoticeCategories(self):
+        if not self.canOpenLastResult:
+            return []
+        return [{"name": "全部", "count": len(self._result_notice_rows)}] + [
+            {"name": name, "count": self._result_notice_counts[name]}
+            for name in ("业务核对", "运行提醒", "运行信息", "其他提醒") if self._result_notice_counts.get(name)]
+
+    @Property(str, notify=lastResultChanged)
+    def resultNoticeFilter(self) -> str:
+        return self._result_notice_filter
+
+    @Slot(str)
+    def setResultNoticeFilter(self, category: str) -> None:
+        if not self.canOpenLastResult or category not in {"全部", *self._result_notice_counts}:
+            return
+        self._result_notice_filter = category
+        self._result_notices.set_items([row for row in self._result_notice_rows if category == "全部" or row["category"] == category])
+        self.lastResultChanged.emit()
+
+    @staticmethod
+    def _notice_category(tool_id: str, text: str) -> str:
+        # Only classify known producer messages, not generic keyword matches.
+        # Unknown wording remains visible as "other"; never alter source text.
+        if tool_id == "material_collector":
+            if re.fullmatch(r"(?:OCR 智能索引缓存：命中 [0-9]+ 次，实时识别 [0-9]+ 次|无序资料 OCR 索引：复用 [0-9]+ 个，新增识别 [0-9]+ 个)(?:，缓存文件：[^\n]+)?", text):
+                return "运行信息"
+            if text.startswith(("OCR 缓存写入失败：", "OCR 索引缓存写入失败：")):
+                return "运行提醒"
+            if text.startswith(("照片人员归属冲突，未提取：", "合同人员归属冲突，未提取：", "已复制原件但未完成身份核对：")):
+                return "业务核对"
+        if tool_id == "insurance_ledger" and text.startswith("花名册身份证重复但姓名不同："):
+            return "业务核对"
+        return "其他提醒"
 
     @constant_property(QObject)
     def resultNoticeModel(self):
@@ -786,7 +825,7 @@ class AppController(QObject):
     @Slot()
     def copyResultNotices(self) -> None:
         if self.canOpenLastResult:
-            QGuiApplication.clipboard().setText("\n".join(str(row["text"]) for row in self._result_notices.items()))
+            QGuiApplication.clipboard().setText("\n".join(str(row["text"]) for row in self._result_notice_rows))
 
     @Property(str, notify=specChanged)
     def lastRunText(self) -> str:
@@ -3863,6 +3902,9 @@ class AppController(QObject):
         self._result_context = None
         self._result_files = []
         self._result_notices.clear()
+        self._result_notice_rows = []
+        self._result_notice_counts = {}
+        self._result_notice_filter = "全部"
         self.lastResultChanged.emit()
         self._run_progress_visible = invocation.tool_id == "material_collector"
         self._run_progress_current = self._run_progress_total = 0
@@ -3950,7 +3992,13 @@ class AppController(QObject):
         self._last_run_by_key[self._state_key()] = (datetime.now().strftime("%H:%M"), True)
         self.specChanged.emit()
         warnings = list(payload.get("warnings", [])) if isinstance(payload, dict) else []
-        self._result_notices.set_items([{"text": str(warning)} for warning in warnings])
+        self._result_notice_rows = [{"text": str(warning), "category": self._notice_category(self._spec.tool_id, str(warning))} for warning in warnings]
+        self._result_notice_counts = {}
+        for row in self._result_notice_rows:
+            category = row["category"]
+            self._result_notice_counts[category] = self._result_notice_counts.get(category, 0) + 1
+        self._result_notice_filter = "全部"
+        self._result_notices.set_items(self._result_notice_rows)
         self.lastResultChanged.emit()
         mode_text = "独立进程" if isolated else "后台线程"
         self._append_log(f"处理完成，用时 {elapsed:.1f} 秒（{mode_text}）。", "success")
