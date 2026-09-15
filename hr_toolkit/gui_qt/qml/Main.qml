@@ -1805,7 +1805,7 @@ ApplicationWindow {
                         width: workspaceList.width
                         height: 32
                         radius: 6
-                        color: workspaceList.currentIndex === index ? root.primarySoft : (workspaceMouse.containsMouse ? root.navHover : "transparent")
+                        color: controller.workspaceSelectedPath === path ? root.primarySoft : (workspaceMouse.containsMouse ? root.navHover : "transparent")
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: 5 + depth * 15
@@ -1840,7 +1840,6 @@ ApplicationWindow {
                             }
                             onClicked: {
                                 if (startedDrag) return
-                                workspaceList.currentIndex = index
                                 controller.selectWorkspaceRow(index)
                             }
                             onDoubleClicked: if (!startedDrag) controller.openWorkspaceRow(index)

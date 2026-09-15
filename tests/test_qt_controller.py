@@ -658,7 +658,7 @@ class QtControllerTests(unittest.TestCase):
         self.assertFalse(controller.workspaceSelectionAvailable)
         controller.close()
 
-    def test_workspace_metadata_refresh_preserves_rows_and_structural_reset(self) -> None:
+    def test_workspace_refresh_preserves_rows_across_metadata_and_structure_changes(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)
         controller._workspace_generation = 3
@@ -684,11 +684,48 @@ class QtControllerTests(unittest.TestCase):
         for replacement in (list(reversed(updated)),
                             [dict(row, detail="all changed") for row in reversed(updated)],
                             updated[:-1], []):
-            previous_resets = len(resets)
             controller._apply_workspace_items(3, replacement)
-            self.assertEqual(len(resets), previous_resets + 1)
+            self.assertEqual(resets, [])
             self.assertEqual(controller.workspaceModel.items(), replacement)
+            self.assertEqual(controller.workspaceSelectedPath, rows[8]["path"] if replacement else "")
         self.assertFalse(controller.workspaceSelectionAvailable)
+
+    def test_workspace_structural_diff_keeps_unchanged_persistent_indices(self) -> None:
+        from hr_toolkit.gui_qt.compat import QT_MAJOR
+        from hr_toolkit.gui_qt.models import WorkspaceModel
+        if QT_MAJOR == 6:
+            from PySide6.QtCore import QPersistentModelIndex
+        else:
+            from PySide2.QtCore import QPersistentModelIndex
+        model = WorkspaceModel()
+        rows = [{"path": str(i), "name": str(i), "detail": "old"} for i in range(100)]
+        model.set_items(rows)
+        persistent = QPersistentModelIndex(model.index(50, 0))
+        resets = []
+        model.modelReset.connect(lambda: resets.append(True))
+        replacement = rows[:5] + [{"path": "new", "name": "new"}] + rows[7:80] + rows[81:]
+        replacement = [dict(row, detail="new") if row["path"] == "50" else row for row in replacement]
+        model.sync_items(replacement)
+        self.assertEqual(resets, [])
+        self.assertTrue(persistent.isValid())
+        path_role = next(role for role, name in model.roleNames().items() if name == b"path")
+        self.assertEqual(persistent.data(path_role), "50")
+        self.assertEqual(persistent.row(), 49)
+        self.assertEqual(model.item_at(49)["detail"], "new")
+        self.assertEqual([row["path"] for row in model.items()], [row["path"] for row in replacement])
+        # Widespread pair swaps exceed the notification budget; the fallback
+        # still produces exactly the requested order.
+        many = [{"path": str(i)} for i in range(200)]
+        model.set_items(many)
+        resets.clear()
+        swapped = [many[i ^ 1] for i in range(200)]
+        model.sync_items(swapped)
+        self.assertEqual(len(resets), 1)
+        self.assertEqual([row["path"] for row in model.items()], [row["path"] for row in swapped])
+        # Ambiguous identities must fall back without losing or merging rows.
+        model.sync_items([{"path": "duplicate"}, {"path": "duplicate"}])
+        self.assertEqual(len(resets), 2)
+        self.assertEqual(model.rowCount(), 2)
 
     def test_workspace_folder_toggle_updates_rows_without_model_reset(self) -> None:
         controller = self.controller()

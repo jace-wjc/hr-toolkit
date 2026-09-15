@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from bisect import bisect_left
 from typing import Any
 
 from .compat import QAbstractListModel, QModelIndex, Qt, USER_ROLE
@@ -170,6 +171,84 @@ class WorkspaceModel(ObjectListModel):
             ("name", "path", "isDir", "depth", "expanded", "hasChildren", "detail"),
             parent,
         )
+
+    def sync_items(self, items: list[dict[str, Any]]) -> None:
+        """Preserve unchanged path identities across directory refreshes.
+
+        Unique paths permit an O(n log n) ordered match, including reorders.
+        Apply gaps backwards so their old indices remain valid. A bounded
+        number of bulk splices avoids a long stream of view notifications.
+        """
+        old_keys = [item.get("path") for item in self._items]
+        new_keys = [item.get("path") for item in items]
+        if (any(not isinstance(key, str) or not key for key in old_keys + new_keys)
+                or len(set(old_keys)) != len(old_keys)
+                or len(set(new_keys)) != len(new_keys)):
+            self.set_items(items)
+            return
+
+        start = 0
+        limit = min(len(old_keys), len(new_keys))
+        while start < limit and old_keys[start] == new_keys[start]:
+            start += 1
+        old_end, new_end = len(old_keys), len(new_keys)
+        while old_end > start and new_end > start and old_keys[old_end - 1] == new_keys[new_end - 1]:
+            old_end -= 1
+            new_end -= 1
+
+        positions = {old_keys[row]: row for row in range(start, old_end)}
+        common = [(positions[key], row) for row, key in enumerate(new_keys[start:new_end], start)
+                  if key in positions]
+        # Longest increasing subsequence of old positions: retain the largest
+        # ordered set of existing rows, without quadratic sequence matching.
+        tails, tail_indices, links = [], [], []
+        for index, (old_row, _new_row) in enumerate(common):
+            slot = bisect_left(tails, old_row)
+            links.append(tail_indices[slot - 1] if slot else -1)
+            if slot == len(tails):
+                tails.append(old_row)
+                tail_indices.append(index)
+            else:
+                tails[slot] = old_row
+                tail_indices[slot] = index
+        anchors = []
+        index = tail_indices[-1] if tail_indices else -1
+        while index >= 0:
+            anchors.append(common[index])
+            index = links[index]
+        anchors.reverse()
+        anchors.append((old_end, new_end))
+        splices = []
+        previous_old = previous_new = start - 1
+        for old_row, new_row in anchors:
+            remove_count = old_row - previous_old - 1
+            insert_start, insert_end = previous_new + 1, new_row
+            if remove_count or insert_start < insert_end:
+                splices.append((previous_old + 1, remove_count, insert_start, insert_end))
+            previous_old, previous_new = old_row, new_row
+        if len(splices) > 64:
+            self.set_items(items)
+            return
+        for row, remove_count, insert_start, insert_end in reversed(splices):
+            self.splice(row, remove_count, items[insert_start:insert_end])
+
+        # Retained paths can also have new names, expansion flags or details.
+        # Coalesce adjacent metadata changes into one dataChanged range.
+        changed_start = None
+        for row, item in enumerate(items):
+            changed = False
+            if self._items[row] != item:
+                normalized = {role: item.get(role) for role in self._roles}
+                changed = self._items[row] != normalized
+                if changed:
+                    self._items[row] = normalized
+            if changed and changed_start is None:
+                changed_start = row
+            elif not changed and changed_start is not None:
+                self.dataChanged.emit(self.index(changed_start, 0), self.index(row - 1, 0), list(self._role_numbers))
+                changed_start = None
+        if changed_start is not None:
+            self.dataChanged.emit(self.index(changed_start, 0), self.index(len(items) - 1, 0), list(self._role_numbers))
 
 
 class HistoryModel(ObjectListModel):

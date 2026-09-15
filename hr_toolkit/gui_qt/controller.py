@@ -770,6 +770,11 @@ class AppController(QObject):
         return self._workspace_selected_item is not None
 
     @Property(str, notify=workspaceSelectionChanged)
+    def workspaceSelectedPath(self) -> str:
+        item = self._workspace_selected_item
+        return "" if item is None else str(item.get("path") or "")
+
+    @Property(str, notify=workspaceSelectionChanged)
     def workspaceSelectedName(self) -> str:
         item = self._workspace_selected_item
         return "" if item is None else str(item.get("name") or "")
@@ -2184,8 +2189,8 @@ class AppController(QObject):
         self._workspace_items = next_items
         if changed:
             # Keep delegates and their viewport positions for a small metadata
-            # refresh with identical row identities. Structural changes and
-            # large batches retain the existing reset behavior.
+            # refresh with identical row identities. Structural changes use
+            # path-based splices; large metadata batches coalesce notifications.
             updates = [] if len(next_items) == len(previous_items) else None
             if updates is not None:
                 for row, (before, after) in enumerate(zip(previous_items, next_items)):
@@ -2198,7 +2203,7 @@ class AppController(QObject):
                             updates = None
                             break
             if updates is None:
-                self._workspace_model.set_items(self._workspace_items)
+                self._workspace_model.sync_items(self._workspace_items)
             else:
                 for row, item in updates:
                     self._workspace_model.update_at(row, item)
