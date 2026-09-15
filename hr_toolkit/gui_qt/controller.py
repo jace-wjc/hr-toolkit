@@ -264,6 +264,7 @@ class AppController(QObject):
         self._last_result_dir: Path | None = None
         self._result_context = None
         self._result_files: list[Path] = []
+        self._last_result_availability = (False, False)
         self._result_notices = ObjectListModel(("text", "category"), self)
         self._result_notice_rows = []
         self._result_notice_filter = "全部"
@@ -783,6 +784,15 @@ class AppController(QObject):
         return (self.canOpenLastResult and len(self._result_files) == 1
                 and self._result_files[0].suffix.lower() in EXCEL_SUFFIXES)
 
+    def _notify_last_result_changed(self, *, force: bool = False) -> None:
+        availability = (self.canOpenLastResult, self.canOpenPrimaryResult)
+        changed = availability != self._last_result_availability
+        # Store before emitting: QML or other synchronous receivers can read
+        # the result state while handling the notification.
+        self._last_result_availability = availability
+        if force or changed:
+            self.lastResultChanged.emit()
+
     @Property(int, notify=lastResultChanged)
     def resultNoticeCount(self) -> int:
         return len(self._result_notice_rows) if self.canOpenLastResult else 0
@@ -805,7 +815,7 @@ class AppController(QObject):
             return
         self._result_notice_filter = category
         self._result_notices.set_items([row for row in self._result_notice_rows if category == "全部" or row["category"] == category])
-        self.lastResultChanged.emit()
+        self._notify_last_result_changed(force=True)
 
     @staticmethod
     def _notice_category(tool_id: str, text: str) -> str:
@@ -1126,7 +1136,8 @@ class AppController(QObject):
         feedback.pop("material_types", None)
         if self._spec.tool_id == "material_collector" and str(self._form_states[self._state_key()].get("target_input") or "").strip():
             feedback.pop("support", None)
-        self.selectionStateChanged.emit()
+        # The connected environment handler invalidates stale requests and
+        # emits selectionStateChanged synchronously for this revision.
         self.formRevisionChanged.emit()
 
     def _dialog_parent(self):
@@ -1236,7 +1247,7 @@ class AppController(QObject):
         if preview and (preview["context"] != self._selection_context() or not self.selectionEnabled):
             self.cancelDropPreview(preview["token"])
         self.selectionStateChanged.emit()
-        self.lastResultChanged.emit()
+        self._notify_last_result_changed()
 
     @staticmethod
     def _local_drop_paths(urls) -> list[Path]:
@@ -3911,7 +3922,7 @@ class AppController(QObject):
         self._result_notice_rows = []
         self._result_notice_counts = {}
         self._result_notice_filter = "全部"
-        self.lastResultChanged.emit()
+        self._notify_last_result_changed(force=True)
         self._run_progress_visible = invocation.tool_id == "material_collector"
         self._run_progress_current = self._run_progress_total = 0
         self._run_progress_message = "正在准备项目资料，总量尚未确定"
@@ -4005,7 +4016,7 @@ class AppController(QObject):
             self._result_notice_counts[category] = self._result_notice_counts.get(category, 0) + 1
         self._result_notice_filter = "全部"
         self._result_notices.set_items(self._result_notice_rows)
-        self.lastResultChanged.emit()
+        self._notify_last_result_changed(force=True)
         mode_text = "独立进程" if isolated else "后台线程"
         self._append_log(f"处理完成，用时 {elapsed:.1f} 秒（{mode_text}）。", "success")
         completion_message = "结果已安全保存到当前项目。"
