@@ -331,6 +331,13 @@ class QtEntrypointTests(unittest.TestCase):
 
     def test_support_label_reserves_its_full_text_width(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml").read_text(encoding="utf-8")
+        column = source.split("id: supportSelectionColumn", 1)[1].split("RowLayout {", 1)[0]
+        self.assertIn("anchors.fill: parent", column)
+        self.assertIn("anchors.topMargin: 8", column)
+        self.assertIn("anchors.bottomMargin: 8", column)
+        self.assertNotIn("anchors.margins:", column)
+        self.assertNotIn("anchors.leftMargin:", column)
+        self.assertNotIn("anchors.rightMargin:", column)
         label = source.split("id: supportFieldLabel", 1)[1].split("Item {", 1)[0]
         self.assertIn("Layout.minimumWidth: Math.max(145, implicitWidth)", label)
         self.assertIn("Layout.preferredWidth: Layout.minimumWidth", label)

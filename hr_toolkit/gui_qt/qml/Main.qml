@@ -881,7 +881,10 @@ ApplicationWindow {
                                     visible: controller.hasSupportField
                                     ColumnLayout {
                                         id: supportSelectionColumn
-                                        anchors.fill: parent; anchors.margins: 8; spacing: 4
+                                        anchors.fill: parent
+                                        anchors.topMargin: 8
+                                        anchors.bottomMargin: 8
+                                        spacing: 4
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 10
                                             Text {
