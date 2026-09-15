@@ -1,6 +1,5 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
 
 Dialog {
     id: dialog
@@ -13,7 +12,16 @@ Dialog {
     modal: true
     closePolicy: hasUpdate ? Popup.NoAutoClose : Popup.CloseOnEscape
     width: Math.min(hasUpdate ? 580 : 260, parent ? parent.width - 32 : 580)
-    height: Math.min(implicitHeight, hasUpdate ? 520 : 320, parent ? parent.height * 0.84 : 520)
+    // Intrinsic section heights do not depend on the available dialog height.
+    // Only the notes viewport shrinks to fit; never feed its allocated height
+    // back into the dialog's preferred height (a Windows layout cycle).
+    readonly property real naturalContentHeight: hasUpdate
+        ? updateSummaryRow.implicitHeight
+          + ((prompt.notes || []).length > 0 ? 18 + notesView.implicitHeight : 0)
+          + (prompt.mandatory || prompt.manual ? 18 + updateDisclaimer.implicitHeight : 0)
+        : noUpdateBody.implicitHeight
+    height: Math.min(naturalContentHeight + topPadding + bottomPadding + footer.implicitHeight + spacing,
+                     hasUpdate ? 520 : 320, parent ? parent.height * 0.84 : 520)
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
     padding: 20
@@ -36,36 +44,38 @@ Dialog {
         if (hasUpdate && token) decision(token, accepted)
     }
 
-    contentItem: ColumnLayout {
+    contentItem: Column {
             spacing: 18
-            ColumnLayout {
-                Layout.fillWidth: true; visible: !dialog.hasUpdate; spacing: 12
-                Image { Layout.preferredWidth: 56; Layout.preferredHeight: 56; source: dialog.iconSource; fillMode: Image.PreserveAspectFit; smooth: true; sourceSize.width: 112; sourceSize.height: 112 }
-                Item { Layout.preferredHeight: 2 }
-                Text { Layout.fillWidth: true; text: "没有新版本"; font.pixelSize: 14; font.bold: true; color: "#242424"; wrapMode: Text.Wrap }
-                Text { Layout.fillWidth: true; text: "HR Toolkit v" + (dialog.prompt.currentVersion || "") + "\n目前没有可用的新版本。"; textFormat: Text.PlainText; font.pixelSize: 13; color: "#242424"; wrapMode: Text.Wrap }
+            Column {
+                id: noUpdateBody
+                width: dialog.availableWidth; visible: !dialog.hasUpdate; spacing: 12
+                Image { width: 56; height: 56; source: dialog.iconSource; fillMode: Image.PreserveAspectFit; smooth: true; sourceSize.width: 112; sourceSize.height: 112 }
+                Item { width: 1; height: 2 }
+                Text { width: parent.width; text: "没有新版本"; font.pixelSize: 14; font.bold: true; color: "#242424"; wrapMode: Text.Wrap }
+                Text { width: parent.width; text: "HR Toolkit v" + (dialog.prompt.currentVersion || "") + "\n目前没有可用的新版本。"; textFormat: Text.PlainText; font.pixelSize: 13; color: "#242424"; wrapMode: Text.Wrap }
             }
-            RowLayout {
-                Layout.fillWidth: true; visible: dialog.hasUpdate; spacing: 18
-                Image { Layout.preferredWidth: 64; Layout.preferredHeight: 64; Layout.alignment: Qt.AlignTop; source: dialog.iconSource; fillMode: Image.PreserveAspectFit; smooth: true; sourceSize.width: 128; sourceSize.height: 128 }
-                ColumnLayout {
-                    Layout.fillWidth: true; spacing: 10
-                    Text { Layout.fillWidth: true; text: "HR Toolkit 有新版本可用！"; font.pixelSize: 16; font.bold: true; color: "#242424"; wrapMode: Text.Wrap }
-                    Text { Layout.fillWidth: true; text: "新版本为 v" + (dialog.prompt.version || "") + "，你当前使用的是 v" + (dialog.prompt.currentVersion || "") + "。是否现在更新？"; textFormat: Text.PlainText; font.pixelSize: 13; color: "#242424"; wrapMode: Text.Wrap }
+            Row {
+                id: updateSummaryRow
+                width: dialog.availableWidth; visible: dialog.hasUpdate; spacing: 18
+                Image { width: 64; height: 64; source: dialog.iconSource; fillMode: Image.PreserveAspectFit; smooth: true; sourceSize.width: 128; sourceSize.height: 128 }
+                Column {
+                    width: Math.max(0, updateSummaryRow.width - 64 - updateSummaryRow.spacing); spacing: 10
+                    Text { width: parent.width; text: "HR Toolkit 有新版本可用！"; font.pixelSize: 16; font.bold: true; color: "#242424"; wrapMode: Text.Wrap }
+                    Text { width: parent.width; text: "新版本为 v" + (dialog.prompt.version || "") + "，你当前使用的是 v" + (dialog.prompt.currentVersion || "") + "。是否现在更新？"; textFormat: Text.PlainText; font.pixelSize: 13; color: "#242424"; wrapMode: Text.Wrap }
                 }
             }
             UpdateNotesView {
                 id: notesView
                 objectName: "promptNotesView"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.minimumHeight: 0
-                Layout.preferredHeight: implicitHeight
+                width: dialog.availableWidth
+                height: Math.max(0, Math.min(implicitHeight, dialog.availableHeight - updateSummaryRow.implicitHeight - 18
+                    - (dialog.prompt.mandatory || dialog.prompt.manual ? updateDisclaimer.implicitHeight + 18 : 0)))
                 visible: dialog.hasUpdate && (dialog.prompt.notes || []).length > 0
                 notes: dialog.prompt.notes || []
             }
             Text {
-                Layout.fillWidth: true; visible: dialog.hasUpdate && (!!dialog.prompt.mandatory || !!dialog.prompt.manual)
+                id: updateDisclaimer
+                width: dialog.availableWidth; visible: dialog.hasUpdate && (!!dialog.prompt.mandatory || !!dialog.prompt.manual)
                 text: (dialog.prompt.manual ? "点击“下载更新”后会打开下载地址，请按安装提示完成更新。" : "")
                       + (dialog.prompt.manual && dialog.prompt.mandatory ? "\n" : "")
                       + (dialog.prompt.mandatory ? "本次为必要更新；不更新将退出程序。" : "")

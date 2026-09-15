@@ -118,6 +118,27 @@ def main():
 
     sample(30)
     assert panel.width() == 0
+    # The Windows failure was emitted by this initially hidden dialog. Keep
+    # warnings fatal and also exercise its wrapped/scrolling content explicitly.
+    update_prompt = root.findChild(QObject, "updatePromptDialog")
+    for prompt in (
+        {"available": False, "currentVersion": "0.9.7"},
+        {"available": True, "version": "0.9.8", "currentVersion": "0.9.7", "notes": ["功能更新", "界面体验优化"]},
+        {"available": True, "version": "0.9.8", "currentVersion": "0.9.7", "manual": True,
+         "mandatory": True, "notes": ["用于检查更新说明换行及滚动。" * 6] * 80},
+    ):
+        update_prompt.showPrompt(prompt)
+        for width in (760, 1400):
+            root.setWidth(width)
+            sample(50)
+            height = update_prompt.property("height")
+            assert 0 < height <= min(520 if prompt["available"] else 320, root.height() * 0.84)
+            sample(30)
+            assert abs(update_prompt.property("height") - height) < 1
+            primary = update_prompt.findChild(QObject, "updatePromptPrimary")
+            assert primary is not None and primary.isVisible()
+        update_prompt.close()
+    sample(30)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier,
         QPoint(int(chrome_button.x() + chrome_button.width() / 2), int(chrome_button.y() + chrome_button.height() / 2)))
     opening = sample()
