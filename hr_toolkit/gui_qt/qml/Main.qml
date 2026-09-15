@@ -2065,7 +2065,7 @@ ApplicationWindow {
                         id: trashList
                         anchors.fill: parent; anchors.margins: 8; clip: true
                         model: controller.trashModel; reuseItems: true; cacheBuffer: 150
-                        currentIndex: count > 0 ? 0 : -1
+                        currentIndex: controller.trashSelectedRow
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                         delegate: Rectangle {
                             width: trashList.width; height: 86; radius: 8
@@ -2077,7 +2077,7 @@ ApplicationWindow {
                                 Text { Layout.fillWidth: true; text: "移入：" + deletedAt; color: root.textMuted; font.pixelSize: 10 }
                                 Text { Layout.fillWidth: true; text: counts + " · " + size; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
                             }
-                            MouseArea { id: trashMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { trashList.currentIndex = index; controller.selectTrashRow(index) } }
+                            MouseArea { id: trashMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: controller.selectTrashRow(index) }
                         }
                     }
                 }

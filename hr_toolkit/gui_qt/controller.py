@@ -294,7 +294,11 @@ class AppController(QObject):
         self._trash_busy = False
         self._trash_search = ""
         self._trash_items: list[Any] = []
+        self._trash_row_index: list[tuple[dict[str, Any], str]] = []
+        self._trash_visible_rows: list[dict[str, Any]] = []
+        self._trash_applied_query: str | None = None
         self._trash_selected_id = ""
+        self._trash_selected_row = -1
         self._update_busy = False
         self._update_status = ""
         self._update_progress = -1.0
@@ -597,6 +601,10 @@ class AppController(QObject):
     @Property(str, notify=trashChanged)
     def trashSelectedId(self) -> str:
         return self._trash_selected_id
+
+    @Property(int, notify=trashChanged)
+    def trashSelectedRow(self) -> int:
+        return self._trash_selected_row
 
     @Property(bool, notify=materialChanged)
     def materialEditorAvailable(self) -> bool:
@@ -1768,6 +1776,11 @@ class AppController(QObject):
         self._remember_project(self._project_path)
         self._remember_file_dialog_path(self._project_path)
         self._save_workspace_preferences()
+        # Discard both cached rows and late list results from the old project.
+        self._trash_generation += 1
+        self._clear_trash_items()
+        self._trash_busy = False
+        self.trashChanged.emit()
         self.projectChanged.emit()
         self.refreshWorkspace()
         if not store.writable:
@@ -2812,17 +2825,14 @@ class AppController(QObject):
         self.notificationRequested.emit("整理完成" if success else "操作未完成", message, "success" if success else "error")
         self.requestHistory()
 
-    def _filtered_trash_rows(self) -> list[dict[str, Any]]:
-        query = self._trash_search.casefold()
-        rows: list[dict[str, Any]] = []
+    def _rebuild_trash_row_index(self) -> None:
+        rows: list[tuple[dict[str, Any], str]] = []
         for detail in self._trash_items:
             summary = detail.summary
             title = summary.business_description or summary.directory_name or summary.tool_name
             searchable = " ".join((title, summary.tool_name, summary.group_name, summary.business_period)).casefold()
-            if query and query not in searchable:
-                continue
             rows.append(
-                {
+                ({
                     "batchId": summary.id,
                     "title": title,
                     "tool": f"{summary.group_name} · {summary.tool_name}",
@@ -2831,9 +2841,41 @@ class AppController(QObject):
                     "counts": f"上传 {detail.upload_count} · 结果 {detail.result_count} · 补充 {detail.supplement_count}",
                     "restorePath": detail.original_relative_path,
                     "size": self._format_size(detail.total_size_bytes),
-                }
+                }, searchable)
             )
-        return rows
+        self._trash_row_index = rows
+        self._trash_applied_query = None
+
+    def _filtered_trash_rows(self) -> list[dict[str, Any]]:
+        query = self._trash_search.casefold()
+        return [row for row, searchable in self._trash_row_index
+                if not query or query in searchable]
+
+    def _refresh_trash_model(self) -> None:
+        rows = self._filtered_trash_rows()
+        changed = rows != self._trash_visible_rows
+        self._trash_visible_rows = rows
+        self._trash_applied_query = self._trash_search.casefold()
+        self._trash_selected_row = next(
+            (index for index, item in enumerate(rows)
+             if str(item["batchId"]) == self._trash_selected_id),
+            0 if rows else -1,
+        )
+        self._trash_selected_id = (
+            str(rows[self._trash_selected_row]["batchId"])
+            if self._trash_selected_row >= 0 else ""
+        )
+        if changed:
+            self._trash_model.set_items(rows)
+
+    def _clear_trash_items(self) -> None:
+        self._trash_items = []
+        self._trash_row_index = []
+        self._trash_visible_rows = []
+        self._trash_applied_query = None
+        self._trash_selected_id = ""
+        self._trash_selected_row = -1
+        self._trash_model.clear()
 
     @Slot()
     def requestProjectTrash(self) -> None:
@@ -2862,33 +2904,29 @@ class AppController(QObject):
             return
         self._trash_busy = False
         if error:
-            self._trash_items = []
-            self._trash_model.clear()
-            self._trash_selected_id = ""
+            self._clear_trash_items()
             self.notificationRequested.emit("回收站暂时无法读取", error, "error")
         else:
             self._trash_items = list(items)
-            rows = self._filtered_trash_rows()
-            self._trash_model.set_items(rows)
-            ids = {str(item["batchId"]) for item in rows}
-            if self._trash_selected_id not in ids:
-                self._trash_selected_id = str(rows[0]["batchId"]) if rows else ""
+            self._rebuild_trash_row_index()
+            self._refresh_trash_model()
         self.trashChanged.emit()
 
     @Slot(str)
     def setTrashSearch(self, query: str) -> None:
+        if self._closed:
+            return
         self._trash_search = str(query or "").strip()
-        rows = self._filtered_trash_rows()
-        self._trash_model.set_items(rows)
-        ids = {str(item["batchId"]) for item in rows}
-        if self._trash_selected_id not in ids:
-            self._trash_selected_id = str(rows[0]["batchId"]) if rows else ""
+        if self._trash_search.casefold() == self._trash_applied_query:
+            return
+        self._refresh_trash_model()
         self.trashChanged.emit()
 
     @Slot(int)
     def selectTrashRow(self, row: int) -> None:
         item = self._trash_model.item_at(row)
         self._trash_selected_id = "" if item is None else str(item["batchId"])
+        self._trash_selected_row = -1 if item is None else row
         self.trashChanged.emit()
 
     @Slot()
@@ -4269,6 +4307,7 @@ class AppController(QObject):
         if hasattr(self, "_log_flush_timer") and self._log_flush_timer.isActive():
             self._log_flush_timer.stop()
         self._closed = True
+        self._clear_trash_items()
         if self._drop_preview_request is not None:
             self.cancelDropPreview(self._drop_preview_request["token"])
         if self._selection_request is not None:
