@@ -11,15 +11,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hr_toolkit.gui_qt.compat import QApplication, QObject, Property, Slot, QUrl, QT_MAJOR, Qt
 from hr_toolkit.gui_qt.controller import AppController
 if QT_MAJOR == 6:
-    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtCore import QEventLoop, QPoint, QPointF, QTimer
     from PySide6.QtQml import QQmlApplicationEngine
     from PySide6.QtQuick import QQuickWindow
     from PySide6.QtTest import QTest
 else:
-    from PySide2.QtCore import QPoint, QPointF
+    from PySide2.QtCore import QEventLoop, QPoint, QPointF, QTimer
     from PySide2.QtQml import QQmlApplicationEngine
     from PySide2.QtQuick import QQuickWindow
     from PySide2.QtTest import QTest
+
+os.environ["QT_QUICK_CONTROLS_STYLE"] = "Default" if QT_MAJOR == 5 else "Basic"
+
+
+def wait_for_events(milliseconds):
+    # PySide2 5.15.2.1 does not expose QTest.qWait. A local event loop keeps
+    # animations/timers running on both Qt versions without blocking sleep.
+    loop = QEventLoop()
+    QTimer.singleShot(milliseconds, loop.quit)
+    execute = getattr(loop, "exec", None) or loop.exec_
+    execute()
 
 
 class Controller(AppController):
@@ -89,7 +100,7 @@ def main():
     def sample(duration=230):
         widths = []
         for _ in range(max(1, duration // 10)):
-            QTest.qWait(10)
+            wait_for_events(10)
             application.processEvents()
             assert pane.width() >= 0 and panel.width() >= 0
             assert panel.x() >= pane.x() + pane.width() - 1.5, "Right pane overlaps the core"
