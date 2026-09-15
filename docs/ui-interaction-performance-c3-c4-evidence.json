@@ -1,0 +1,800 @@
+{
+  "baseline_commit": "2d46e44",
+  "environment": "macOS / PySide6 / Qt 6.11.2 / offscreen / software / Basic",
+  "notes": "Three independent process pairs, alternating order. Notes: warmed imports/fonts, 3 creations per size per process; history 1 creation per process. Workspace: 10000 rows, 30 alternating insert/delete operations above viewport, timing includes apply and Qt layout/event processing, excludes explicit GPU frame timing.",
+  "timings": [
+    {
+      "baseline": {
+        "notes": {
+          "mode": "baseline",
+          "qt": "6.11.2",
+          "backend": "offscreen/software",
+          "notes_10": {
+            "create_ms": 1.392,
+            "objects": 51,
+            "buttons": 0,
+            "contentHeight": 332.3999999999999,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "285815613334a7a57cc014d264a84920f91681da67e0bac1bedb7794b420a52b"
+          },
+          "notes_1000": {
+            "create_ms": 73.866,
+            "objects": 4011,
+            "buttons": 0,
+            "contentHeight": 31220.400000000503,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "00fc40b8a4c084552918f2b69a74dfaadaf94d914349752bfdd4e80173eeff5a"
+          },
+          "notes_history": {
+            "create_ms": 3.974,
+            "objects": 153,
+            "buttons": 10,
+            "contentHeight": 738.0,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "ef8973c2d053c5fa77e3b69733fb52e76a0b29e5fea19e684015cdb7522e1f4e"
+          }
+        },
+        "workspace": {
+          "mode": "baseline",
+          "median_ms": 3.9834,
+          "resets": 30,
+          "delegates_created": 626,
+          "anchor_before": "/virtual/5000",
+          "anchor_after": "/virtual/0"
+        }
+      },
+      "current": {
+        "notes": {
+          "mode": "current",
+          "qt": "6.11.2",
+          "backend": "offscreen/software",
+          "notes_10": {
+            "create_ms": 1.336,
+            "objects": 56,
+            "buttons": 0,
+            "contentHeight": 332.3999999999999,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "285815613334a7a57cc014d264a84920f91681da67e0bac1bedb7794b420a52b"
+          },
+          "notes_1000": {
+            "create_ms": 15.439,
+            "objects": 76,
+            "buttons": 0,
+            "contentHeight": 31220.400000000503,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "00fc40b8a4c084552918f2b69a74dfaadaf94d914349752bfdd4e80173eeff5a"
+          },
+          "notes_history": {
+            "create_ms": 3.123,
+            "objects": 158,
+            "buttons": 10,
+            "contentHeight": 738.0,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "ef8973c2d053c5fa77e3b69733fb52e76a0b29e5fea19e684015cdb7522e1f4e"
+          }
+        },
+        "workspace": {
+          "mode": "current",
+          "median_ms": 2.5237,
+          "resets": 0,
+          "delegates_created": 0,
+          "anchor_before": "/virtual/5000",
+          "anchor_after": "/virtual/5000",
+          "reorder_selection_and_anchor": "passed"
+        }
+      }
+    },
+    {
+      "current": {
+        "notes": {
+          "mode": "current",
+          "qt": "6.11.2",
+          "backend": "offscreen/software",
+          "notes_10": {
+            "create_ms": 1.54,
+            "objects": 56,
+            "buttons": 0,
+            "contentHeight": 332.3999999999999,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "285815613334a7a57cc014d264a84920f91681da67e0bac1bedb7794b420a52b"
+          },
+          "notes_1000": {
+            "create_ms": 15.461,
+            "objects": 76,
+            "buttons": 0,
+            "contentHeight": 31220.400000000503,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "00fc40b8a4c084552918f2b69a74dfaadaf94d914349752bfdd4e80173eeff5a"
+          },
+          "notes_history": {
+            "create_ms": 3.158,
+            "objects": 158,
+            "buttons": 10,
+            "contentHeight": 738.0,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "ef8973c2d053c5fa77e3b69733fb52e76a0b29e5fea19e684015cdb7522e1f4e"
+          }
+        },
+        "workspace": {
+          "mode": "current",
+          "median_ms": 2.5254,
+          "resets": 0,
+          "delegates_created": 0,
+          "anchor_before": "/virtual/5000",
+          "anchor_after": "/virtual/5000",
+          "reorder_selection_and_anchor": "passed"
+        }
+      },
+      "baseline": {
+        "notes": {
+          "mode": "baseline",
+          "qt": "6.11.2",
+          "backend": "offscreen/software",
+          "notes_10": {
+            "create_ms": 1.278,
+            "objects": 51,
+            "buttons": 0,
+            "contentHeight": 332.3999999999999,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "285815613334a7a57cc014d264a84920f91681da67e0bac1bedb7794b420a52b"
+          },
+          "notes_1000": {
+            "create_ms": 73.305,
+            "objects": 4011,
+            "buttons": 0,
+            "contentHeight": 31220.400000000503,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "00fc40b8a4c084552918f2b69a74dfaadaf94d914349752bfdd4e80173eeff5a"
+          },
+          "notes_history": {
+            "create_ms": 3.412,
+            "objects": 153,
+            "buttons": 10,
+            "contentHeight": 738.0,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "ef8973c2d053c5fa77e3b69733fb52e76a0b29e5fea19e684015cdb7522e1f4e"
+          }
+        },
+        "workspace": {
+          "mode": "baseline",
+          "median_ms": 3.7012,
+          "resets": 30,
+          "delegates_created": 626,
+          "anchor_before": "/virtual/5000",
+          "anchor_after": "/virtual/0"
+        }
+      }
+    },
+    {
+      "baseline": {
+        "notes": {
+          "mode": "baseline",
+          "qt": "6.11.2",
+          "backend": "offscreen/software",
+          "notes_10": {
+            "create_ms": 1.532,
+            "objects": 51,
+            "buttons": 0,
+            "contentHeight": 332.3999999999999,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "285815613334a7a57cc014d264a84920f91681da67e0bac1bedb7794b420a52b"
+          },
+          "notes_1000": {
+            "create_ms": 72.983,
+            "objects": 4011,
+            "buttons": 0,
+            "contentHeight": 31220.400000000503,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "00fc40b8a4c084552918f2b69a74dfaadaf94d914349752bfdd4e80173eeff5a"
+          },
+          "notes_history": {
+            "create_ms": 3.615,
+            "objects": 153,
+            "buttons": 10,
+            "contentHeight": 738.0,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "ef8973c2d053c5fa77e3b69733fb52e76a0b29e5fea19e684015cdb7522e1f4e"
+          }
+        },
+        "workspace": {
+          "mode": "baseline",
+          "median_ms": 3.7399,
+          "resets": 30,
+          "delegates_created": 626,
+          "anchor_before": "/virtual/5000",
+          "anchor_after": "/virtual/0"
+        }
+      },
+      "current": {
+        "notes": {
+          "mode": "current",
+          "qt": "6.11.2",
+          "backend": "offscreen/software",
+          "notes_10": {
+            "create_ms": 1.436,
+            "objects": 56,
+            "buttons": 0,
+            "contentHeight": 332.3999999999999,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "285815613334a7a57cc014d264a84920f91681da67e0bac1bedb7794b420a52b"
+          },
+          "notes_1000": {
+            "create_ms": 15.368,
+            "objects": 76,
+            "buttons": 0,
+            "contentHeight": 31220.400000000503,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "00fc40b8a4c084552918f2b69a74dfaadaf94d914349752bfdd4e80173eeff5a"
+          },
+          "notes_history": {
+            "create_ms": 3.134,
+            "objects": 158,
+            "buttons": 10,
+            "contentHeight": 738.0,
+            "implicitHeight": 320.0,
+            "pixel_sha256": "ef8973c2d053c5fa77e3b69733fb52e76a0b29e5fea19e684015cdb7522e1f4e"
+          }
+        },
+        "workspace": {
+          "mode": "current",
+          "median_ms": 2.5765,
+          "resets": 0,
+          "delegates_created": 0,
+          "anchor_before": "/virtual/5000",
+          "anchor_after": "/virtual/5000",
+          "reorder_selection_and_anchor": "passed"
+        }
+      }
+    }
+  ],
+  "long_notes_comparisons": {
+    "1": {
+      "baseline": {
+        "states": [
+          {
+            "label": "top",
+            "height": 53559.2,
+            "y": -0.0,
+            "pixels": "1f2ffbd666987091603c544e62e93ca1371616a60bb2e5f9e23cf0d469cb887d"
+          },
+          {
+            "label": "width-360",
+            "height": 83972.0,
+            "y": -0.0,
+            "pixels": "7c1be62f509cd73040b70556b35e2bb4d5fe58653dd7ee77f7b0bcc797ff2bbd"
+          },
+          {
+            "label": "width-900",
+            "height": 42653.6,
+            "y": -0.0,
+            "pixels": "00fbadae21be9ffbf17202f797efe6feb18f5adea76083c9ff32c3c03d29d8ed"
+          },
+          {
+            "label": "width-640",
+            "height": 53559.2,
+            "y": -0.0,
+            "pixels": "1f2ffbd666987091603c544e62e93ca1371616a60bb2e5f9e23cf0d469cb887d"
+          },
+          {
+            "label": "scroll-0.2",
+            "height": 53559.2,
+            "y": 10645.44,
+            "pixels": "e30f2b2399bc98eb4265a92e8a916e6de42f0278ec2f193f55f59321eaeaefae"
+          },
+          {
+            "label": "scroll-0.5",
+            "height": 53559.2,
+            "y": 26613.6,
+            "pixels": "fa95123c26c4374efe22e72ca0a19034a8105957a40dab7e4f9455021d3e3959"
+          },
+          {
+            "label": "scroll-1",
+            "height": 53559.2,
+            "y": 53227.2,
+            "pixels": "aa66f79783eb32a5e3917ffb19eedb8c87fe3ebd99d40bf23471de639decad9b"
+          },
+          {
+            "label": "scroll-0",
+            "height": 53559.2,
+            "y": 0.0,
+            "pixels": "1f2ffbd666987091603c544e62e93ca1371616a60bb2e5f9e23cf0d469cb887d"
+          },
+          {
+            "label": "history-one",
+            "height": 5487.2,
+            "y": 0.0,
+            "pixels": "d8e0fa4e06033cb2ce2d735d4043be7b4568b31b4db72fc383ae8608e8abbdc6"
+          },
+          {
+            "label": "history-all",
+            "height": 50840.0,
+            "y": 0.0,
+            "pixels": "d8e0fa4e06033cb2ce2d735d4043be7b4568b31b4db72fc383ae8608e8abbdc6"
+          },
+          {
+            "label": "history-bottom",
+            "height": 50840.0,
+            "y": 50508.0,
+            "pixels": "31fc612164cc7b114c90a6c0fa2aa61f1949632bcd00d48695369e6944e239d9"
+          },
+          {
+            "label": "short-after-long",
+            "height": 19.2,
+            "y": 0.0,
+            "pixels": "2148852d0353e831e2fac53009d1632f01d512811803de4ce2bc10248cd388a1"
+          },
+          {
+            "label": "long-again",
+            "height": 53559.2,
+            "y": 0.0,
+            "pixels": "1f2ffbd666987091603c544e62e93ca1371616a60bb2e5f9e23cf0d469cb887d"
+          }
+        ],
+        "maximum_visual_nodes": 4118
+      },
+      "current": {
+        "states": [
+          {
+            "label": "top",
+            "height": 53559.2,
+            "y": -0.0,
+            "pixels": "1f2ffbd666987091603c544e62e93ca1371616a60bb2e5f9e23cf0d469cb887d"
+          },
+          {
+            "label": "width-360",
+            "height": 83972.0,
+            "y": -0.0,
+            "pixels": "7c1be62f509cd73040b70556b35e2bb4d5fe58653dd7ee77f7b0bcc797ff2bbd"
+          },
+          {
+            "label": "width-900",
+            "height": 42653.6,
+            "y": -0.0,
+            "pixels": "00fbadae21be9ffbf17202f797efe6feb18f5adea76083c9ff32c3c03d29d8ed"
+          },
+          {
+            "label": "width-640",
+            "height": 53559.2,
+            "y": -0.0,
+            "pixels": "1f2ffbd666987091603c544e62e93ca1371616a60bb2e5f9e23cf0d469cb887d"
+          },
+          {
+            "label": "scroll-0.2",
+            "height": 53559.2,
+            "y": 10645.44,
+            "pixels": "e30f2b2399bc98eb4265a92e8a916e6de42f0278ec2f193f55f59321eaeaefae"
+          },
+          {
+            "label": "scroll-0.5",
+            "height": 53559.2,
+            "y": 26613.6,
+            "pixels": "fa95123c26c4374efe22e72ca0a19034a8105957a40dab7e4f9455021d3e3959"
+          },
+          {
+            "label": "scroll-1",
+            "height": 53559.2,
+            "y": 53227.2,
+            "pixels": "aa66f79783eb32a5e3917ffb19eedb8c87fe3ebd99d40bf23471de639decad9b"
+          },
+          {
+            "label": "scroll-0",
+            "height": 53559.2,
+            "y": 0.0,
+            "pixels": "1f2ffbd666987091603c544e62e93ca1371616a60bb2e5f9e23cf0d469cb887d"
+          },
+          {
+            "label": "history-one",
+            "height": 5487.2,
+            "y": 0.0,
+            "pixels": "d8e0fa4e06033cb2ce2d735d4043be7b4568b31b4db72fc383ae8608e8abbdc6"
+          },
+          {
+            "label": "history-all",
+            "height": 50840.0,
+            "y": 0.0,
+            "pixels": "d8e0fa4e06033cb2ce2d735d4043be7b4568b31b4db72fc383ae8608e8abbdc6"
+          },
+          {
+            "label": "history-bottom",
+            "height": 50840.0,
+            "y": 50508.0,
+            "pixels": "31fc612164cc7b114c90a6c0fa2aa61f1949632bcd00d48695369e6944e239d9"
+          },
+          {
+            "label": "short-after-long",
+            "height": 19.2,
+            "y": 0.0,
+            "pixels": "2148852d0353e831e2fac53009d1632f01d512811803de4ce2bc10248cd388a1"
+          },
+          {
+            "label": "long-again",
+            "height": 53559.2,
+            "y": 0.0,
+            "pixels": "1f2ffbd666987091603c544e62e93ca1371616a60bb2e5f9e23cf0d469cb887d"
+          }
+        ],
+        "maximum_visual_nodes": 179
+      }
+    },
+    "1.5": {
+      "baseline": {
+        "states": [
+          {
+            "label": "top",
+            "height": 53559.2,
+            "y": -0.0,
+            "pixels": "261804adb83bfb8a50472ae56245113981c769a6910b3eb7e9a0a9b4fc5f28a4"
+          },
+          {
+            "label": "width-360",
+            "height": 83972.0,
+            "y": -0.0,
+            "pixels": "d3b8668c2f21ac03de38da0a06c782136764b90e0ddcaa0c444e7263e451b837"
+          },
+          {
+            "label": "width-900",
+            "height": 42653.6,
+            "y": -0.0,
+            "pixels": "424473b20f0be2f699fa8973ef940a052023716a0cddbe682bd138f47585c013"
+          },
+          {
+            "label": "width-640",
+            "height": 53559.2,
+            "y": -0.0,
+            "pixels": "261804adb83bfb8a50472ae56245113981c769a6910b3eb7e9a0a9b4fc5f28a4"
+          },
+          {
+            "label": "scroll-0.2",
+            "height": 53559.2,
+            "y": 10645.44,
+            "pixels": "2d7806642fa2dbdd4ff881b05934ef3abba8fc38850899bee0f6e9cceac00441"
+          },
+          {
+            "label": "scroll-0.5",
+            "height": 53559.2,
+            "y": 26613.6,
+            "pixels": "0788b7ac5dc42e145d9bc531bafba778d06e355c593f995dcee58c2710f81794"
+          },
+          {
+            "label": "scroll-1",
+            "height": 53559.2,
+            "y": 53227.2,
+            "pixels": "be93535244d7a3d75391fd55e46d0acbe1e9cc9333b22df2d9838da4055732ac"
+          },
+          {
+            "label": "scroll-0",
+            "height": 53559.2,
+            "y": 0.0,
+            "pixels": "261804adb83bfb8a50472ae56245113981c769a6910b3eb7e9a0a9b4fc5f28a4"
+          },
+          {
+            "label": "history-one",
+            "height": 5487.2,
+            "y": 0.0,
+            "pixels": "846a02a25f7333b7e83185b8ceb281a5854060efb82a45fa74fdd067a27d574d"
+          },
+          {
+            "label": "history-all",
+            "height": 50840.0,
+            "y": 0.0,
+            "pixels": "846a02a25f7333b7e83185b8ceb281a5854060efb82a45fa74fdd067a27d574d"
+          },
+          {
+            "label": "history-bottom",
+            "height": 50840.0,
+            "y": 50508.0,
+            "pixels": "9bc7e5002fc07e83cd0921801a17bc8783cdc829d8b6965cc7ed42c44932696c"
+          },
+          {
+            "label": "short-after-long",
+            "height": 19.2,
+            "y": 0.0,
+            "pixels": "13d5925d91eaa738e31159bab8da1f59b950640e29f0148b5eadc6ffd8493f47"
+          },
+          {
+            "label": "long-again",
+            "height": 53559.2,
+            "y": 0.0,
+            "pixels": "261804adb83bfb8a50472ae56245113981c769a6910b3eb7e9a0a9b4fc5f28a4"
+          }
+        ],
+        "maximum_visual_nodes": 4118
+      },
+      "current": {
+        "states": [
+          {
+            "label": "top",
+            "height": 53559.2,
+            "y": -0.0,
+            "pixels": "261804adb83bfb8a50472ae56245113981c769a6910b3eb7e9a0a9b4fc5f28a4"
+          },
+          {
+            "label": "width-360",
+            "height": 83972.0,
+            "y": -0.0,
+            "pixels": "d3b8668c2f21ac03de38da0a06c782136764b90e0ddcaa0c444e7263e451b837"
+          },
+          {
+            "label": "width-900",
+            "height": 42653.6,
+            "y": -0.0,
+            "pixels": "424473b20f0be2f699fa8973ef940a052023716a0cddbe682bd138f47585c013"
+          },
+          {
+            "label": "width-640",
+            "height": 53559.2,
+            "y": -0.0,
+            "pixels": "261804adb83bfb8a50472ae56245113981c769a6910b3eb7e9a0a9b4fc5f28a4"
+          },
+          {
+            "label": "scroll-0.2",
+            "height": 53559.2,
+            "y": 10645.44,
+            "pixels": "2d7806642fa2dbdd4ff881b05934ef3abba8fc38850899bee0f6e9cceac00441"
+          },
+          {
+            "label": "scroll-0.5",
+            "height": 53559.2,
+            "y": 26613.6,
+            "pixels": "0788b7ac5dc42e145d9bc531bafba778d06e355c593f995dcee58c2710f81794"
+          },
+          {
+            "label": "scroll-1",
+            "height": 53559.2,
+            "y": 53227.2,
+            "pixels": "be93535244d7a3d75391fd55e46d0acbe1e9cc9333b22df2d9838da4055732ac"
+          },
+          {
+            "label": "scroll-0",
+            "height": 53559.2,
+            "y": 0.0,
+            "pixels": "261804adb83bfb8a50472ae56245113981c769a6910b3eb7e9a0a9b4fc5f28a4"
+          },
+          {
+            "label": "history-one",
+            "height": 5487.2,
+            "y": 0.0,
+            "pixels": "846a02a25f7333b7e83185b8ceb281a5854060efb82a45fa74fdd067a27d574d"
+          },
+          {
+            "label": "history-all",
+            "height": 50840.0,
+            "y": 0.0,
+            "pixels": "846a02a25f7333b7e83185b8ceb281a5854060efb82a45fa74fdd067a27d574d"
+          },
+          {
+            "label": "history-bottom",
+            "height": 50840.0,
+            "y": 50508.0,
+            "pixels": "9bc7e5002fc07e83cd0921801a17bc8783cdc829d8b6965cc7ed42c44932696c"
+          },
+          {
+            "label": "short-after-long",
+            "height": 19.2,
+            "y": 0.0,
+            "pixels": "13d5925d91eaa738e31159bab8da1f59b950640e29f0148b5eadc6ffd8493f47"
+          },
+          {
+            "label": "long-again",
+            "height": 53559.2,
+            "y": 0.0,
+            "pixels": "261804adb83bfb8a50472ae56245113981c769a6910b3eb7e9a0a9b4fc5f28a4"
+          }
+        ],
+        "maximum_visual_nodes": 179
+      }
+    }
+  },
+  "short_notes_interactions": {
+    "baseline": [
+      {
+        "label": "initial",
+        "height": 182.8,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "bf814458df82cb2eea30dcc5cf959f1ca5090c166d6816cb192b19f3e97ffb81"
+      },
+      {
+        "label": "mouse_collapse",
+        "height": 80.0,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "20df72ff86130986cfcc9878dadd89938a4ddf0be0b166d1cf1987d9dce040a8"
+      },
+      {
+        "label": "mouse_expand",
+        "height": 182.8,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "bf814458df82cb2eea30dcc5cf959f1ca5090c166d6816cb192b19f3e97ffb81"
+      },
+      {
+        "label": "keyboard_expand",
+        "height": 254.39999999999998,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "d0d9b3920ab58688787e12effabd1547aa0795839cc62b4c39facd1487ebc8e9"
+      },
+      {
+        "label": "resize",
+        "height": 254.39999999999998,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "acc8e0ec936195f6e0b35a1c4424d5e30b77677a6eb57952b0cbaa5c372b30a3"
+      },
+      {
+        "label": "scroll_end",
+        "height": 254.39999999999998,
+        "y": 122.39999999999998,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "bd9def1bc686758fc84f5dab04b00f5314a33d2e063ac5a22bb9acbd4a9a0e97"
+      },
+      {
+        "label": "scroll_home",
+        "height": 254.39999999999998,
+        "y": 0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "acc8e0ec936195f6e0b35a1c4424d5e30b77677a6eb57952b0cbaa5c372b30a3"
+      },
+      {
+        "label": "tab_to_header",
+        "height": 254.39999999999998,
+        "y": 0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "973635a8e6d5e866e3d35438e36664cb928f6ddb7dcb20c9d48fa4fb28ff6c89"
+      }
+    ],
+    "current": [
+      {
+        "label": "initial",
+        "height": 182.8,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "bf814458df82cb2eea30dcc5cf959f1ca5090c166d6816cb192b19f3e97ffb81"
+      },
+      {
+        "label": "mouse_collapse",
+        "height": 80.0,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "20df72ff86130986cfcc9878dadd89938a4ddf0be0b166d1cf1987d9dce040a8"
+      },
+      {
+        "label": "mouse_expand",
+        "height": 182.8,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "bf814458df82cb2eea30dcc5cf959f1ca5090c166d6816cb192b19f3e97ffb81"
+      },
+      {
+        "label": "keyboard_expand",
+        "height": 254.39999999999998,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "d0d9b3920ab58688787e12effabd1547aa0795839cc62b4c39facd1487ebc8e9"
+      },
+      {
+        "label": "resize",
+        "height": 254.39999999999998,
+        "y": -0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "acc8e0ec936195f6e0b35a1c4424d5e30b77677a6eb57952b0cbaa5c372b30a3"
+      },
+      {
+        "label": "scroll_end",
+        "height": 254.39999999999998,
+        "y": 122.39999999999998,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "bd9def1bc686758fc84f5dab04b00f5314a33d2e063ac5a22bb9acbd4a9a0e97"
+      },
+      {
+        "label": "scroll_home",
+        "height": 254.39999999999998,
+        "y": 0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "acc8e0ec936195f6e0b35a1c4424d5e30b77677a6eb57952b0cbaa5c372b30a3"
+      },
+      {
+        "label": "tab_to_header",
+        "height": 254.39999999999998,
+        "y": 0.0,
+        "buttons": [
+          "v2.0",
+          "v1.0"
+        ],
+        "pixels": "973635a8e6d5e866e3d35438e36664cb928f6ddb7dcb20c9d48fa4fb28ff6c89"
+      }
+    ]
+  },
+  "source_sha256": {
+    "hr_toolkit/gui_qt/controller.py": "253dbb0e40e488f72bea2502242509fddabc7a8621e78b8847a5a7be810a9718",
+    "hr_toolkit/gui_qt/models.py": "3e1493c602d4748afb944f8ca247efb7c7d36e6da783827b3326ac674990c1ff",
+    "hr_toolkit/gui_qt/qml/Main.qml": "1a569fa6a327b6c3f4b2a43ba770d34bb118e577fd23af6cd4c873f283086673",
+    "hr_toolkit/gui_qt/qml/components/UpdateNotesView.qml": "8cc64396e5f62b4660d852c24058e39f8e2104c1a990f8af9059065711ac8f6e",
+    "hr_toolkit/gui_qt/qml/components/UpdateNotesRow.qml": "6382bb7db2d43f3ec19a6790780823102c2b3d99ee6fbfd4ff24416ebd17a717"
+  },
+  "notes_motion": [
+    {
+      "baseline": {
+        "mode": "baseline",
+        "resize_frame_median_ms": 45.2395619940944,
+        "scroll_frame_median_ms": 0.7899170159362257
+      },
+      "current": {
+        "mode": "current",
+        "resize_frame_median_ms": 23.329249990638345,
+        "scroll_frame_median_ms": 0.8148124907165766
+      }
+    },
+    {
+      "current": {
+        "mode": "current",
+        "resize_frame_median_ms": 23.66162501857616,
+        "scroll_frame_median_ms": 0.8239580201916397
+      },
+      "baseline": {
+        "mode": "baseline",
+        "resize_frame_median_ms": 45.202583976788446,
+        "scroll_frame_median_ms": 0.7916459871921688
+      }
+    },
+    {
+      "baseline": {
+        "mode": "baseline",
+        "resize_frame_median_ms": 45.52991650416516,
+        "scroll_frame_median_ms": 0.8104790176730603
+      },
+      "current": {
+        "mode": "current",
+        "resize_frame_median_ms": 23.470875021303073,
+        "scroll_frame_median_ms": 0.8269585086964071
+      }
+    }
+  ],
+  "notes_motion_method": "1000 varied wrapped lines; 30 width changes and 60 contentY changes, each processing Qt events and capturing a software-rendered frame. Measures synchronous layout/render/capture cost, not physical refresh rate or native wheel events."
+}
