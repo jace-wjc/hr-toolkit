@@ -42,6 +42,21 @@ class QtFormSpecTests(unittest.TestCase):
             **changes,
         )
 
+    def test_validation_errors_identify_the_existing_input_or_date_field(self) -> None:
+        cases = (
+            ("social_security", {"input_paths": []}, "input"),
+            ("social_security", {"support_text": ""}, "support"),
+            ("data_statistics", {"values": {"week_start": "invalid"}}, "week_range"),
+            ("data_statistics", {"values": {"month_start": "invalid"}}, "month_range"),
+        )
+        for nav_id, changes, field in cases:
+            with self.subTest(field=field):
+                with self.assertRaises(FormValidationError) as caught:
+                    self.invocation(nav_id, **changes)
+                self.assertEqual(caught.exception.field, field)
+                self.assertTrue(caught.exception.title)
+                self.assertTrue(str(caught.exception))
+
     def test_all_business_tools_map_to_existing_functions_and_project_names(self) -> None:
         cases = (
             ("social_security", "default", "hr_toolkit.tools.social_security", "generate_social_security_reports", "社保明细与汇总"),

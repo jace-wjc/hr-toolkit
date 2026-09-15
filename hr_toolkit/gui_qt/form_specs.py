@@ -14,10 +14,11 @@ EXCEL_SUFFIXES = frozenset({".xlsx", ".xls"})
 
 
 class FormValidationError(ValueError):
-    def __init__(self, title: str, message: str) -> None:
+    def __init__(self, title: str, message: str, field: str = "") -> None:
         super().__init__(message)
         self.title = title
         self.message = message
+        self.field = field
 
 
 @dataclass(frozen=True)
@@ -354,7 +355,11 @@ def build_invocation(
 ) -> ToolInvocation:
     """Validate UI state and map it to the exact existing business call."""
 
-    inputs = _validated_inputs(spec, input_paths)
+    try:
+        inputs = _validated_inputs(spec, input_paths)
+    except FormValidationError as exc:
+        exc.field = "input"
+        raise
     # Hidden optional controls must not affect the call.  This mirrors the
     # legacy workflow: a direct material target takes precedence over a saved
     # roster path, and non-Excel rename modes ignore the Excel roster field.
@@ -365,7 +370,11 @@ def build_invocation(
         spec.tool_id == "folder_rename"
         and str(values.get("rename_mode") or "append") != "excel"
     )
-    support = None if ignore_support else _validated_support(spec, support_text)
+    try:
+        support = None if ignore_support else _validated_support(spec, support_text)
+    except FormValidationError as exc:
+        exc.field = "support"
+        raise
     project_tool_name = PROJECT_TOOL_NAMES[spec.tool_id]
     description = project_tool_name
     if spec.tool_id == "folder_rename":
@@ -394,11 +403,11 @@ def build_invocation(
         try:
             week_range = resolve_week_range(values.get("week_start") or None, values.get("week_end") or None)
         except ValueError as exc:
-            raise FormValidationError("日期填写有误", str(exc)) from exc
+            raise FormValidationError("日期填写有误", str(exc), "week_range") from exc
         try:
             month_range = resolve_month_range(values.get("month_start") or None, values.get("month_end") or None)
         except ValueError as exc:
-            raise FormValidationError("日期填写有误", str(exc)) from exc
+            raise FormValidationError("日期填写有误", str(exc), "month_range") from exc
         kwargs = {
             "report_staff_path": support,
             "week_start": None if week_range is None else week_range[0],
@@ -426,11 +435,11 @@ def build_invocation(
         target_text = str(values.get("target_input") or "").strip()
         roster_source: str | Path | None = target_text or support
         if roster_source is None:
-            raise FormValidationError("缺少员工信息", "请输入员工姓名/身份证，或选择员工名单 Excel 表格。")
+            raise FormValidationError("缺少员工信息", "请输入员工姓名/身份证，或选择员工名单 Excel 表格。", "support")
         collect_all = bool(values.get("collect_all", True))
         materials = list(values.get("material_types") or [])
         if not collect_all and not materials:
-            raise FormValidationError("未选择材料", "请至少选择一种材料，或者勾选“全部”。")
+            raise FormValidationError("未选择材料", "请至少选择一种材料，或者勾选“全部”。", "material_types")
         library_mode = str(values.get("library_mode") or "person_folder")
         use_ocr_cache = True if library_mode == "flat_ocr" else bool(values.get("use_ocr_cache", True))
         if library_mode == "person_folder" and collect_all and target_text:
@@ -456,7 +465,7 @@ def build_invocation(
         file_type = str(values.get("file_type") or "folder")
         if mode == "excel":
             if support is None:
-                raise FormValidationError("缺少人员名单", "请先选择包含姓名列的 Excel 名单。")
+                raise FormValidationError("缺少人员名单", "请先选择包含姓名列的 Excel 名单。", "support")
             kwargs: dict[str, Any] = {
                 "root_dir": inputs[0],
                 "excel_path": support,

@@ -945,7 +945,9 @@ ApplicationWindow {
                                         border.color: root.border
                                         Text { anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; text: controller.hasProject ? "当前项目 / 本次处理结果" : "请先新建或打开工作项目"; color: controller.hasProject ? root.textFaint : root.textDisabled; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
                                     }
-                                    AppButton { text: "打开项目"; variant: "link"; enabled: controller.hasProject; onClicked: controller.openProjectFolder() }
+                                    AppButton { text: "打开项目"; variant: "link"; visible: controller.hasProject; onClicked: controller.openProjectFolder() }
+                                    AppButton { text: "新建项目"; variant: "link"; visible: !controller.hasProject; enabled: controller.selectionEnabled; onClicked: controller.requestCreateProject() }
+                                    AppButton { text: "打开已有"; variant: "link"; visible: !controller.hasProject; enabled: controller.selectionEnabled; onClicked: controller.openProjectDialog() }
                                 }
 
                                 ColumnLayout {
@@ -1077,6 +1079,13 @@ ApplicationWindow {
                                                 active: visible
                                                 property var field: root.fieldById("material_types")
                                                 sourceComponent: materialCollectorTypesComponent
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true
+                                                readonly property var feedback: controller.selectionFeedback.material_types || ({})
+                                                visible: !!feedback.text; text: feedback.text || ""
+                                                textFormat: Text.PlainText; wrapMode: Text.Wrap
+                                                color: "#A63C2C"; font.pixelSize: 12
                                             }
                                         }
                                     }
@@ -1393,6 +1402,13 @@ ApplicationWindow {
                             onClicked: controller.applyDatePreset(field.presetGroup, modelData.value)
                         }
                     }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    readonly property var feedback: controller.selectionFeedback[field.presetGroup + "_range"] || ({})
+                    visible: !!feedback.text; text: feedback.text || ""
+                    textFormat: Text.PlainText; wrapMode: Text.Wrap
+                    color: "#A63C2C"; font.pixelSize: 12
                 }
             }
         }

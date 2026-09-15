@@ -1054,6 +1054,13 @@ class AppController(QObject):
 
     def _bump_form_revision(self) -> None:
         self._form_revision += 1
+        feedback = self._selection_messages.get(self._state_key(), {})
+        feedback.pop("week_range", None)
+        feedback.pop("month_range", None)
+        feedback.pop("material_types", None)
+        if self._spec.tool_id == "material_collector" and str(self._form_states[self._state_key()].get("target_input") or "").strip():
+            feedback.pop("support", None)
+        self.selectionStateChanged.emit()
         self.formRevisionChanged.emit()
 
     def _dialog_parent(self):
@@ -3263,6 +3270,9 @@ class AppController(QObject):
             return
         if error is not None:
             title = error.title if isinstance(error, FormValidationError) else "无法准备处理"
+            if isinstance(error, FormValidationError) and error.field:
+                self._selection_message(error.field, str(error), True)
+                return
             self.notificationRequested.emit(title, str(error), "warning")
             return
         if invocation.tool_id == "salary_merge":

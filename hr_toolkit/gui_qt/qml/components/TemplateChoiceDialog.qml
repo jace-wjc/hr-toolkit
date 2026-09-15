@@ -465,7 +465,7 @@ AppDialog {
             anchors.margins: 12; spacing: 6
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
-                text: dialog.working ? "正在读取，请稍候…" : dialog.rulesPage ? "系统内置名称不能修改或删除；自定义名称保存后生效。" : !dialog.hasDocument ? "原文件不会被修改。" : dialog.problem || "选择齐全，核对后即可继续。"
+                text: dialog.working ? "正在读取，请稍候…" : dialog.rulesPage ? "系统内置名称不能修改或删除；自定义名称保存后生效。" : !dialog.hasDocument ? "原文件不会被修改。" : dialog.problem || (!confirmed.checked ? "对应关系已齐全，请完成下方人工核对并勾选确认。" : "已完成核对，可以继续。")
                 textFormat: Text.PlainText; color: dialog.problem ? "#A26713" : "#17715B"; font.pixelSize: 12
             }
             AppCheckBox {
