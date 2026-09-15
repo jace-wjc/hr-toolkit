@@ -11,6 +11,7 @@ Item {
     property bool systemButtons: false
     property bool workspaceAvailable: false
     property bool workspaceExpanded: false
+    property bool workspaceAutoHidden: false
     property real workspacePanelLeft: 0
     signal workspaceToggleRequested()
     readonly property bool triggerHovered: sidebarButton.hovered
@@ -59,12 +60,13 @@ Item {
         objectName: "workspaceToggleButton"
         anchors.right: parent.right
         anchors.rightMargin: Math.max(chrome.systemButtons ? 148 : chrome.nativeWindows ? 16 : 10,
-                                      chrome.workspaceExpanded ? chrome.width - chrome.workspacePanelLeft + 10 : 0)
+                                      chrome.width - chrome.workspacePanelLeft + 10)
         y: chrome.nativeMac || chrome.nativeWindows ? 5 : 9; width: 32; height: 30
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         enabled: chrome.workspaceAvailable || chrome.workspaceExpanded
-        Accessible.name: chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件"
+        Accessible.name: chrome.workspaceAutoHidden ? "取消项目文件自动恢复"
+                         : chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件"
         onClicked: chrome.workspaceToggleRequested()
         background: Rectangle {
             radius: 6
@@ -85,7 +87,8 @@ Item {
         }
         ToolTip.visible: hovered
         ToolTip.delay: 700
-        ToolTip.text: chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件"
+        ToolTip.text: chrome.workspaceAutoHidden ? "窗口较窄，项目文件将在放大后恢复；点击取消恢复"
+                      : chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件"
     }
     Row {
         anchors.right: parent.right

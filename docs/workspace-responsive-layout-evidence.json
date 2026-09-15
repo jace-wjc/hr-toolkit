@@ -1,0 +1,772 @@
+{
+  "baseline_commit": "61b373d",
+  "environment": "macOS / Qt 6.11.2 / PySide6 / offscreen / software / Basic",
+  "scale_1": [
+    {
+      "window": 1400,
+      "center": 1152.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1220,
+      "center": 972.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1230,
+      "center": 982.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1280,
+      "center": 1032.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1226,
+      "center": 978.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1298,
+      "center": 1050.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1280,
+      "center": 1032.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1304,
+      "center": 720.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 1152.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 1600,
+      "center": 1352.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 1100,
+      "center": 764.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1100,
+      "center": 852.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1100,
+      "center": 764.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1100,
+      "center": 1100.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "insurance_ledger"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "insurance_ledger"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "insurance_ledger"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "data_statistics"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "data_statistics"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "data_statistics"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "salary_split"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "salary_split"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "salary_split"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "salary_merge"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "salary_merge"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "salary_merge"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "personnel_change_merge"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "personnel_change_merge"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "personnel_change_merge"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "archive_import"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "archive_import"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "archive_import"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "material_collector"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "material_collector"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "material_collector"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "folder_rename"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "folder_rename"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "folder_rename"
+    }
+  ],
+  "scale_1_5": [
+    {
+      "window": 1400,
+      "center": 1152.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1220,
+      "center": 972.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1230,
+      "center": 982.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1280,
+      "center": 1032.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1226,
+      "center": 978.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1298,
+      "center": 1050.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1280,
+      "center": 1032.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1304,
+      "center": 720.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 1152.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 1600,
+      "center": 1352.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 1100,
+      "center": 764.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1100,
+      "center": 852.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1100,
+      "center": 764.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1100,
+      "center": 1100.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": false,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "social_security"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "insurance_ledger"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "insurance_ledger"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "insurance_ledger"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "data_statistics"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "data_statistics"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "data_statistics"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "salary_split"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "salary_split"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "salary_split"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "salary_merge"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "salary_merge"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "salary_merge"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "personnel_change_merge"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "personnel_change_merge"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "personnel_change_merge"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "archive_import"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "archive_import"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "archive_import"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "material_collector"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "material_collector"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "material_collector"
+    },
+    {
+      "window": 1400,
+      "center": 801.0,
+      "right": 350.08,
+      "opened": true,
+      "requested": true,
+      "tool": "folder_rename"
+    },
+    {
+      "window": 1240,
+      "center": 656.0,
+      "right": 336.0,
+      "opened": true,
+      "requested": true,
+      "tool": "folder_rename"
+    },
+    {
+      "window": 760,
+      "center": 512.0,
+      "right": 0.0,
+      "opened": false,
+      "requested": true,
+      "tool": "folder_rename"
+    }
+  ],
+  "checks": [
+    "Each sampled animation frame: main/right do not overlap; allocated widths sum to window width; contentColumn fits the scroll viewport; right panel leaves >=639 logical pixels for mainPane while visible (640 target with layout rounding); title button stays left of panel.",
+    "Hysteresis, automatic recovery, manual-close persistence, left-menu pin changes, Escape in panel, title button click (1.5 scale), nine default tool forms, 100 synthetic input rows and long logs."
+  ],
+  "source_sha256": {
+    "hr_toolkit/gui_qt/qml/Main.qml": "9a202edb04c5fd123446f4b4f205ce16a3ab20bf08262bbd2f28efd0ceca5493",
+    "hr_toolkit/gui_qt/qml/components/WorkspaceSidePanel.qml": "3117112e90592ea64d24b610125165aea376aa095f7ac1c624bfc63075193622",
+    "hr_toolkit/gui_qt/qml/components/WindowChrome.qml": "dc5eebf983b78d24ec8ab298a8b65cd1a7fc2f570a33c65cdcbda208c17f73a4"
+  },
+  "screenshots": {
+    "scale_1": "/var/folders/ng/s5d0j44s06z6zdc_qr9ylpv80000gn/T/hr-workspace-responsive-_21w2jnl",
+    "scale_1_5": "/var/folders/ng/s5d0j44s06z6zdc_qr9ylpv80000gn/T/hr-workspace-responsive-mhsgwdo0"
+  },
+  "historical_evidence_notice": "scale_1, scale_1_5, checks, source_sha256 and screenshots describe the version before the four follow-up layout corrections. They are not runtime verification of the current code.",
+  "follow_up_corrections": {
+    "changes": [
+      "Main vertical scrollbar reparented to the middle pane, inset 6px from its right edge.",
+      "Only mainPane reserves the 40px chrome height; project surface starts 8px below client top.",
+      "Preferred initial window size 1600x900 with existing screen limits.",
+      "Attendance settings scroll horizontally below 520px inner width; other forms remain unscrollable horizontally."
+    ],
+    "validation": "QQmlComponent compilation of Main.qml, WindowChrome.qml and WorkspaceSidePanel.qml; Python syntax compilation of the two affected probe/entrypoint test files passed. No runtime GUI probe, test suite or build executed for these corrections.",
+    "source_sha256": {
+      "hr_toolkit/gui_qt/qml/Main.qml": "53275d3dcd9855cee5090bdf3364036d564cc79c6099263be8bac90e5206cd2e",
+      "hr_toolkit/gui_qt/qml/components/WorkspaceSidePanel.qml": "3117112e90592ea64d24b610125165aea376aa095f7ac1c624bfc63075193622",
+      "hr_toolkit/gui_qt/qml/components/WindowChrome.qml": "dc5eebf983b78d24ec8ab298a8b65cd1a7fc2f570a33c65cdcbda208c17f73a4"
+    }
+  }
+}

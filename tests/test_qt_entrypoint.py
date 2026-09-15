@@ -73,6 +73,18 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("virtual notes: wrapping, resize, scroll, history and bounded delegates OK", completed.stdout)
 
+    def test_workspace_panel_allocates_width_and_restores_after_narrow_resize(self) -> None:
+        self._qt_compat_or_skip()
+        probe = Path(__file__).with_name("qt_workspace_panel_probe.py")
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", str(probe)],
+            cwd=str(probe.resolve().parents[1]),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", timeout=45, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("responsive workspace: non-overlap, animation, hysteresis, restore, focus and core widths OK", completed.stdout)
+
     def test_qml_dialog_signals_have_named_parameters_on_both_qt_versions(self) -> None:
         self._qt_compat_or_skip()
         from hr_toolkit.gui_qt.controller import AppController
@@ -339,7 +351,10 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("target: mainScroll.contentItem", viewport)
         self.assertIn('property: "boundsBehavior"', viewport)
         self.assertIn("value: Flickable.StopAtBounds", viewport)
-        self.assertIn("ScrollBar.vertical.interactive: true", viewport)
+        vertical_bar = viewport.split("ScrollBar.vertical: ScrollBar {", 1)[1].split("}", 1)[0]
+        self.assertIn("interactive: true", vertical_bar)
+        self.assertIn("parent: mainPane", vertical_bar)
+        self.assertIn("anchors.right: parent.right", vertical_bar)
 
     def test_support_label_reserves_its_full_text_width(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml").read_text(encoding="utf-8")
@@ -374,7 +389,8 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("onPositionChanged: function(mouse)", mouse)
         self.assertIn('controller.useWorkspaceSelection("support")', source)
         self.assertIn('controller.useWorkspaceSelection("input")', source)
-        self.assertIn("if (!workspaceDragProxy.dragging) controller.setWorkspaceExpanded(false)", source)
+        self.assertNotIn("workspaceDrawer.close()", proxy)
+        self.assertNotIn("restoreDrawer", proxy)
         target = (qml / "components" / "FileDropTarget.qml").read_text(encoding="utf-8")
         self.assertIn('drag.getDataAsString("application/x-hr-toolkit-workspace")', target)
         self.assertIn("drag.urls, workspaceToken", target)
@@ -457,16 +473,17 @@ class QtEntrypointTests(unittest.TestCase):
         )
         source = qml_path.read_text(encoding="utf-8")
 
-        # Only content insets follow settled breakpoints. The sidebar is now
-        # explicit pinned/hover state instead of the old narrow icon rail.
-        self.assertIn("settledWidth >= 1540", source)
-        self.assertIn("settledWidth <= 1460", source)
+        # The core follows its allocated pane continuously, with no window-wide
+        # inset breakpoint or overlay workspace popup.
+        self.assertNotIn("wideContentInsets", source)
+        self.assertIn("(mainPane.width - 480) / 8", source)
+        self.assertIn("(mainPane.width - 480) / 5", source)
         self.assertIn("if (width <= 980) sidebar.pinned = false", source)
         self.assertIn("Layout.preferredWidth: sidebar.reservedWidth", source)
         self.assertIn("keepOpen: projectMenu.opened", source)
         self.assertNotIn("Behavior on Layout.preferredWidth", source)
         self.assertIn(
-            "anchors.leftMargin: root.compactSidebar ? 12 : 28",
+            "anchors.leftMargin: Math.max(12, Math.min(28, (mainPane.width - 480) / 8))",
             source,
         )
         self.assertIn("readonly property int contentMaxWidth: 820", source)
@@ -478,7 +495,7 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("enabled: chrome.workspaceAvailable || chrome.workspaceExpanded", chrome)
         self.assertIn("onClicked: chrome.workspaceToggleRequested()", chrome)
         self.assertIn("onWorkspaceToggleRequested:", source)
-        self.assertIn("if (workspaceDrawer.opened) workspaceDrawer.close()", source)
+        self.assertIn("if (controller.workspaceExpanded) workspaceDrawer.close()", source)
         self.assertIn("controller.setWorkspaceExpanded(true)", source)
         self.assertIn("workspaceDrawer.open()", source)
         self.assertIn('objectName: "runButton"', source)
@@ -487,17 +504,23 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("enabled: controller.busy || (!controller.workspaceBusy && !controller.updateBlocksTools && !controller.selectionChecking)", source)
         self.assertIn("text: controller.updateBlockMessage", source)
         self.assertNotIn("UpdateProgressDialog {", source)
-        self.assertIn("readonly property int preferredWindowWidth: 1400", source)
-        self.assertIn("readonly property int preferredWindowHeight: 780", source)
+        self.assertIn("readonly property int preferredWindowWidth: 1600", source)
+        self.assertIn("readonly property int preferredWindowHeight: 900", source)
         self.assertIn("Math.min(Screen.width, Screen.desktopAvailableWidth)", source)
         self.assertIn("Math.min(Screen.height, Screen.desktopAvailableHeight)", source)
         self.assertIn("currentScreenAvailableWidth - initialWindowMargin", source)
         self.assertIn("currentScreenAvailableHeight - initialWindowMargin", source)
         # The open project-files panel must follow every native resize frame;
         # dialogs that are not being dragged can keep settled dimensions.
-        self.assertIn("x: root.width - width - edgeInset", source)
-        self.assertIn("width: Math.min(340, root.width - 24)", source)
-        self.assertIn("height: root.height - y - edgeInset", source)
+        self.assertIn("WorkspaceSidePanel {", source)
+        self.assertIn("parent: workspaceLayout", source)
+        self.assertIn("liveAvailableWidth: workspaceLayout.width - sidebar.reservedWidth", source)
+        self.assertIn("height: Math.max(0, workspaceDrawer.height - 16)", source)
+        panel = (qml_path.parent / "components" / "WorkspaceSidePanel.qml").read_text(encoding="utf-8")
+        self.assertIn("restoreThreshold: collapseThreshold + 80", panel)
+        self.assertIn("Layout.preferredWidth: reservedWidth", panel)
+        self.assertIn("Behavior on reveal", panel)
+        self.assertNotIn("settledWidth", panel)
         self.assertIn("chrome.width - chrome.workspacePanelLeft + 10", chrome)
         self.assertNotIn("width: Math.min(340, root.settledWidth - 24)", source)
         self.assertNotIn("Math.max(360, root.width * 0.38)", source)

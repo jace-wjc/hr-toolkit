@@ -9,8 +9,8 @@ ApplicationWindow {
     objectName: "mainWindow"
     minimumWidth: 760
     minimumHeight: 600
-    readonly property int preferredWindowWidth: 1400
-    readonly property int preferredWindowHeight: 780
+    readonly property int preferredWindowWidth: 1600
+    readonly property int preferredWindowHeight: 900
     readonly property int initialWindowMargin: 16
     readonly property int currentScreenAvailableWidth: Math.min(Screen.width, Screen.desktopAvailableWidth)
     readonly property int currentScreenAvailableHeight: Math.min(Screen.height, Screen.desktopAvailableHeight)
@@ -50,7 +50,6 @@ ApplicationWindow {
     readonly property bool showLegacyHistoryEntry: false
     // Navigation stays full-width when shown; small windows start collapsed.
     readonly property bool compactSidebar: false
-    property bool wideContentInsets: false
 
     // Native window movement needs no new content frame. Suspend only the
     // decorative download water while moving; never pause the downloader.
@@ -70,11 +69,8 @@ ApplicationWindow {
         onTriggered: root.windowMoving = false
     }
 
-    // Keep breakpoint-only geometry stable during a live native resize.  The
-    // window and its main content still resize through Qt on every frame; only
-    // expensive responsive-mode changes and modal-dialog geometry wait until
-    // the size has been stable briefly.  The visible project-files panel is a
-    // lightweight exception and follows the live window edge below.
+    // Modal dialogs can wait briefly for settled dimensions. The main layout
+    // and docked project-files panel follow live dimensions on every frame.
     property int settledWidth: width
     property int settledHeight: height
     Timer {
@@ -89,13 +85,6 @@ ApplicationWindow {
     }
     onWidthChanged: settleTimer.restart()
     onHeightChanged: settleTimer.restart()
-
-    function updateResponsiveMode() {
-        if (!wideContentInsets && settledWidth >= 1540)
-            wideContentInsets = true
-        else if (wideContentInsets && settledWidth <= 1460)
-            wideContentInsets = false
-    }
 
     readonly property var formSnapshot: {
         // Own one plain-JS snapshot per revision. Consumers must not each
@@ -123,13 +112,10 @@ ApplicationWindow {
         return 0
     }
 
-    onSettledWidthChanged: updateResponsiveMode()
-
     onClosing: function(closeEvent) {
         closeEvent.accepted = controller.requestClose()
     }
     Component.onCompleted: {
-        updateResponsiveMode()
         if (width <= 980) sidebar.pinned = false
         controller.start()
     }
@@ -151,13 +137,11 @@ ApplicationWindow {
         sidebar: root.sidebarPanel
         workspaceAvailable: controller.hasProject
         workspaceExpanded: workspaceDrawer.opened
+        workspaceAutoHidden: workspaceDrawer.requestedOpen && workspaceDrawer.autoCollapsed
         workspacePanelLeft: workspaceDrawer.x
         onWorkspaceToggleRequested: {
-            if (workspaceDrawer.opened) workspaceDrawer.close()
-            else {
-                controller.setWorkspaceExpanded(true)
-                workspaceDrawer.open()
-            }
+            if (controller.workspaceExpanded) workspaceDrawer.close()
+            else workspaceDrawer.open()
         }
         nativeMac: root.nativeTitleIntegrated
         nativeWindows: Qt.platform.os === "windows"
@@ -176,8 +160,8 @@ ApplicationWindow {
     }
 
     RowLayout {
+        id: workspaceLayout
         anchors.fill: parent
-        anchors.topMargin: windowChrome.height
         spacing: 0
 
         Item {
@@ -621,15 +605,18 @@ ApplicationWindow {
         Item {
             id: mainPane
             objectName: "mainPane"
+            Layout.topMargin: windowChrome.height
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
             Layout.fillHeight: true
+            clip: true
 
             ColumnLayout {
                 id: mainLayout
                 objectName: "mainLayout"
                 anchors.fill: parent
-                anchors.leftMargin: root.compactSidebar ? 12 : 28
-                anchors.rightMargin: root.compactSidebar ? 58 : (root.wideContentInsets ? 102 : 66)
+                anchors.leftMargin: Math.max(12, Math.min(28, (mainPane.width - 480) / 8))
+                anchors.rightMargin: Math.max(16, Math.min(66, (mainPane.width - 480) / 5))
                 anchors.topMargin: 8
                 anchors.bottomMargin: 14
                 spacing: 14
@@ -701,8 +688,18 @@ ApplicationWindow {
                     contentWidth: availableWidth
                     contentHeight: contentColumn.implicitHeight
                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                    ScrollBar.vertical.interactive: true
+                    ScrollBar.vertical: ScrollBar {
+                        objectName: "mainVerticalScrollBar"
+                        // Keep the reading-width insets, but place the attached
+                        // scrollbar at the pane edge, outside the clipped view.
+                        parent: mainPane
+                        anchors.right: parent.right
+                        anchors.rightMargin: 6
+                        y: mainLayout.y + mainScroll.y
+                        height: mainScroll.height
+                        policy: ScrollBar.AsNeeded
+                        interactive: true
+                    }
 
                     // ScrollView owns the Flickable; constrain that viewport
                     // rather than the scrollbar, preserving normal scrolling.
@@ -714,6 +711,7 @@ ApplicationWindow {
 
                     ColumnLayout {
                         id: contentColumn
+                        objectName: "contentColumn"
                         width: Math.min(root.contentMaxWidth, mainScroll.availableWidth)
                         height: implicitHeight
                         x: Math.max(0, (mainScroll.availableWidth - width) / 2)
@@ -895,15 +893,48 @@ ApplicationWindow {
                         }
 
                         Card {
+                            id: formCard
                             Layout.fillWidth: true
-                            Layout.preferredHeight: formColumn.implicitHeight + 54
-                            ColumnLayout {
-                                id: formColumn
+                            Layout.preferredHeight: formColumn.implicitHeight + 54 + (formScroll.needsHorizontalScroll ? 14 : 0)
+                            Flickable {
+                                id: formScroll
+                                objectName: "formScroll"
                                 anchors.fill: parent
                                 anchors.leftMargin: 24
                                 anchors.rightMargin: 24
                                 anchors.topMargin: 32
-                                anchors.bottomMargin: 22
+                                anchors.bottomMargin: 22 + (needsHorizontalScroll ? 14 : 0)
+                                // Attendance keeps both date inputs and the
+                                // preset actions reachable in a narrow pane.
+                                readonly property real minimumFormWidth: controller.currentTool === "data_statistics" ? 520 : 0
+                                readonly property bool needsHorizontalScroll: width < minimumFormWidth
+                                contentWidth: Math.max(width, minimumFormWidth)
+                                contentHeight: formColumn.implicitHeight
+                                flickableDirection: Flickable.HorizontalFlick
+                                boundsBehavior: Flickable.StopAtBounds
+                                interactive: needsHorizontalScroll
+                                clip: true
+                                onWidthChanged: contentX = Math.max(0, Math.min(contentX, contentWidth - width))
+                                onMinimumFormWidthChanged: contentX = 0
+                                ScrollBar.horizontal: ScrollBar {
+                                    objectName: "formHorizontalScrollBar"
+                                    parent: formCard
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.leftMargin: 24
+                                    anchors.rightMargin: 24
+                                    anchors.bottom: parent.bottom
+                                    anchors.bottomMargin: 12
+                                    policy: formScroll.needsHorizontalScroll ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+                                    interactive: true
+                                }
+                            }
+                            ColumnLayout {
+                                id: formColumn
+                                objectName: "formColumn"
+                                parent: formScroll.contentItem
+                                width: formScroll.contentWidth
+                                height: implicitHeight
                                 spacing: 11
 
                                 Item {
@@ -1026,7 +1057,7 @@ ApplicationWindow {
                                                 Text { Layout.preferredWidth: 66; text: "资料库形式"; color: root.textMain; font.pixelSize: 13 }
                                                 AppComboBox {
                                                     id: materialLibraryMode
-                                                    Layout.preferredWidth: 290
+                                                    Layout.preferredWidth: Math.min(290, Math.max(160, (contentColumn.width - 76) * 0.5))
                                                     model: materialOptions.libraryField.options || []
                                                     textRole: "label"
                                                     currentIndex: root.choiceIndex(materialOptions.libraryField)
@@ -1080,6 +1111,8 @@ ApplicationWindow {
                                                     spacing: 15
                                                     AppCheckBox {
                                                         text: materialOptions.flatOcr ? "全部（提取 OCR 识别到的该人员全部材料）" : "全部（直接拷贝匹配到的人员整个文件夹）"
+                                                        width: Math.min(implicitWidth, parent.width)
+                                                        height: Math.max(implicitHeight, contentItem.implicitHeight + topPadding + bottomPadding)
                                                         checked: !!materialOptions.collectAllField.value
                                                         onToggled: controller.setFieldValue("collect_all", checked)
                                                     }
@@ -1401,6 +1434,9 @@ ApplicationWindow {
             Item { Layout.preferredWidth: 145; Layout.preferredHeight: 1 }
             AppCheckBox {
                 text: field.label
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                implicitHeight: Math.max(28, contentItem.implicitHeight + topPadding + bottomPadding)
                 checked: !!field.value
                 enabled: !(field.id === "use_ocr_cache" && root.fieldById("library_mode").value === "flat_ocr")
                 onToggled: controller.setFieldValue(field.id, checked)
@@ -1601,7 +1637,6 @@ ApplicationWindow {
         id: workspaceDragProxy
         property var transfer: ({})
         property bool dragging: false
-        property bool restoreDrawer: false
         Drag.dragType: Drag.None
         Drag.supportedActions: Qt.CopyAction
         Drag.proposedAction: Qt.CopyAction
@@ -1612,7 +1647,6 @@ ApplicationWindow {
             if (dragging) return
             transfer = controller.beginWorkspaceTransfer(path)
             if (!transfer.token) return
-            restoreDrawer = workspaceDrawer.opened
             dragging = true
             // Drag.None disables automatic startup, but startDrag still
             // requires the attached drag source to be active first.
@@ -1624,275 +1658,267 @@ ApplicationWindow {
                 finish()
             }
         }
-        Drag.onDragStarted: {
-            // Reveal even narrow-window targets without changing saved layout.
-            workspaceDrawer.close()
-        }
         function finish() {
             if (!dragging) return
             Drag.active = false
             controller.endWorkspaceTransfer(transfer.token || "")
             transfer = ({})
             dragging = false
-            if (restoreDrawer && controller.workspaceExpanded && root.visible)
-                workspaceDrawer.open()
-            restoreDrawer = false
         }
         Drag.onDragFinished: finish()
     }
 
-    Popup {
+    WorkspaceSidePanel {
         id: workspaceDrawer
         objectName: "workspaceDrawer"
-        // The workspace is already virtualized, so moving this fixed-width
-        // layer with the native window is cheap.  It must use live dimensions:
-        // settledWidth/settledHeight intentionally stop changing during a
-        // border drag and made the open panel appear frozen until mouse-up.
-        readonly property int edgeInset: 8
-        x: root.width - width - edgeInset
-        // Native caption controls are outside the client area on Windows.
-        y: edgeInset
-        width: Math.min(340, root.width - 24)
-        height: root.height - y - edgeInset
-        modal: false
-        dim: false
-        padding: 0
-        closePolicy: Popup.CloseOnEscape
-        onClosed: {
-            workspaceAddMenu.close()
-            workspaceUseMenu.close()
-            if (!workspaceDragProxy.dragging) controller.setWorkspaceExpanded(false)
+        parent: workspaceLayout
+        requestedOpen: controller.workspaceExpanded && controller.hasProject
+        availableWidth: workspaceLayout.width - (sidebar.pinned ? sidebar.width : 0)
+        liveAvailableWidth: workspaceLayout.width - sidebar.reservedWidth
+        onOpenRequested: controller.setWorkspaceExpanded(true)
+        onCloseRequested: controller.setWorkspaceExpanded(false)
+        onOpenedChanged: {
+            if (!opened) {
+                workspaceAddMenu.close()
+                workspaceUseMenu.close()
+                if (activeFocus) mainScroll.forceActiveFocus()
+            }
         }
-        enter: Transition {}
-        exit: Transition {}
-
-        background: Rectangle { color: root.surface; border.color: root.border; radius: 12 }
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 16
-            anchors.rightMargin: 16
-            anchors.topMargin: 18
-            anchors.bottomMargin: 14
-            spacing: 8
-            Text { Layout.fillWidth: true; text: controller.projectName; color: root.primary; font.pixelSize: 14; font.weight: Font.DemiBold; elide: Text.ElideRight; horizontalAlignment: Text.AlignHCenter }
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 34
-                radius: 8
-                color: "#FFFFFF"
-                border.color: root.border
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 2
-                    spacing: 2
-                    Repeater {
-                        model: [{value: "all", label: "全部文件"}, {value: "tool", label: "当前功能"}]
-                        Button {
-                            id: scopeButton
-                            readonly property bool selected: controller.workspaceScope === modelData.value
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.preferredWidth: 1
-                            text: modelData.label
-                            hoverEnabled: true
-                            focusPolicy: Qt.StrongFocus
-                            Accessible.checkable: true
-                            Accessible.checked: selected
-                            onClicked: controller.setWorkspaceScope(modelData.value)
-                            contentItem: Text {
-                                text: scopeButton.text
-                                color: scopeButton.selected ? root.primary : root.textMuted
-                                font.pixelSize: 13
-                                font.weight: scopeButton.selected ? Font.DemiBold : Font.Normal
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                radius: 6
-                                color: scopeButton.selected ? root.primarySoft : scopeButton.hovered ? root.navHover : "transparent"
-                                border.width: scopeButton.visualFocus ? 1 : 0
-                                border.color: root.primary
-                            }
-                        }
-                    }
-                }
-            }
-            AppTextField {
-                id: workspaceSearchField
-                objectName: "workspaceSearchField"
-                Layout.fillWidth: true
-                Layout.preferredHeight: 38
-                leftPadding: 38
-                placeholderText: "输入文件名"
-                Accessible.name: "按文件名查找"
-                onTextEdited: controller.setWorkspaceSearch(text)
-                background: Rectangle {
-                    radius: 9
-                    color: "#F7F6F4"
-                    border.color: workspaceSearchField.activeFocus ? root.primary : "#F0EFED"
-                }
-                Image {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 16; height: 16
-                    source: "components/magnifying-glass.png"
-                    sourceSize.width: 32; sourceSize.height: 32
-                    opacity: 0.45
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.topMargin: 2
-                spacing: 7
-                AppButton {
-                    id: workspaceAddButton
-                    text: "添加"
-                    variant: "link"
-                    Layout.preferredWidth: 66
-                    Accessible.name: text
-                    enabled: controller.projectWritable && !controller.busy && !controller.workspaceBusy
-                    onClicked: workspaceAddMenu.open()
-                    contentItem: RowLayout {
-                        spacing: 7
-                        Image { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: "components/plus-circle-green.png"; sourceSize.width: 28; sourceSize.height: 28; opacity: workspaceAddButton.enabled ? 1 : 0.3 }
-                        Text { Layout.fillWidth: true; text: workspaceAddButton.text; color: workspaceAddButton.enabled ? root.primary : root.textDisabled; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
-                    }
-                }
-                AppButton { visible: controller.workspaceBusy; text: "取消导入"; variant: "link"; onClicked: controller.cancelWorkspaceImport() }
-                Item { Layout.fillWidth: true }
-                AppButton {
-                    id: workspaceRefreshButton
-                    text: "刷新"
-                    variant: "link"
-                    Layout.preferredWidth: 66
-                    Accessible.name: text
-                    onClicked: controller.refreshWorkspace()
-                    contentItem: RowLayout {
-                        spacing: 7
-                        Image { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: "components/arrows-clockwise-green.png"; sourceSize.width: 28; sourceSize.height: 28 }
-                        Text { Layout.fillWidth: true; text: workspaceRefreshButton.text; color: root.primary; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
-                    }
-                }
-            }
-            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.borderFaint }
-            Item {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                ListView {
-                    id: workspaceList
-                    objectName: "workspaceList"
-                    anchors.fill: parent
-                    clip: true
-                    model: controller.workspaceModel
-                    reuseItems: true
-                    cacheBuffer: 128
-                    boundsBehavior: Flickable.StopAtBounds
-                    currentIndex: -1
-                    property int activeDelegateCount: 0
-                    function keepRowVisible(row) {
-                        Qt.callLater(function() {
-                            if (workspaceList.count <= 0)
-                                return
-                            var safeRow = Math.max(0, Math.min(row, workspaceList.count - 1))
-                            workspaceList.positionViewAtIndex(safeRow, ListView.Contain)
-                        })
-                    }
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                    delegate: Rectangle {
-                        Component.onCompleted: workspaceList.activeDelegateCount += 1
-                        Component.onDestruction: workspaceList.activeDelegateCount -= 1
-                        width: workspaceList.width
-                        height: 32
-                        radius: 6
-                        color: controller.workspaceSelectedPath === path ? root.primarySoft : (workspaceMouse.containsMouse ? root.navHover : "transparent")
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 5 + depth * 15
-                            anchors.rightMargin: 5
-                            spacing: 4
-                            Text { Layout.preferredWidth: 12; text: isDir ? (expanded ? "▾" : "▸") : ""; color: root.textMuted; font.pixelSize: 10 }
-                            ToolIcon { Layout.preferredWidth: 16; Layout.preferredHeight: 16; iconId: isDir ? "folder_rename" : "social_security"; strokeColor: isDir ? root.primary : "#617381"; lineWidth: 1.15 }
-                            Text { Layout.fillWidth: true; text: name; color: root.textMain; font.pixelSize: 12; elide: Text.ElideMiddle; verticalAlignment: Text.AlignVCenter }
-                        }
-                        MouseArea {
-                            id: workspaceMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            acceptedButtons: Qt.LeftButton
-                            property point pressPoint
-                            property string pressedPath: ""
-                            property bool startedDrag: false
-                            onPressed: function(mouse) {
-                                pressPoint = Qt.point(mouse.x, mouse.y)
-                                pressedPath = path
-                                startedDrag = false
-                            }
-                            onPositionChanged: function(mouse) {
-                                if (!pressed || startedDrag) return
-                                var dx = Math.abs(mouse.x - pressPoint.x)
-                                var dy = Math.abs(mouse.y - pressPoint.y)
-                                // Vertical gestures remain available to the list.
-                                if (dx > Qt.styleHints.startDragDistance && dx > dy) {
-                                    startedDrag = true
-                                    workspaceDragProxy.start(pressedPath)
+        Rectangle {
+            id: workspaceSurface
+            objectName: "workspaceSurface"
+            visible: workspaceDrawer.reservedWidth > 0
+            x: 8; y: 8
+            width: workspaceDrawer.panelWidth
+            height: Math.max(0, workspaceDrawer.height - 16)
+            color: root.surface; border.color: root.border; radius: 12
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 18
+                anchors.bottomMargin: 14
+                spacing: 8
+                Text { Layout.fillWidth: true; text: controller.projectName; color: root.primary; font.pixelSize: 14; font.weight: Font.DemiBold; elide: Text.ElideRight; horizontalAlignment: Text.AlignHCenter }
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 34
+                    radius: 8
+                    color: "#FFFFFF"
+                    border.color: root.border
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        spacing: 2
+                        Repeater {
+                            model: [{value: "all", label: "全部文件"}, {value: "tool", label: "当前功能"}]
+                            Button {
+                                id: scopeButton
+                                readonly property bool selected: controller.workspaceScope === modelData.value
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.preferredWidth: 1
+                                text: modelData.label
+                                hoverEnabled: true
+                                focusPolicy: Qt.StrongFocus
+                                Accessible.checkable: true
+                                Accessible.checked: selected
+                                onClicked: controller.setWorkspaceScope(modelData.value)
+                                contentItem: Text {
+                                    text: scopeButton.text
+                                    color: scopeButton.selected ? root.primary : root.textMuted
+                                    font.pixelSize: 13
+                                    font.weight: scopeButton.selected ? Font.DemiBold : Font.Normal
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                background: Rectangle {
+                                    radius: 6
+                                    color: scopeButton.selected ? root.primarySoft : scopeButton.hovered ? root.navHover : "transparent"
+                                    border.width: scopeButton.visualFocus ? 1 : 0
+                                    border.color: root.primary
                                 }
                             }
-                            onClicked: {
-                                if (startedDrag) return
-                                controller.selectWorkspaceRow(index)
-                            }
-                            onDoubleClicked: if (!startedDrag) controller.openWorkspaceRow(index)
-                            ToolTip.visible: containsMouse && !pressed
-                            ToolTip.text: path + "\n向左拖入资料区；单击选中，双击打开"
-                            ToolTip.delay: 600
-                        }
-                        MouseArea {
-                            x: 3 + depth * 15; width: 20; height: parent.height
-                            visible: isDir
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                controller.toggleWorkspaceRow(index)
-                                workspaceList.keepRowVisible(index)
-                            }
                         }
                     }
                 }
-                Text {
-                    anchors.centerIn: parent
-                    visible: workspaceList.count === 0
-                    text: controller.hasProject ? "当前范围还没有项目文件" : "请先打开工作项目"
-                    color: root.textFaint
-                    font.pixelSize: 12
-                    horizontalAlignment: Text.AlignHCenter
+                AppTextField {
+                    id: workspaceSearchField
+                    objectName: "workspaceSearchField"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 38
+                    leftPadding: 38
+                    placeholderText: "输入文件名"
+                    Accessible.name: "按文件名查找"
+                    onTextEdited: controller.setWorkspaceSearch(text)
+                    background: Rectangle {
+                        radius: 9
+                        color: "#F7F6F4"
+                        border.color: workspaceSearchField.activeFocus ? root.primary : "#F0EFED"
+                    }
+                    Image {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 16; height: 16
+                        source: "components/magnifying-glass.png"
+                        sourceSize.width: 32; sourceSize.height: 32
+                        opacity: 0.45
+                    }
                 }
-            }
-            Card {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 126
-                color: root.surface
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 3
-                    Text { Layout.fillWidth: true; text: controller.workspaceSelectionAvailable ? controller.workspaceSelectedName : "选择项目文件"; color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideMiddle }
-                    Text { Layout.fillWidth: true; text: controller.workspaceSelectedDetail; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 2
+                    spacing: 7
                     AppButton {
-                        text: "带入当前工具"; variant: "link"
-                        enabled: controller.selectionEnabled && controller.workspaceSelectionAvailable
-                        onClicked: {
-                            workspaceUseMenu.inputAllowed = controller.canUseWorkspaceSelection("input")
-                            workspaceUseMenu.supportAllowed = controller.canUseWorkspaceSelection("support")
-                            workspaceUseMenu.open()
+                        id: workspaceAddButton
+                        text: "添加"
+                        variant: "link"
+                        Layout.preferredWidth: 66
+                        Accessible.name: text
+                        enabled: controller.projectWritable && !controller.busy && !controller.workspaceBusy
+                        onClicked: workspaceAddMenu.open()
+                        contentItem: RowLayout {
+                            spacing: 7
+                            Image { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: "components/plus-circle-green.png"; sourceSize.width: 28; sourceSize.height: 28; opacity: workspaceAddButton.enabled ? 1 : 0.3 }
+                            Text { Layout.fillWidth: true; text: workspaceAddButton.text; color: workspaceAddButton.enabled ? root.primary : root.textDisabled; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
                         }
                     }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        AppButton { text: "打开"; variant: "link"; enabled: controller.workspaceSelectionAvailable; onClicked: controller.launchWorkspaceSelection() }
-                        AppButton { text: "定位"; variant: "link"; enabled: controller.workspaceSelectionAvailable; onClicked: controller.revealWorkspaceSelection() }
-                        AppButton { text: "移到回收站"; variant: "link"; enabled: controller.workspaceSelectionAvailable && controller.projectWritable && !controller.busy && !controller.workspaceBusy; onClicked: controller.requestMoveSelectedBatchToTrash() }
-                        Item { Layout.fillWidth: true }
-                        AppButton { text: "回收站"; variant: "link"; enabled: controller.hasProject; onClicked: { controller.requestProjectTrash(); trashDialog.open() } }
+                    AppButton { visible: controller.workspaceBusy; text: "取消导入"; variant: "link"; onClicked: controller.cancelWorkspaceImport() }
+                    Item { Layout.fillWidth: true }
+                    AppButton {
+                        id: workspaceRefreshButton
+                        text: "刷新"
+                        variant: "link"
+                        Layout.preferredWidth: 66
+                        Accessible.name: text
+                        onClicked: controller.refreshWorkspace()
+                        contentItem: RowLayout {
+                            spacing: 7
+                            Image { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: "components/arrows-clockwise-green.png"; sourceSize.width: 28; sourceSize.height: 28 }
+                            Text { Layout.fillWidth: true; text: workspaceRefreshButton.text; color: root.primary; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+                        }
+                    }
+                }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.borderFaint }
+                Item {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    ListView {
+                        id: workspaceList
+                        objectName: "workspaceList"
+                        anchors.fill: parent
+                        clip: true
+                        model: controller.workspaceModel
+                        reuseItems: true
+                        cacheBuffer: 128
+                        boundsBehavior: Flickable.StopAtBounds
+                        currentIndex: -1
+                        property int activeDelegateCount: 0
+                        function keepRowVisible(row) {
+                            Qt.callLater(function() {
+                                if (workspaceList.count <= 0)
+                                    return
+                                var safeRow = Math.max(0, Math.min(row, workspaceList.count - 1))
+                                workspaceList.positionViewAtIndex(safeRow, ListView.Contain)
+                            })
+                        }
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                        delegate: Rectangle {
+                            Component.onCompleted: workspaceList.activeDelegateCount += 1
+                            Component.onDestruction: workspaceList.activeDelegateCount -= 1
+                            width: workspaceList.width
+                            height: 32
+                            radius: 6
+                            color: controller.workspaceSelectedPath === path ? root.primarySoft : (workspaceMouse.containsMouse ? root.navHover : "transparent")
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 5 + depth * 15
+                                anchors.rightMargin: 5
+                                spacing: 4
+                                Text { Layout.preferredWidth: 12; text: isDir ? (expanded ? "▾" : "▸") : ""; color: root.textMuted; font.pixelSize: 10 }
+                                ToolIcon { Layout.preferredWidth: 16; Layout.preferredHeight: 16; iconId: isDir ? "folder_rename" : "social_security"; strokeColor: isDir ? root.primary : "#617381"; lineWidth: 1.15 }
+                                Text { Layout.fillWidth: true; text: name; color: root.textMain; font.pixelSize: 12; elide: Text.ElideMiddle; verticalAlignment: Text.AlignVCenter }
+                            }
+                            MouseArea {
+                                id: workspaceMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton
+                                property point pressPoint
+                                property string pressedPath: ""
+                                property bool startedDrag: false
+                                onPressed: function(mouse) {
+                                    pressPoint = Qt.point(mouse.x, mouse.y)
+                                    pressedPath = path
+                                    startedDrag = false
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (!pressed || startedDrag) return
+                                    var dx = Math.abs(mouse.x - pressPoint.x)
+                                    var dy = Math.abs(mouse.y - pressPoint.y)
+                                    // Vertical gestures remain available to the list.
+                                    if (dx > Qt.styleHints.startDragDistance && dx > dy) {
+                                        startedDrag = true
+                                        workspaceDragProxy.start(pressedPath)
+                                    }
+                                }
+                                onClicked: {
+                                    if (startedDrag) return
+                                    controller.selectWorkspaceRow(index)
+                                }
+                                onDoubleClicked: if (!startedDrag) controller.openWorkspaceRow(index)
+                                ToolTip.visible: containsMouse && !pressed
+                                ToolTip.text: path + "\n向左拖入资料区；单击选中，双击打开"
+                                ToolTip.delay: 600
+                            }
+                            MouseArea {
+                                x: 3 + depth * 15; width: 20; height: parent.height
+                                visible: isDir
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    controller.toggleWorkspaceRow(index)
+                                    workspaceList.keepRowVisible(index)
+                                }
+                            }
+                        }
+                    }
+                    Text {
+                        anchors.centerIn: parent
+                        visible: workspaceList.count === 0
+                        text: controller.hasProject ? "当前范围还没有项目文件" : "请先打开工作项目"
+                        color: root.textFaint
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+                Card {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 126
+                    color: root.surface
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 3
+                        Text { Layout.fillWidth: true; text: controller.workspaceSelectionAvailable ? controller.workspaceSelectedName : "选择项目文件"; color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideMiddle }
+                        Text { Layout.fillWidth: true; text: controller.workspaceSelectedDetail; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
+                        AppButton {
+                            text: "带入当前工具"; variant: "link"
+                            enabled: controller.selectionEnabled && controller.workspaceSelectionAvailable
+                            onClicked: {
+                                workspaceUseMenu.inputAllowed = controller.canUseWorkspaceSelection("input")
+                                workspaceUseMenu.supportAllowed = controller.canUseWorkspaceSelection("support")
+                                workspaceUseMenu.open()
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            AppButton { text: "打开"; variant: "link"; enabled: controller.workspaceSelectionAvailable; onClicked: controller.launchWorkspaceSelection() }
+                            AppButton { text: "定位"; variant: "link"; enabled: controller.workspaceSelectionAvailable; onClicked: controller.revealWorkspaceSelection() }
+                            AppButton { text: "移到回收站"; variant: "link"; enabled: controller.workspaceSelectionAvailable && controller.projectWritable && !controller.busy && !controller.workspaceBusy; onClicked: controller.requestMoveSelectedBatchToTrash() }
+                            Item { Layout.fillWidth: true }
+                            AppButton { text: "回收站"; variant: "link"; enabled: controller.hasProject; onClicked: { controller.requestProjectTrash(); trashDialog.open() } }
+                        }
                     }
                 }
             }
@@ -1903,7 +1929,7 @@ ApplicationWindow {
         id: workspaceUseMenu
         property bool inputAllowed: false
         property bool supportAllowed: false
-        x: workspaceDrawer.x + 16
+        x: Math.min(root.width - width - 8, workspaceDrawer.x + 24)
         y: Math.max(8, root.height - height - 130)
         width: Math.min(308, root.width - 32); padding: 8
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -1917,8 +1943,8 @@ ApplicationWindow {
 
     Popup {
         id: workspaceAddMenu
-        x: Math.max(8, workspaceDrawer.x + 16)
-        y: Math.min(root.height - height - 12, 260)
+        x: Math.min(root.width - width - 8, workspaceAddButton.mapToItem(root.contentItem, 0, 0).x)
+        y: Math.min(root.height - height - 8, workspaceAddButton.mapToItem(root.contentItem, 0, workspaceAddButton.height).y)
         width: 210
         padding: 8
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
