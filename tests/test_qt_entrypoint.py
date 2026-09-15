@@ -336,6 +336,30 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("Layout.preferredWidth: Layout.minimumWidth", label)
         self.assertIn("text: controller.supportLabel", label)
 
+    def test_workspace_drag_has_stable_proxy_copy_action_and_click_alternative(self) -> None:
+        qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
+        source = (qml / "Main.qml").read_text(encoding="utf-8")
+        proxy = source.split("id: workspaceDragProxy", 1)[1].split("id: workspaceDrawer", 1)[0]
+        self.assertIn("controller.beginWorkspaceTransfer(path)", proxy)
+        self.assertIn("Drag.startDrag(Qt.CopyAction)", proxy)
+        self.assertLess(proxy.index("Drag.active = true"), proxy.index("Drag.startDrag(Qt.CopyAction)"))
+        self.assertIn("Drag.active = false", proxy)
+        self.assertIn("finally {", proxy)
+        self.assertIn("if (!dragging) return", proxy)
+        self.assertIn("controller.endWorkspaceTransfer", proxy)
+        self.assertNotIn("Qt.MoveAction", proxy)
+        self.assertIn("Qt.styleHints.startDragDistance", source)
+        self.assertIn("workspaceDragProxy.start(pressedPath)", source)
+        mouse = source.split("id: workspaceMouse", 1)[1].split("onClicked:", 1)[0]
+        self.assertIn("onPressed: function(mouse)", mouse)
+        self.assertIn("onPositionChanged: function(mouse)", mouse)
+        self.assertIn('controller.useWorkspaceSelection("support")', source)
+        self.assertIn('controller.useWorkspaceSelection("input")', source)
+        self.assertIn("if (!workspaceDragProxy.dragging) controller.setWorkspaceExpanded(false)", source)
+        target = (qml / "components" / "FileDropTarget.qml").read_text(encoding="utf-8")
+        self.assertIn('drag.getDataAsString("application/x-hr-toolkit-workspace")', target)
+        self.assertIn("drag.urls, workspaceToken", target)
+
     def test_file_drop_targets_are_separate_and_do_not_add_polling(self) -> None:
         qml_root = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
         source = (qml_root / "Main.qml").read_text(encoding="utf-8")

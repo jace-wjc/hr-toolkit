@@ -13,6 +13,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from hr_toolkit import __version__, runlog
 from hr_toolkit.common.paths import absolute_path_hint, path_text_error, user_app_data_dir, user_home_dir
@@ -187,6 +188,7 @@ class AppController(QObject):
         self._drop_preview_lock = threading.Lock()
         self._drop_preview_running = False
         self._drop_preview_serial = 0
+        self._workspace_transfer = None
         self._input_scan_lock = threading.Lock()
         self._input_scan_pending = None
         self._input_scan_running = False
@@ -1129,6 +1131,9 @@ class AppController(QObject):
 
     @Slot()
     def _selection_environment_changed(self) -> None:
+        source = self._workspace_transfer
+        if source and (source["context"] != self._selection_context() or self._selection_block_reason()):
+            self._workspace_transfer = None
         request = self._selection_request
         if request and (request["context"] != self._selection_context() or self._selection_block_reason()):
             request["cancel"].set()
@@ -1177,17 +1182,27 @@ class AppController(QObject):
             return {"accepted": False, "message": str(exc)}
 
     @Slot(str, "QVariantList", result="QVariantMap")
-    def beginDropPreview(self, role: str, urls) -> dict[str, Any]:
+    @Slot(str, "QVariantList", str, result="QVariantMap")
+    def beginDropPreview(self, role: str, urls, workspace_token: str = "") -> dict[str, Any]:
         if self._drop_preview_request:
             self.cancelDropPreview(self._drop_preview_request["token"])
         initial = self.describeDrop(role, urls)
         if not initial["accepted"]:
             return {**initial, "pending": False, "token": ""}
+        source = None
+        if workspace_token:
+            source = self._workspace_transfer
+            if (not source or source["token"] != workspace_token
+                    or source["context"] != self._selection_context()
+                    or self._local_drop_paths(urls) != [source["path"]]):
+                return {"accepted": False, "pending": False, "token": "",
+                        "message": "项目或工具已变化，请重新从项目文件拖入。"}
         self._drop_preview_serial += 1
         token = str(self._drop_preview_serial)
         request = {"token": token, "role": role, "paths": self._local_drop_paths(urls),
                    "mode": selection_mode(self._spec, role), "context": self._selection_context(),
-                   "cancel": threading.Event(), "message": initial["message"], "accepted": False}
+                   "cancel": threading.Event(), "message": initial["message"], "accepted": False,
+                   "workspace_source": source}
         self._drop_preview_request = request
         with self._drop_preview_lock:
             # Keep one worker and only the latest waiting hover request. Moving
@@ -1217,6 +1232,7 @@ class AppController(QObject):
                     self._drop_preview_running = False
                     return
             try:
+                self._validate_workspace_source(request.get("workspace_source"))
                 validate_selection(request["paths"], request["mode"], request["cancel"].is_set)
                 error = ""
             except Exception as exc:
@@ -1258,9 +1274,13 @@ class AppController(QObject):
             return False
         if paths != request["paths"]:
             return False
+        source = request.get("workspace_source")
+        if source and source is not self._workspace_transfer:
+            return False
         self.cancelDropPreview(token)
         # Recheck after drop as a safety net for files deleted/moved since hover.
-        self._submit_selection(role, paths, replace=role == "support" or not self.inputAllowsMultiple)
+        self._submit_selection(role, paths, replace=role == "support" or not self.inputAllowsMultiple,
+                               workspace_source=source)
         return self.selectionChecking
 
     @Slot(str, "QVariantList")
@@ -1273,7 +1293,7 @@ class AppController(QObject):
         self._submit_selection(role, self._local_drop_paths(urls),
                                replace=role == "support" or not self.inputAllowsMultiple)
 
-    def _submit_selection(self, role: str, paths: list[Path], *, replace: bool) -> None:
+    def _submit_selection(self, role: str, paths: list[Path], *, replace: bool, workspace_source=None) -> None:
         if not self.selectionEnabled:
             return
         mode = selection_mode(self._spec, role)
@@ -1284,6 +1304,7 @@ class AppController(QObject):
 
         def worker() -> None:
             try:
+                self._validate_workspace_source(workspace_source)
                 selected = validate_selection(paths, mode, request["cancel"].is_set)
                 error = ""
             except Exception as exc:
@@ -2098,6 +2119,98 @@ class AppController(QObject):
             self._workspace_selected_path = None
             self._workspace_selected_item = None
         self.workspaceSelectionChanged.emit()
+
+    def _workspace_transfer_source(self, path_text: str):
+        """Capture stable identity from the current model, without filesystem IO."""
+        if not self.selectionEnabled or self._project_path is None:
+            return None
+        item = next((item for item in self._workspace_items if item.get("path") == path_text), None)
+        if item is None:
+            return None
+        path = Path(path_text)
+        try:
+            parts = path.relative_to(self._project_path).parts
+        except ValueError:
+            return None
+        # Top-level categories are navigation, not individual input sources.
+        if len(parts) < 2 or any(part in {"..", "回收站"} or part.startswith((".", "~$"))
+                                 or part.casefold() in {name.casefold() for name in WORKSPACE_HIDDEN_NAMES}
+                                 or part.casefold().endswith(WORKSPACE_HIDDEN_SUFFIXES) for part in parts):
+            return None
+        return {"token": uuid4().hex, "path": path, "root": self._project_path,
+                "context": self._selection_context(), "is_dir": bool(item.get("isDir"))}
+
+    @staticmethod
+    def _validate_workspace_source(source) -> None:
+        """Worker-only containment check; never scan directories or copy sources."""
+        if source is None:
+            return
+        root, path = source["root"], source["path"]
+        resolved_root = root.resolve(strict=True)
+        resolved = path.resolve(strict=True)
+        relative = resolved.relative_to(resolved_root)
+        if len(relative.parts) < 2:
+            raise ValueError("不能带入项目根目录或分类栏目。")
+        current = root
+        for part in path.relative_to(root).parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("不能带入链接目录，请选择项目中的实际资料。")
+        if any(part.startswith((".", "~$")) or part == "回收站"
+               or part.casefold() in {name.casefold() for name in WORKSPACE_HIDDEN_NAMES}
+               for part in relative.parts):
+            raise ValueError("不能带入回收站或项目内部资料。")
+
+    @Slot(str, result="QVariantMap")
+    def beginWorkspaceTransfer(self, path_text: str):
+        source = self._workspace_transfer_source(path_text)
+        self._workspace_transfer = source
+        if source is None:
+            return {}
+        return {"token": source["token"], "url": QUrl.fromLocalFile(str(source["path"])).toString(),
+                "name": source["path"].name}
+
+    @Slot(str)
+    def endWorkspaceTransfer(self, token: str) -> None:
+        if self._workspace_transfer and self._workspace_transfer["token"] == token:
+            self._workspace_transfer = None
+            preview = self._drop_preview_request
+            if preview and preview.get("workspace_source"):
+                self.cancelDropPreview(preview["token"])
+
+    @Slot(str, result=bool)
+    def canUseWorkspaceSelection(self, role: str) -> bool:
+        if role not in {"input", "support"}:
+            return False
+        source = self._workspace_transfer_source(str(self._workspace_selected_path or ""))
+        if not source or (role == "support" and not self.hasSupportField):
+            return False
+        mode = selection_mode(self._spec, role)
+        if source["is_dir"]:
+            return mode in {"directory_single", "excel_archive_multi", "excel_or_folder", "excel_archive_or_folder"}
+        from hr_toolkit.common.inputs import is_supported_archive_file
+        return mode != "directory_single" and (source["path"].suffix.lower() in EXCEL_SUFFIXES
+            or (mode in {"excel_archive_multi", "excel_archive_or_folder"} and is_supported_archive_file(source["path"])))
+
+    @Slot(str)
+    def useWorkspaceSelection(self, role: str) -> None:
+        if not self.canUseWorkspaceSelection(role):
+            return
+        source = self._workspace_transfer_source(str(self._workspace_selected_path))
+        self._submit_selection(role, [source["path"]],
+                               replace=role == "support" or not self.inputAllowsMultiple, workspace_source=source)
+
+    @Slot(str)
+    def openSelectedInput(self, path_text: str) -> None:
+        if not self.selectionEnabled:
+            return
+        path = Path(path_text)
+        if path in self._input_states[self._state_key()] or path_text == self.supportPath:
+            # Explicit user action only; use the same OS opener as project files.
+            try:
+                open_path(path)
+            except OSError as exc:
+                self.notificationRequested.emit("无法打开资料", str(exc), "warning")
 
     @Slot(int)
     def openWorkspaceRow(self, row: int) -> None:

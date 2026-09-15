@@ -784,10 +784,22 @@ ApplicationWindow {
                                                     color: kind === "folder" ? "#E7EFEA" : "#EAF0F5"
                                                     Text { anchors.centerIn: parent; text: kind === "folder" ? "夹" : detail.slice(0, 3); color: kind === "folder" ? root.primary : "#557087"; font.pixelSize: 10; font.weight: Font.DemiBold }
                                                 }
-                                                ColumnLayout {
-                                                    Layout.fillWidth: true; spacing: 1
-                                                    Text { Layout.fillWidth: true; text: name; color: root.textMain; font.pixelSize: 12; elide: Text.ElideMiddle }
-                                                    Text { Layout.fillWidth: true; text: path; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideMiddle }
+                                                Item {
+                                                    Layout.fillWidth: true
+                                                    Layout.preferredHeight: inputFileDetails.implicitHeight
+                                                    ColumnLayout {
+                                                        id: inputFileDetails
+                                                        anchors.fill: parent; spacing: 1
+                                                        Text { Layout.fillWidth: true; text: name; color: root.textMain; font.pixelSize: 12; elide: Text.ElideMiddle }
+                                                        Text { Layout.fillWidth: true; text: path; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideMiddle }
+                                                    }
+                                                    MouseArea {
+                                                        anchors.fill: parent; hoverEnabled: true
+                                                        enabled: controller.selectionEnabled
+                                                        onDoubleClicked: controller.openSelectedInput(path)
+                                                        ToolTip.visible: containsMouse; ToolTip.delay: 600
+                                                        ToolTip.text: path + "\n双击打开"
+                                                    }
                                                 }
                                                 AppButton { text: "移除"; variant: "link"; enabled: controller.selectionEnabled; implicitWidth: 54; implicitHeight: 30; onClicked: controller.removeInput(index) }
                                             }
@@ -883,6 +895,13 @@ ApplicationWindow {
                                                 Layout.fillWidth: true
                                                 Layout.preferredHeight: 30
                                                 Text { anchors.fill: parent; text: controller.supportPath || "未选择"; color: controller.supportPath ? root.textMain : root.textFaint; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
+                                                MouseArea {
+                                                    anchors.fill: parent; hoverEnabled: true
+                                                    enabled: controller.selectionEnabled && !!controller.supportPath
+                                                    onDoubleClicked: controller.openSelectedInput(controller.supportPath)
+                                                    ToolTip.visible: containsMouse; ToolTip.delay: 600
+                                                    ToolTip.text: controller.supportPath + "\n双击打开"
+                                                }
                                             }
                                             AppButton { enabled: controller.selectionEnabled; text: controller.currentTool === "material_collector" ? "选择文件" : controller.supportButtonText; variant: "link"; onClicked: controller.chooseSupportFile() }
                                             AppButton { enabled: controller.selectionEnabled; visible: controller.supportAllowsFolder; text: "选择文件夹"; variant: "link"; onClicked: controller.chooseSupportFolder() }
@@ -1485,6 +1504,51 @@ ApplicationWindow {
         }
     }
 
+    // Stable native drag source, independent of virtualized rows and the popup.
+    Item {
+        id: workspaceDragProxy
+        property var transfer: ({})
+        property bool dragging: false
+        property bool restoreDrawer: false
+        Drag.dragType: Drag.None
+        Drag.supportedActions: Qt.CopyAction
+        Drag.proposedAction: Qt.CopyAction
+        Drag.mimeData: ({"text/uri-list": transfer.url || "",
+                         "application/x-hr-toolkit-workspace": transfer.token || ""})
+        Drag.imageSource: "components/copy-simple.png"
+        function start(path) {
+            if (dragging) return
+            transfer = controller.beginWorkspaceTransfer(path)
+            if (!transfer.token) return
+            restoreDrawer = workspaceDrawer.opened
+            dragging = true
+            // Drag.None disables automatic startup, but startDrag still
+            // requires the attached drag source to be active first.
+            Drag.active = true
+            try {
+                Drag.startDrag(Qt.CopyAction)
+            } finally {
+                // Also recover if native startup fails without dragFinished.
+                finish()
+            }
+        }
+        Drag.onDragStarted: {
+            // Reveal even narrow-window targets without changing saved layout.
+            workspaceDrawer.close()
+        }
+        function finish() {
+            if (!dragging) return
+            Drag.active = false
+            controller.endWorkspaceTransfer(transfer.token || "")
+            transfer = ({})
+            dragging = false
+            if (restoreDrawer && controller.workspaceExpanded && root.visible)
+                workspaceDrawer.open()
+            restoreDrawer = false
+        }
+        Drag.onDragFinished: finish()
+    }
+
     Popup {
         id: workspaceDrawer
         objectName: "workspaceDrawer"
@@ -1504,7 +1568,8 @@ ApplicationWindow {
         closePolicy: Popup.CloseOnEscape
         onClosed: {
             workspaceAddMenu.close()
-            controller.setWorkspaceExpanded(false)
+            workspaceUseMenu.close()
+            if (!workspaceDragProxy.dragging) controller.setWorkspaceExpanded(false)
         }
         enter: Transition {}
         exit: Transition {}
@@ -1630,6 +1695,7 @@ ApplicationWindow {
                     model: controller.workspaceModel
                     reuseItems: true
                     cacheBuffer: 128
+                    boundsBehavior: Flickable.StopAtBounds
                     currentIndex: -1
                     property int activeDelegateCount: 0
                     function keepRowVisible(row) {
@@ -1662,15 +1728,42 @@ ApplicationWindow {
                             anchors.fill: parent
                             hoverEnabled: true
                             acceptedButtons: Qt.LeftButton
-                            onClicked: {
-                                workspaceList.currentIndex = index
-                                controller.selectWorkspaceRow(index)
-                                if (isDir) {
-                                    controller.toggleWorkspaceRow(index)
-                                    workspaceList.keepRowVisible(index)
+                            property point pressPoint
+                            property string pressedPath: ""
+                            property bool startedDrag: false
+                            onPressed: function(mouse) {
+                                pressPoint = Qt.point(mouse.x, mouse.y)
+                                pressedPath = path
+                                startedDrag = false
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed || startedDrag) return
+                                var dx = Math.abs(mouse.x - pressPoint.x)
+                                var dy = Math.abs(mouse.y - pressPoint.y)
+                                // Vertical gestures remain available to the list.
+                                if (dx > Qt.styleHints.startDragDistance && dx > dy) {
+                                    startedDrag = true
+                                    workspaceDragProxy.start(pressedPath)
                                 }
                             }
-                            onDoubleClicked: controller.openWorkspaceRow(index)
+                            onClicked: {
+                                if (startedDrag) return
+                                workspaceList.currentIndex = index
+                                controller.selectWorkspaceRow(index)
+                            }
+                            onDoubleClicked: if (!startedDrag) controller.openWorkspaceRow(index)
+                            ToolTip.visible: containsMouse && !pressed
+                            ToolTip.text: path + "\n向左拖入资料区；单击选中，双击打开"
+                            ToolTip.delay: 600
+                        }
+                        MouseArea {
+                            x: 3 + depth * 15; width: 20; height: parent.height
+                            visible: isDir
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                controller.toggleWorkspaceRow(index)
+                                workspaceList.keepRowVisible(index)
+                            }
                         }
                     }
                 }
@@ -1685,7 +1778,7 @@ ApplicationWindow {
             }
             Card {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 94
+                Layout.preferredHeight: 126
                 color: root.surface
                 ColumnLayout {
                     anchors.fill: parent
@@ -1693,6 +1786,15 @@ ApplicationWindow {
                     spacing: 3
                     Text { Layout.fillWidth: true; text: controller.workspaceSelectionAvailable ? controller.workspaceSelectedName : "选择项目文件"; color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideMiddle }
                     Text { Layout.fillWidth: true; text: controller.workspaceSelectedDetail; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
+                    AppButton {
+                        text: "带入当前工具"; variant: "link"
+                        enabled: controller.selectionEnabled && controller.workspaceSelectionAvailable
+                        onClicked: {
+                            workspaceUseMenu.inputAllowed = controller.canUseWorkspaceSelection("input")
+                            workspaceUseMenu.supportAllowed = controller.canUseWorkspaceSelection("support")
+                            workspaceUseMenu.open()
+                        }
+                    }
                     RowLayout {
                         Layout.fillWidth: true
                         AppButton { text: "打开"; variant: "link"; enabled: controller.workspaceSelectionAvailable; onClicked: controller.launchWorkspaceSelection() }
@@ -1703,6 +1805,22 @@ ApplicationWindow {
                     }
                 }
             }
+        }
+    }
+
+    Popup {
+        id: workspaceUseMenu
+        property bool inputAllowed: false
+        property bool supportAllowed: false
+        x: workspaceDrawer.x + 16
+        y: Math.max(8, root.height - height - 130)
+        width: Math.min(308, root.width - 32); padding: 8
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: root.surface; radius: 9; border.color: root.border }
+        contentItem: ColumnLayout {
+            AppButton { Layout.fillWidth: true; text: "添加为待处理资料"; enabled: workspaceUseMenu.inputAllowed && controller.selectionEnabled; onClicked: { workspaceUseMenu.close(); controller.useWorkspaceSelection("input") } }
+            AppButton { Layout.fillWidth: true; text: "设为" + controller.supportLabel; visible: controller.hasSupportField; enabled: workspaceUseMenu.supportAllowed && controller.selectionEnabled; onClicked: { workspaceUseMenu.close(); controller.useWorkspaceSelection("support") } }
+            Text { Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: root.textMuted; text: "仅带入选择，不移动原件。灰色选项表示该区域不支持此项。" }
         }
     }
 

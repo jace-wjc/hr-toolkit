@@ -55,7 +55,11 @@ Item {
         enabled: dropTarget.canReceive
         onEntered: {
             dropTarget.enteredContext = dropTarget.contextKey
-            dropTarget.feedback = dropTarget.backend.beginDropPreview(dropTarget.role, drag.urls)
+            var workspaceToken = drag.formats.indexOf("application/x-hr-toolkit-workspace") >= 0
+                ? drag.getDataAsString("application/x-hr-toolkit-workspace") : ""
+            dropTarget.feedback = workspaceToken
+                ? dropTarget.backend.beginDropPreview(dropTarget.role, drag.urls, workspaceToken)
+                : dropTarget.backend.beginDropPreview(dropTarget.role, drag.urls)
             drag.accepted = true
         }
         onExited: dropTarget.resetPreview()

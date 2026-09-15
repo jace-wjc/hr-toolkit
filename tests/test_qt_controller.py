@@ -47,6 +47,64 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_workspace_transfer_captures_path_and_rejects_changed_context(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "共用资料" / "中文 名单#100%.xlsx"
+            source.parent.mkdir()
+            source.touch()
+            controller._project_path = root
+            controller._workspace_items = [{"path": str(source), "name": source.name, "isDir": False}]
+            with patch.object(Path, "stat", side_effect=AssertionError("capture must not stat")):
+                transfer = controller.beginWorkspaceTransfer(str(source))
+                self.assertTrue(transfer["token"])
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread"):
+                preview = controller.beginDropPreview("support", [transfer["url"]], transfer["token"])
+                controller._workspace_items.clear()  # Delegate/row recycling cannot change source identity.
+                controller._check_drop_previews()
+                self.assertTrue(controller._drop_preview_request["accepted"])
+                controller._project_generation += 1
+                self.assertFalse(controller.finishDropPreview(preview["token"], "support", [transfer["url"]]))
+                self.assertFalse(controller.beginDropPreview("support", [transfer["url"]], transfer["token"])["accepted"])
+                self.assertFalse(controller.selectionChecking)
+            self.assertTrue(source.exists())
+
+    def test_workspace_click_import_uses_shared_policy_and_never_moves_source(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "共用资料" / "名单.xlsx"
+            source.parent.mkdir()
+            source.touch()
+            controller._project_path = root
+            controller._workspace_items = [{"path": str(source), "name": source.name, "isDir": False}]
+            controller.selectWorkspaceRow(0)
+            self.assertTrue(controller.canUseWorkspaceSelection("support"))
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker:
+                controller.useWorkspaceSelection("support")
+                worker.call_args.kwargs["target"]()
+            self.assertEqual(controller.supportPath, str(source))
+            self.assertEqual(controller._input_states[controller._state_key()], [])
+            self.assertTrue(source.exists())
+            controller._workspace_items = [{"path": str(source.parent), "isDir": True}]
+            self.assertEqual(controller.beginWorkspaceTransfer(str(source.parent)), {})
+            controller._workspace_items = [{"path": str(root / ".hrtoolkit" / "trash.xlsx"), "isDir": False}]
+            self.assertEqual(controller.beginWorkspaceTransfer(controller._workspace_items[0]["path"]), {})
+
+    def test_workspace_worker_rejects_missing_or_escaped_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "project"
+            root.mkdir()
+            outside = Path(temp) / "outside.xlsx"
+            outside.touch()
+            with self.assertRaises(ValueError):
+                AppController._validate_workspace_source({"root": root, "path": outside})
+            with self.assertRaises(OSError):
+                AppController._validate_workspace_source({"root": root, "path": root / "资料" / "gone.xlsx"})
+
     def test_drop_preview_uses_local_urls_without_disk_access(self) -> None:
         from hr_toolkit.gui_qt.compat import QUrl
         controller = self.controller()
