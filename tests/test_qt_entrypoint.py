@@ -314,6 +314,21 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertNotIn("SetWindowLongPtrW", source)
         self.assertNotIn("WM_PAINT", source)
 
+    def test_input_list_stops_at_content_boundaries(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml").read_text(encoding="utf-8")
+        input_list = source.split('objectName: "inputList"', 1)[1].split("delegate: Rectangle", 1)[0]
+        self.assertIn("boundsBehavior: Flickable.StopAtBounds", input_list)
+        self.assertIn("flickableDirection: Flickable.VerticalFlick", input_list)
+        self.assertIn("interactive: contentHeight > height", input_list)
+
+    def test_main_scroll_stops_at_content_boundaries(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml").read_text(encoding="utf-8")
+        viewport = source.split('objectName: "mainScroll"', 1)[1].split("ColumnLayout {", 1)[0]
+        self.assertIn("target: mainScroll.contentItem", viewport)
+        self.assertIn('property: "boundsBehavior"', viewport)
+        self.assertIn("value: Flickable.StopAtBounds", viewport)
+        self.assertIn("ScrollBar.vertical.interactive: true", viewport)
+
     def test_file_drop_targets_are_separate_and_do_not_add_polling(self) -> None:
         qml_root = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
         source = (qml_root / "Main.qml").read_text(encoding="utf-8")

@@ -673,6 +673,14 @@ ApplicationWindow {
                     ScrollBar.vertical.policy: ScrollBar.AsNeeded
                     ScrollBar.vertical.interactive: true
 
+                    // ScrollView owns the Flickable; constrain that viewport
+                    // rather than the scrollbar, preserving normal scrolling.
+                    Binding {
+                        target: mainScroll.contentItem
+                        property: "boundsBehavior"
+                        value: Flickable.StopAtBounds
+                    }
+
                     ColumnLayout {
                         id: contentColumn
                         width: Math.min(root.contentMaxWidth, mainScroll.availableWidth)
@@ -746,6 +754,9 @@ ApplicationWindow {
                                     ListView {
                                         id: inputList
                                         objectName: "inputList"
+                                        boundsBehavior: Flickable.StopAtBounds
+                                        flickableDirection: Flickable.VerticalFlick
+                                        interactive: contentHeight > height
                                         anchors.fill: parent
                                         anchors.margins: 7
                                         visible: count > 0
