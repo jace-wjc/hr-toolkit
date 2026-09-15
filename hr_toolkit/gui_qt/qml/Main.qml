@@ -513,26 +513,32 @@ ApplicationWindow {
                             }
                             onPaint: {
                                 if (paintSuspended) return
+                                // Geometry and phase stay constant throughout
+                                // this paint; avoid QML property lookups per point.
+                                var paintWidth = width
+                                var paintHeight = height
+                                var paintLevel = level
+                                var paintPhase = wavePhase
                                 var ctx = getContext("2d")
-                                ctx.clearRect(0, 0, width, height)
-                                if (width <= 0 || height <= 0 || level <= 0)
+                                ctx.clearRect(0, 0, paintWidth, paintHeight)
+                                if (paintWidth <= 0 || paintHeight <= 0 || paintLevel <= 0)
                                     return
                                 ctx.save()
                                 ctx.beginPath()
-                                ctx.roundedRect(0, 0, width, height, Math.min(9, width / 2, height / 2), Math.min(9, width / 2, height / 2))
+                                ctx.roundedRect(0, 0, paintWidth, paintHeight, Math.min(9, paintWidth / 2, paintHeight / 2), Math.min(9, paintWidth / 2, paintHeight / 2))
                                 ctx.clip()
-                                var waterline = height * (1 - level)
+                                var waterline = paintHeight * (1 - paintLevel)
                                 // Taper at both ends: 0% stays empty; 100% is full.
-                                var amplitude = Math.min(2.4, height * level * 0.45, waterline * 0.45)
+                                var amplitude = Math.min(2.4, paintHeight * paintLevel * 0.45, waterline * 0.45)
                                 function drawWave(offset, direction, scale, color) {
                                     ctx.beginPath()
-                                    ctx.moveTo(0, height)
-                                    for (var x = 0; x <= width + 5; x += 5) {
-                                        var px = Math.min(x, width)
-                                        var angle = px / width * Math.PI * 2 + wavePhase * direction + offset
+                                    ctx.moveTo(0, paintHeight)
+                                    for (var x = 0; x <= paintWidth + 5; x += 5) {
+                                        var px = Math.min(x, paintWidth)
+                                        var angle = px / paintWidth * Math.PI * 2 + paintPhase * direction + offset
                                         ctx.lineTo(px, waterline + Math.sin(angle) * amplitude * scale)
                                     }
-                                    ctx.lineTo(width, height)
+                                    ctx.lineTo(paintWidth, paintHeight)
                                     ctx.closePath()
                                     ctx.fillStyle = color
                                     ctx.fill()
