@@ -953,6 +953,10 @@ class AppController(QObject):
         self._bump_form_revision()
         self.materialChanged.emit()
 
+    @Slot(str, result=bool)
+    def isCustomMaterialPreset(self, name: str) -> bool:
+        return name in self._material_preferences.custom_presets
+
     @Slot(str)
     def setMaterialPresetName(self, name: str) -> None:
         if name not in self._material_preferences.preset_names:

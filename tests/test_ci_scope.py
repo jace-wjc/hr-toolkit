@@ -16,6 +16,11 @@ SPEC.loader.exec_module(ci_scope)
 
 
 class CIScopeTests(unittest.TestCase):
+    def test_preset_menu_routes_include_gui_and_preferences(self):
+        scope = ci_scope.select_scope(["hr_toolkit/gui_qt/qml/components/PresetMenuButton.qml"])
+        self.assertTrue({"tests.test_material_preferences", "tests.test_qt_entrypoint", "tests.test_qt_controller"}.issubset(scope["targets"]))
+        self.assertFalse(scope["full"])
+
     def test_input_selection_routes_include_controller_and_policy(self):
         for path in ("hr_toolkit/gui_qt/input_selection.py", "hr_toolkit/gui_qt/controller.py",
                      "hr_toolkit/gui_qt/form_specs.py", "hr_toolkit/gui_qt/qml/components/FileDropTarget.qml"):

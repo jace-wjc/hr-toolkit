@@ -1446,18 +1446,10 @@ ApplicationWindow {
                     onActivated: controller.setMaterialPresetName(currentText)
                 }
                 AppButton { text: "应用"; variant: "link"; onClicked: controller.applyMaterialPreset(materialCollectorPresetCombo.currentText) }
+                PresetMenuButton { backend: controller; presetName: materialCollectorPresetCombo.currentText }
                 Item { Layout.fillWidth: true }
             }
-            Flow {
-                Layout.fillWidth: true
-                Layout.leftMargin: 74
-                spacing: 4
-                Text { text: "自定义预设"; color: root.textFaint; font.pixelSize: 11; height: 30; verticalAlignment: Text.AlignVCenter }
-                AppButton { text: "保存当前为预设"; variant: "link"; onClicked: controller.requestCreateMaterialPreset() }
-                AppButton { text: "更新"; variant: "link"; onClicked: controller.updateMaterialPreset(materialCollectorPresetCombo.currentText) }
-                AppButton { text: "重命名"; variant: "link"; onClicked: controller.requestRenameMaterialPreset(materialCollectorPresetCombo.currentText) }
-                AppButton { text: "删除"; variant: "link"; onClicked: controller.requestDeleteMaterialPreset(materialCollectorPresetCombo.currentText) }
-            }
+            Text { Layout.fillWidth: true; Layout.leftMargin: 74; text: "选择组合后，点击“应用”才会更改材料勾选。"; color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
             Flow {
                 Layout.fillWidth: true
                 Layout.leftMargin: 74
@@ -1517,17 +1509,10 @@ ApplicationWindow {
                     onActivated: controller.setMaterialPresetName(currentText)
                 }
                 AppButton { text: "应用"; variant: "link"; onClicked: controller.applyMaterialPreset(presetCombo.currentText) }
+                PresetMenuButton { backend: controller; presetName: presetCombo.currentText }
                 Item { Layout.fillWidth: true }
             }
-            Flow {
-                Layout.fillWidth: true
-                Layout.leftMargin: 145
-                spacing: 4
-                AppButton { text: "保存新预设"; variant: "link"; onClicked: controller.requestCreateMaterialPreset() }
-                AppButton { text: "更新"; variant: "link"; onClicked: controller.updateMaterialPreset(presetCombo.currentText) }
-                AppButton { text: "重命名"; variant: "link"; onClicked: controller.requestRenameMaterialPreset(presetCombo.currentText) }
-                AppButton { text: "删除"; variant: "link"; onClicked: controller.requestDeleteMaterialPreset(presetCombo.currentText) }
-            }
+            Text { Layout.fillWidth: true; Layout.leftMargin: 145; text: "选择组合后，点击“应用”才会更改材料勾选。"; color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
             RowLayout {
                 Layout.fillWidth: true
                 Text { Layout.preferredWidth: 145; text: field.label; color: root.textMain; font.pixelSize: 13 }

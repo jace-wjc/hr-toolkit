@@ -47,6 +47,7 @@ ROUTES = {
     "hr_toolkit/gui_qt/controller.py": "input_selection " + GUI,
     "hr_toolkit/gui_qt/form_specs.py": "input_selection " + GUI,
     "hr_toolkit/gui_qt/qml/components/FileDropTarget.qml": "input_selection " + GUI,
+    "hr_toolkit/gui_qt/qml/components/PresetMenuButton.qml": "material_preferences " + GUI,
     "hr_toolkit/common/template_mapping.py": "template_mapping header_aliases " + BUSINESS + " " + GUI,
     "hr_toolkit/common/paths.py": "paths app_update runlog runtime_checks " + STORE + " " + PROCESS,
     "hr_toolkit/common/inputs.py": "inputs " + BUSINESS + " " + STORE,
