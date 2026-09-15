@@ -126,10 +126,13 @@ def main():
         {"available": True, "version": "0.9.8", "currentVersion": "0.9.7", "notes": ["功能更新", "界面体验优化"]},
         {"available": True, "version": "0.9.8", "currentVersion": "0.9.7", "manual": True,
          "mandatory": True, "notes": ["用于检查更新说明换行及滚动。" * 6] * 80},
+        {"available": True, "version": "0.9.8", "currentVersion": "0.9.7",
+         "notes": ["用于检查更新说明换行及滚动。" * 6] * 80},
     ):
         update_prompt.showPrompt(prompt)
-        for width in (760, 1400):
+        for width, window_height in ((760, 600), (760, 820), (1400, 820)):
             root.setWidth(width)
+            root.setHeight(window_height)
             sample(50)
             height = update_prompt.property("height")
             assert 0 < height <= min(520 if prompt["available"] else 320, root.height() * 0.84)
@@ -137,6 +140,17 @@ def main():
             assert abs(update_prompt.property("height") - height) < 1
             primary = update_prompt.findChild(QObject, "updatePromptPrimary")
             assert primary is not None and primary.isVisible()
+            body = update_prompt.property("contentItem")
+            footer = update_prompt.property("footer")
+            footer_top = footer.mapToScene(QPointF(0, 0)).y()
+            for section in body.childItems():
+                if section.isVisible():
+                    bottom = section.y() + section.height()
+                    assert bottom <= body.height() + 1, (
+                        "Update prompt content exceeds its body", width, window_height,
+                        section.metaObject().className(), bottom, body.height())
+                    assert section.mapToScene(QPointF(0, section.height())).y() <= footer_top, (
+                        "Update prompt content overlaps its buttons", width, window_height)
         update_prompt.close()
     sample(30)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier,

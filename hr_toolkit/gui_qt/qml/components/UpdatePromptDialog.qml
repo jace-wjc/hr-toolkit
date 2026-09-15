@@ -68,7 +68,9 @@ Dialog {
                 id: notesView
                 objectName: "promptNotesView"
                 width: dialog.availableWidth
-                height: Math.max(0, Math.min(implicitHeight, dialog.availableHeight - updateSummaryRow.implicitHeight - 18
+                // Dialog.availableHeight still includes the footer. Use the
+                // allocated body height so notes cannot push text into buttons.
+                height: Math.max(0, Math.min(implicitHeight, dialog.contentItem.height - updateSummaryRow.implicitHeight - 18
                     - (dialog.prompt.mandatory || dialog.prompt.manual ? updateDisclaimer.implicitHeight + 18 : 0)))
                 visible: dialog.hasUpdate && (dialog.prompt.notes || []).length > 0
                 notes: dialog.prompt.notes || []
