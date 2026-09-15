@@ -11,6 +11,7 @@ ComboBox {
     topPadding: 7
     bottomPadding: 7
     hoverEnabled: true
+    HoverHandler { enabled: !control.editable; cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
     font.pixelSize: 13
 
     contentItem: Text {

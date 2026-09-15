@@ -10,6 +10,7 @@ CheckBox {
     rightPadding: 0
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
+    HoverHandler { cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
 
     indicator: Rectangle {
         implicitWidth: 16

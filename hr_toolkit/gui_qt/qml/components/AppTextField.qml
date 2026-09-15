@@ -10,6 +10,7 @@ TextField {
     topPadding: 7
     bottomPadding: 7
     selectByMouse: true
+    hoverEnabled: true
     color: enabled ? "#292825" : "#B3B0A6"
     placeholderTextColor: "#98958C"
     selectionColor: "#17715B"
@@ -20,6 +21,6 @@ TextField {
         radius: 6
         color: control.enabled ? "#FAF9F6" : "#F2F0EA"
         border.width: 1
-        border.color: control.activeFocus ? "#17715B" : "#ECEAE4"
+        border.color: control.activeFocus ? "#17715B" : control.enabled && control.hovered ? "#C4CCC7" : "#ECEAE4"
     }
 }

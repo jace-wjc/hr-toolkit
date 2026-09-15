@@ -50,9 +50,9 @@ Item {
             border.color: "#78766E"
         }
         contentItem: Item { Image { anchors.centerIn: parent; width: 17; height: 17; source: "sidebar-simple.png"; opacity: 0.65; sourceSize.width: 34; sourceSize.height: 34 } }
-        ToolTip.visible: hovered && chrome.sidebar.pinned
+        ToolTip.visible: hovered
         ToolTip.delay: 700
-        ToolTip.text: "收起左侧栏"
+        ToolTip.text: chrome.sidebar.pinned ? "收起左侧栏" : "悬停展开，点击固定"
     }
     Button {
         id: workspaceButton

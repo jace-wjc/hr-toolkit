@@ -14,6 +14,7 @@ Button {
     rightPadding: variant === "link" ? 6 : 13
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
+    HoverHandler { cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
 
     contentItem: Text {
         text: control.text
