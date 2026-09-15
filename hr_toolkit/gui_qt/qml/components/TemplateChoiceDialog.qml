@@ -43,6 +43,7 @@ AppDialog {
     acceptText: rulesPage ? (hasDocument ? "保存名称并重新检查" : "保存常用名称") : !hasDocument ? "开始检查并处理" : salaryMode ? "确认全部并继续处理" : skipping ? "确认跳过并继续" : "确认并继续处理"
     acceptButtonEnabled: !working && (rulesPage || !hasDocument || (!problem && confirmed.checked))
     onPageSizeChanged: columnPage = 0
+    onOpened: Qt.callLater(function() { if (dialog.opened && !dialog.working) dialog.locateProblem() })
 
     function normalized(value) {
         var text = String(value)
@@ -248,6 +249,75 @@ AppDialog {
             return "还需要至少选择一项金额；个人和单位的金额不能混用。"
         return ""
     }
+    function focusProblemControl(control) {
+        if (!control) return
+        // Use the real laid-out position, without changing any selections.
+        var point = control.mapToItem(body, 0, 0)
+        problemViewport.contentY = Math.max(0, Math.min(point.y - 18,
+            problemViewport.contentHeight - problemViewport.height))
+        control.forceActiveFocus(Qt.TabFocusReason)
+    }
+    function focusField(name) {
+        search.text = ""; columnSearch.text = ""; extra.checked = true
+        Qt.callLater(function() {
+            if (!dialog.opened || dialog.working) return
+            for (var i = 0; i < fieldRepeater.count; i++) {
+                var item = fieldRepeater.itemAt(i)
+                if (item && item.fieldName === name) {
+                    dialog.focusProblemControl(item.editor)
+                    return
+                }
+            }
+        })
+    }
+    function locateProblem() {
+        if (working || rulesPage || !hasDocument) return
+        if (salaryMode && !salaryGroups.length) { focusProblemControl(salaryFilesSection); return }
+        if (!skipping && salaryNeedsRead()) { focusProblemControl(readHeadersButton); return }
+        if (!sheet.rows.length) { focusProblemControl(sheetPicker.visible ? sheetPicker : sourceSection); return }
+        if (!skipping && !headerRow) { focusProblemControl(preview); return }
+        if (!skipping) {
+            var required = role.required || []
+            for (var i = 0; i < required.length; i++)
+                if (!chosen[required[i]]) { focusField(required[i]); return }
+            var used = {}, keys = salaryMode ? required : Object.keys(chosen)
+            for (var j = 0; j < keys.length; j++) {
+                var col = chosen[keys[j]]
+                if (!col) continue
+                if (used[col]) { focusField(keys[j]); return }
+                used[col] = true
+            }
+            var oneOf = role.one_of || []
+            if (!salaryMode && oneOf.length && !oneOf.some(function(k) { return chosen[k] > 0 })) {
+                focusField(oneOf[0]); return
+            }
+        }
+        if (salaryMode) {
+            for (var g = 0; g < salaryGroups.length; g++) {
+                var group = salaryGroups[g]
+                if (group.skip) continue
+                var values = Object.keys(group.selections || {}).map(function(k) { return group.selections[k] })
+                if (group.sheet_needs_confirmation || !values.length || values.some(function(v) { return !v })
+                        || values.some(function(v, n) { return values.indexOf(v) !== n })) {
+                    if (salaryIndex !== g) {
+                        salaryIndex = g; loadSalaryGroup()
+                        Qt.callLater(function() { if (dialog.opened && !dialog.working) dialog.locateProblem() })
+                    } else focusProblemControl(templatePicker)
+                    return
+                }
+            }
+            for (var n = 0; n < salaryIssues.length; n++) {
+                if (!salaryIssues[n].skippable || !salaryIssues[n].skip) {
+                    var issue = issueRepeater.itemAt(n)
+                    focusProblemControl(issue ? issue.focusControl : salaryFilesSection)
+                    return
+                }
+            }
+            if (problem) { focusProblemControl(templatePicker); return }
+        }
+        // The fixed footer is already visible. Focusing never checks this box.
+        confirmed.forceActiveFocus(Qt.TabFocusReason)
+    }
     onAccepted: backend.saveTemplateChoice(JSON.stringify({role: role.key, sheet: sheet.name,
         row: skipping ? 1 : headerRow, columns: chosen}))
     onRejected: { lastPayload = ""; confirmed.checked = false }
@@ -281,6 +351,7 @@ AppDialog {
             text: "开始处理时，工具会自动检查已选择的资料。能识别的直接使用，需要你确认的会显示在这里。\n\n如果只是想添加、修改或删除列名，请切换到“常用名称管理”。"
         }
         Flickable {
+        id: problemViewport
         Layout.fillWidth: true; Layout.fillHeight: true; visible: !dialog.rulesPage && dialog.hasDocument
         clip: true
         contentHeight: body.implicitHeight
@@ -293,9 +364,11 @@ AppDialog {
             spacing: 10
             enabled: !dialog.working
             ColumnLayout {
+                id: salaryFilesSection
                 Layout.fillWidth: true; visible: dialog.salaryMode
                 Label { text: "本次模板（相同模板只需确认一次）"; font.bold: true; font.pixelSize: 14 }
                 AppComboBox {
+                    id: templatePicker
                     Layout.fillWidth: true
                     Accessible.name: "选择本次需要确认的模板"
                     model: dialog.salaryRevision >= 0 ? dialog.salaryGroups.map(function(g, i) {
@@ -306,11 +379,14 @@ AppDialog {
                     onActivated: function(index) { dialog.salaryIndex = index; dialog.loadSalaryGroup() }
                 }
                 Repeater {
+                    id: issueRepeater
                     model: dialog.salaryIssues
                     delegate: ColumnLayout {
+                        property var focusControl: modelData.skippable ? issueCheck : issueText
                         Layout.fillWidth: true
-                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: modelData.name + "：" + modelData.message; textFormat: Text.PlainText; color: "#A26713" }
+                        Label { id: issueText; Layout.fillWidth: true; wrapMode: Text.Wrap; text: modelData.name + "：" + modelData.message; textFormat: Text.PlainText; color: "#A26713" }
                         AppCheckBox {
+                            id: issueCheck
                             text: modelData.skippable ? "本次跳过这个文件（结果中会列明）" : "此文件需要处理后重新选择，不能跳过"
                             enabled: modelData.skippable; checked: !!modelData.skip
                             onToggled: { dialog.salaryIssues[index].skip = checked; dialog.salaryRevision++; confirmed.checked = false }
@@ -353,6 +429,7 @@ AppDialog {
             }
             Label { visible: dialog.mappingData.sheets.length > 1; text: "读取哪个工作表（Excel 底部的标签）" }
             AppComboBox {
+                id: sheetPicker
                 Layout.fillWidth: true; visible: dialog.mappingData.sheets.length > 1
                 Accessible.name: "读取哪个工作表"
                 model: dialog.mappingData.sheets.map(function(s) { return s.name })
@@ -365,6 +442,7 @@ AppDialog {
                 text: "这张工作表将不参与本次处理。请确认它不是需要统计的业务数据。"
             }
             ColumnLayout {
+                id: sourceSection
                 visible: !dialog.skipping; Layout.fillWidth: true; spacing: 8
                 Label { text: "2. 点选写着列名的那一行"; font.bold: true; font.pixelSize: 14 }
                 Label {
@@ -419,7 +497,7 @@ AppDialog {
                     Label { text: "行，到第"; height: 36; verticalAlignment: Text.AlignVCenter }
                     SpinBox { from: Math.max(1, dialog.headerRow); to: Math.min(200, from + 5); value: dialog.headerBottom || 1; editable: true; width: 110; height: 36; onValueModified: { dialog.headerBottom = value; confirmed.checked = false } }
                     Label { text: "行"; height: 36; verticalAlignment: Text.AlignVCenter }
-                    AppButton { text: "读取这些列名"; onClicked: dialog.backend.rescanSalaryHeader(dialog.salaryGroup.group_id, dialog.sheet.name, dialog.headerRow, dialog.headerBottom, dialog.salaryPayload()) }
+                    AppButton { id: readHeadersButton; text: "读取这些列名"; onClicked: dialog.backend.rescanSalaryHeader(dialog.salaryGroup.group_id, dialog.sheet.name, dialog.headerRow, dialog.headerBottom, dialog.salaryPayload()) }
                     AppButton { text: "恢复自动识别"; onClicked: dialog.backend.resetSalaryHeader(dialog.salaryGroup.group_id, dialog.salaryPayload()) }
                 }
                 Label { text: "3. 告诉工具，各项内容在哪一列"; font.bold: true; font.pixelSize: 14 }
@@ -428,8 +506,10 @@ AppDialog {
                 AppTextField { id: columnSearch; Layout.fillWidth: true; visible: dialog.columnChoices.length > 16; placeholderText: "原表列太多？输入列名或内容，缩小下拉选项范围"; Accessible.name: "筛选原表中的列" }
                 AppCheckBox { id: extra; text: "查看其他可选内容（没有就不用选）"; onToggled: if (!checked) search.text = "" }
                 Repeater {
+                    id: fieldRepeater
                     model: Object.keys(dialog.role.fields)
                     delegate: ColumnLayout {
+                        property var editor: fieldEditor
                         property string fieldName: modelData
                         property bool requiredField: dialog.role.required.indexOf(fieldName) >= 0
                         visible: (requiredField || (dialog.role.one_of || []).indexOf(fieldName) >= 0 || extra.checked || search.text.length > 0)
@@ -437,6 +517,7 @@ AppDialog {
                         Layout.fillWidth: true; spacing: 4
                         Label { text: dialog.fieldLabel(fieldName) + (requiredField ? "（必须选择）" : "（可不选）"); textFormat: Text.PlainText; font.pixelSize: 13 }
                         AppComboBox {
+                            id: fieldEditor
                             Layout.fillWidth: true; enabled: dialog.headerRow > 0 && !dialog.salaryNeedsRead()
                             Accessible.name: "选择“" + dialog.fieldLabel(fieldName) + "”在原表中的列"
                             model: dialog.filteredColumns(fieldName); textRole: "label"
@@ -479,6 +560,7 @@ AppDialog {
             Flow {
                 Layout.fillWidth: true; Layout.preferredHeight: childrenRect.height
                 layoutDirection: Qt.RightToLeft; spacing: 8
+                AppButton { text: dialog.problem ? "定位待处理项" : "定位确认"; variant: "link"; visible: dialog.hasDocument && !dialog.rulesPage; enabled: !dialog.working; onClicked: dialog.locateProblem() }
                 AppButton { text: dialog.acceptText; variant: "primary"; enabled: dialog.acceptButtonEnabled; onClicked: dialog.applyChoices() }
                 AppButton { visible: dialog.salaryMode && !dialog.rulesPage; text: "仅保存"; enabled: !dialog.working && rememberSalary.checked && !dialog.problem; onClicked: dialog.backend.applySalaryMappings(dialog.salaryPayload(), true, false) }
                 AppButton { text: dialog.rejectText; onClicked: dialog.reject() }
