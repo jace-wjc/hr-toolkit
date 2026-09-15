@@ -2150,8 +2150,11 @@ class AppController(QObject):
     def _apply_workspace_items(self, generation: int, items: list[dict[str, Any]]) -> None:
         if generation != self._workspace_generation or self._closed:
             return
-        self._workspace_items = list(items)
-        self._workspace_model.set_items(self._workspace_items)
+        next_items = list(items)
+        changed = next_items != self._workspace_items
+        self._workspace_items = next_items
+        if changed:
+            self._workspace_model.set_items(self._workspace_items)
         selected_text = str(self._workspace_selected_path or "")
         self._workspace_selected_item = next(
             (
