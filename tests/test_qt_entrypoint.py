@@ -367,6 +367,23 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn('drag.getDataAsString("application/x-hr-toolkit-workspace")', target)
         self.assertIn("drag.urls, workspaceToken", target)
 
+    def test_result_feedback_and_safe_lightweight_controls(self) -> None:
+        qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
+        source = (qml / "Main.qml").read_text(encoding="utf-8")
+        self.assertIn('variant: controller.busy ? "secondary" : "primary"', source)
+        self.assertIn("controller.openPrimaryResult()", source)
+        self.assertIn("controller.resultNoticeModel", source)
+        self.assertIn("controller.copyResultNotices()", source)
+        self.assertIn("controller.openProjectDialog()", source)
+        self.assertIn("controller.openSelectedInput(path)", source)
+        dialog = (qml / "components" / "AppDialog.qml").read_text(encoding="utf-8")
+        self.assertIn("property bool showCloseButton: false", dialog)
+        self.assertIn("if (control.rejectText) control.reject()", dialog)
+        self.assertIn("control.closePolicy & Popup.CloseOnEscape", dialog)
+        button = (qml / "components" / "AppButton.qml").read_text(encoding="utf-8")
+        self.assertIn("HoverHandler { cursorShape:", button)
+        self.assertNotIn("MouseArea", button)
+
     def test_file_drop_targets_are_separate_and_do_not_add_polling(self) -> None:
         qml_root = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
         source = (qml_root / "Main.qml").read_text(encoding="utf-8")

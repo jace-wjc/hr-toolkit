@@ -9,6 +9,7 @@ Dialog {
     property string rejectText: ""
     property string closeText: ""
     property bool acceptButtonEnabled: true
+    property bool showCloseButton: false
 
     modal: true
     padding: 18
@@ -34,7 +35,7 @@ Dialog {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.leftMargin: 18
-            anchors.rightMargin: 18
+            anchors.rightMargin: control.showCloseButton ? 52 : 18
             anchors.verticalCenter: parent.verticalCenter
             text: control.title
             color: "#292825"
@@ -49,6 +50,19 @@ Dialog {
             anchors.bottom: parent.bottom
             height: 1
             color: "#F1EFE9"
+        }
+        AppButton {
+            anchors.right: parent.right; anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            visible: control.showCloseButton
+            enabled: (control.closePolicy & Popup.CloseOnEscape) !== 0
+            implicitWidth: 30; implicitHeight: 30; variant: "link"
+            Accessible.name: "关闭"
+            contentItem: Image { source: "x.png"; sourceSize.width: 28; sourceSize.height: 28; fillMode: Image.PreserveAspectFit }
+            onClicked: {
+                if (control.rejectText) control.reject()
+                else control.close()
+            }
         }
     }
 

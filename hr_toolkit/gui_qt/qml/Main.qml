@@ -2073,6 +2073,7 @@ ApplicationWindow {
 
     AppDialog {
         id: helpDialog
+        showCloseButton: true
         objectName: "helpDialog"
         modal: true
         anchors.centerIn: Overlay.overlay
@@ -2279,6 +2280,7 @@ ApplicationWindow {
 
     AppDialog {
         id: notificationDialog
+        showCloseButton: true
         modal: true
         anchors.centerIn: Overlay.overlay
         width: Math.min(520, root.settledWidth - 48)
@@ -2312,6 +2314,7 @@ ApplicationWindow {
 
     AppDialog {
         id: createProjectDialog
+        showCloseButton: true
         modal: true
         anchors.centerIn: Overlay.overlay
         width: Math.min(590, root.settledWidth - 48)
