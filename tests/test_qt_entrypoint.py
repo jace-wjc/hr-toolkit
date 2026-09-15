@@ -545,7 +545,18 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertNotIn("WindowResizeEdges {", source)
         self.assertIn('nativeWindows: Qt.platform.os === "windows"', source)
         self.assertIn("systemButtons: false", source)
-        self.assertIn("y: edgeInset", source)
+        # The project panel now participates in the full-height workspace
+        # layout. Only the core pane reserves the custom chrome band.
+        workspace = source.split("id: workspaceLayout", 1)[1].split("Item {", 1)[0]
+        self.assertIn("anchors.fill: parent", workspace)
+        self.assertNotIn("anchors.topMargin:", workspace)
+        pane = source.split("id: mainPane", 1)[1].split("ColumnLayout {", 1)[0]
+        self.assertIn("Layout.topMargin: windowChrome.height", pane)
+        panel = source.split("WorkspaceSidePanel {", 1)[1].split("Rectangle {", 1)[0]
+        self.assertIn("parent: workspaceLayout", panel)
+        surface = source.split("id: workspaceSurface", 1)[1].split("ColumnLayout {", 1)[0]
+        self.assertIn("x: 8; y: 8", surface)
+        self.assertIn("height: Math.max(0, workspaceDrawer.height - 16)", surface)
         self.assertIn("chrome.nativeMac ? 82 : chrome.nativeWindows", chrome)
         self.assertIn("chrome.sidebar.pinned ? Math.max(16, chrome.sidebar.width - width - 16) : 16", chrome)
         self.assertIn("chrome.nativeMac || chrome.nativeWindows ? 5 : 9", chrome)
