@@ -72,7 +72,7 @@ from .form_specs import (
     spec_for,
     variants_for,
 )
-from .models import HistoryModel, InputFileModel, LogModel, TrashModel, WorkspaceModel
+from .models import HistoryModel, InputFileModel, LogModel, TrashModel, WorkspaceModel, ObjectListModel
 from .input_selection import selection_hint, selection_mode, validate_selection
 
 
@@ -259,6 +259,10 @@ class AppController(QObject):
         self._pending_text_action: str | None = None
         self._pending_text_payload: Any = None
         self._last_result_dir: Path | None = None
+        self._result_context = None
+        self._result_files: list[Path] = []
+        self._result_notices = ObjectListModel(("text",), self)
+        self._stop_requested = False
         self._last_selected_dir: Path | None = None
         self._last_run_by_key: dict[tuple[str, str], tuple[str, bool]] = {}
         self._original_switch_interval: float | None = None
@@ -689,7 +693,7 @@ class AppController(QObject):
 
     @Property(str, notify=runButtonTextChanged)
     def runButtonText(self) -> str:
-        return "停止" if self._busy else self._spec.run_text
+        return ("正在安全停止…" if self._stop_requested else "停止处理") if self._busy else self._spec.run_text
 
     @Property(str, notify=projectChanged)
     def projectName(self) -> str:
@@ -763,7 +767,25 @@ class AppController(QObject):
 
     @Property(bool, notify=lastResultChanged)
     def canOpenLastResult(self) -> bool:
-        return bool(self._last_result_dir is not None and self._last_result_dir.exists())
+        return bool(self._last_result_dir is not None and self._result_context == (self._state_key(), self._project_generation))
+
+    @Property(bool, notify=lastResultChanged)
+    def canOpenPrimaryResult(self) -> bool:
+        return (self.canOpenLastResult and len(self._result_files) == 1
+                and self._result_files[0].suffix.lower() in EXCEL_SUFFIXES)
+
+    @Property(int, notify=lastResultChanged)
+    def resultNoticeCount(self) -> int:
+        return self._result_notices.rowCount() if self.canOpenLastResult else 0
+
+    @constant_property(QObject)
+    def resultNoticeModel(self):
+        return self._result_notices
+
+    @Slot()
+    def copyResultNotices(self) -> None:
+        if self.canOpenLastResult:
+            QGuiApplication.clipboard().setText("\n".join(str(row["text"]) for row in self._result_notices.items()))
 
     @Property(str, notify=specChanged)
     def lastRunText(self) -> str:
@@ -1141,6 +1163,7 @@ class AppController(QObject):
         if preview and (preview["context"] != self._selection_context() or not self.selectionEnabled):
             self.cancelDropPreview(preview["token"])
         self.selectionStateChanged.emit()
+        self.lastResultChanged.emit()
 
     @staticmethod
     def _local_drop_paths(urls) -> list[Path]:
@@ -3176,14 +3199,17 @@ class AppController(QObject):
     @Slot()
     def runOrCancel(self) -> None:
         if self._busy:
+            if self._stop_requested:
+                return
+            self._stop_requested = True
+            self.runButtonTextChanged.emit()
             if self._startup_loading:
                 self._startup_cancelled = True
             if self._preview_cancel_event is not None:
                 self._preview_cancel_event.set()
             self._run_coordinator.cancel()
-            if self._run_progress_visible:
-                self._run_progress_message = "已请求停止，等待当前步骤安全退出…"
-                self.runProgressChanged.emit()
+            self._run_progress_message = "已请求停止，等待当前步骤安全退出…"
+            self.runProgressChanged.emit()
             self._append_log("已请求停止，正在安全结束…", "warning")
             return
         if self._block_run_for_update():
@@ -3250,6 +3276,11 @@ class AppController(QObject):
         if self._busy == value:
             return
         self._busy = value
+        self._stop_requested = False
+        if value:
+            self._run_progress_message = "正在准备并检查资料…"
+            self._run_progress_current = self._run_progress_total = 0
+            self.runProgressChanged.emit()
         if value:
             try:
                 original = float(sys.getswitchinterval())
@@ -3796,6 +3827,10 @@ class AppController(QObject):
             function_name=invocation.function_name,
         )
         self._set_busy(True)
+        self._result_context = None
+        self._result_files = []
+        self._result_notices.clear()
+        self.lastResultChanged.emit()
         self._run_progress_visible = invocation.tool_id == "material_collector"
         self._run_progress_current = self._run_progress_total = 0
         self._run_progress_message = "正在准备项目资料，总量尚未确定"
@@ -3845,6 +3880,11 @@ class AppController(QObject):
             if not self._run_progress_flush_timer.isActive():
                 self._run_progress_flush_timer.start()
             return
+        if not self._stop_requested:
+            self._run_progress_message = message
+        self._run_progress_current = max(0, current)
+        self._run_progress_total = max(0, total)
+        self.runProgressChanged.emit()
         self._append_log(message, "info")
 
     @Slot()
@@ -3857,7 +3897,8 @@ class AppController(QObject):
         current, total, message = payload
         self._run_progress_current = max(0, current)
         self._run_progress_total = max(0, total)
-        self._run_progress_message = message
+        if not self._stop_requested:
+            self._run_progress_message = message
         self._run_progress_updated = time.monotonic()
         self._run_progress_wait = 0
         self.runProgressChanged.emit()
@@ -3871,10 +3912,13 @@ class AppController(QObject):
             self._run_progress_message = "全部处理完成，结果已登记保存。"
             self.runProgressChanged.emit()
         self._last_result_dir = Path(result_dir)
-        self.lastResultChanged.emit()
+        self._result_context = (self._state_key(), self._project_generation)
+        self._result_files = self._result_output_paths(self._spec.tool_id, payload, self._last_result_dir)
         self._last_run_by_key[self._state_key()] = (datetime.now().strftime("%H:%M"), True)
         self.specChanged.emit()
         warnings = list(payload.get("warnings", [])) if isinstance(payload, dict) else []
+        self._result_notices.set_items([{"text": str(warning)} for warning in warnings])
+        self.lastResultChanged.emit()
         mode_text = "独立进程" if isolated else "后台线程"
         self._append_log(f"处理完成，用时 {elapsed:.1f} 秒（{mode_text}）。", "success")
         completion_message = "结果已安全保存到当前项目。"
@@ -3885,6 +3929,7 @@ class AppController(QObject):
                 completion_message += "另有资料待核对，请打开结果中的《资料待确认.xlsx》。"
             self._append_log(completion_message, "warning" if payload.get("review_path") else "info")
         if warnings:
+            completion_message += f"\n另有 {len(warnings)} 条处理提醒/运行信息，可在结果提醒区查看全部。"
             self._append_log(f"共有 {len(warnings)} 条提醒。", "warning")
             for warning in warnings[:30]:
                 self._append_log(str(warning), "warning")
@@ -3979,8 +4024,56 @@ class AppController(QObject):
 
     @Slot()
     def openLastResult(self) -> None:
-        if self._last_result_dir is not None and self._last_result_dir.exists():
+        if self.canOpenLastResult and self._last_result_dir.exists():
             open_path(self._last_result_dir)
+
+    @staticmethod
+    def _result_output_paths(tool_id: str, payload, result_dir: Path) -> list[Path]:
+        """Use documented output fields only; never infer from source/input paths."""
+        if not isinstance(payload, dict):
+            return []
+        fields = {
+            "social_security": ("detail_output_file", "detail_output_files", "summary_output_file"),
+            "insurance_ledger": ("output_file", "roster_warning_file"),
+            "data_statistics": ("output_file",),
+            "salary_merge": ("output_file",),
+            "personnel_change_merge": ("output_file", "output_files", "roster_output_file"),
+            "roster_update": ("output_file",),
+            "archive_import": ("output_file",),
+            "archive_export": ("output_files",),
+            "material_collector": ("report_path", "review_path", "zip_path"),
+        }.get(tool_id, ())
+        values = []
+        for field in fields:
+            value = payload.get(field)
+            values.extend(value if isinstance(value, list) else [value])
+        if tool_id == "salary_split":
+            values.extend(item.get("file_path") for item in payload.get("outputs", []) if isinstance(item, dict))
+        result = []
+        for value in values:
+            if not isinstance(value, (str, Path)) or not str(value):
+                continue
+            path = Path(value)
+            try:
+                relative = path.relative_to(result_dir)
+            except ValueError:
+                continue
+            if relative.parts and ".." not in relative.parts and path not in result:
+                result.append(path)
+        return result
+
+    @Slot()
+    def openPrimaryResult(self) -> None:
+        if not self.canOpenPrimaryResult:
+            return
+        try:
+            path = self._result_files[0].resolve(strict=True)
+            path.relative_to(self._last_result_dir.resolve(strict=True))
+            if not path.is_file():
+                raise ValueError("结果文件已不存在，请打开结果目录查看。")
+            open_path(path)
+        except (OSError, ValueError) as exc:
+            self.notificationRequested.emit("无法打开结果", str(exc), "warning")
 
     @Slot()
     def openRunLog(self) -> None:

@@ -105,6 +105,43 @@ class QtControllerTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 AppController._validate_workspace_source({"root": root, "path": root / "资料" / "gone.xlsx"})
 
+    def test_result_links_use_only_declared_outputs_and_reminders_keep_all_rows(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report = root / "报表.xlsx"
+            payload = {"output_file": str(report), "input_path": str(root / "input.xlsx"),
+                       "warnings": ["运行信息 %d" % index for index in range(40)]}
+            controller.refreshWorkspace = lambda: None
+            controller._apply_run_success(payload, str(root), 1.0, False)
+            # Social security has no generic output_file contract.
+            self.assertFalse(controller.canOpenPrimaryResult)
+            self.assertEqual(controller.resultNoticeCount, 40)
+            self.assertEqual(AppController._result_output_paths("salary_merge", payload, root), [report])
+            self.assertEqual(AppController._result_output_paths("salary_merge", {"output_file": str(root / ".." / "old.xlsx")}, root), [])
+            multiple = {"output_files": [str(report), str(root / "另一份.xlsx")]}
+            self.assertEqual(len(AppController._result_output_paths("archive_export", multiple, root)), 2)
+            controller.selectTool("salary_split")
+            self.assertFalse(controller.canOpenLastResult)
+            self.assertEqual(controller.resultNoticeCount, 0)
+
+    def test_generic_phase_and_stop_feedback_use_existing_callbacks(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._run_coordinator.cancel = Mock()
+        controller._set_busy(True)
+        controller._apply_run_progress(2, 8, "读取资料")
+        self.assertEqual(controller.runProgressMessage, "读取资料")
+        self.assertEqual(controller.runProgressTotal, 8)
+        controller.runOrCancel()
+        controller.runOrCancel()
+        controller._run_coordinator.cancel.assert_called_once()
+        self.assertEqual(controller.runButtonText, "正在安全停止…")
+        controller._apply_run_progress(3, 8, "迟到的进度")
+        self.assertIn("停止", controller.runProgressMessage)
+        controller._set_busy(False)
+
     def test_drop_preview_uses_local_urls_without_disk_access(self) -> None:
         from hr_toolkit.gui_qt.compat import QUrl
         controller = self.controller()

@@ -1107,7 +1107,7 @@ ApplicationWindow {
                             AppButton {
                                 objectName: "runButton"
                                 text: controller.runButtonText
-                                variant: "primary"
+                                variant: controller.busy ? "secondary" : "primary"
                                 // Match the Tk workflow: the primary action remains
                                 // clickable before a project is open, then the
                                 // controller explains the required next step.  A
@@ -1119,6 +1119,7 @@ ApplicationWindow {
                                 onClicked: controller.runOrCancel()
                             }
                             AppButton { text: "打开结果目录"; enabled: controller.canOpenLastResult; implicitWidth: 138; implicitHeight: 40; onClicked: controller.openLastResult() }
+                            AppButton { text: "打开报表"; visible: controller.canOpenPrimaryResult; enabled: !controller.busy; onClicked: controller.openPrimaryResult() }
                             AppButton { objectName: "templateNameSettings"; text: "模板适配"; visible: controller.supportsTemplateRules; enabled: !controller.busy && !controller.workspaceBusy; onClicked: controller.reviewTemplateRules() }
                             Text { visible: !!controller.lastRunText; text: controller.lastRunText; color: root.textMuted; font.pixelSize: 12 }
                             Item { Layout.fillWidth: true }
@@ -1129,6 +1130,48 @@ ApplicationWindow {
                             Layout.fillWidth: true; wrapMode: Text.Wrap
                             text: controller.updateBlockMessage
                             color: root.primary; font.pixelSize: 12
+                        }
+
+                        Text {
+                            objectName: "taskStageText"
+                            Layout.fillWidth: true
+                            visible: controller.busy && controller.currentTool !== "material_collector"
+                            text: controller.runProgressMessage + (controller.runProgressTotal > 0
+                                ? "（当前阶段 " + controller.runProgressCurrent + "/" + controller.runProgressTotal + "）" : "")
+                            textFormat: Text.PlainText; wrapMode: Text.Wrap
+                            color: root.primary; font.pixelSize: 13
+                        }
+
+                        Card {
+                            objectName: "resultNoticesCard"
+                            visible: controller.resultNoticeCount > 0
+                            Layout.fillWidth: true; Layout.preferredHeight: 176
+                            ColumnLayout {
+                                anchors.fill: parent; anchors.margins: 14
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { text: "处理完成 · " + controller.resultNoticeCount + " 条提醒/运行信息"; color: root.textMain; font.pixelSize: 13 }
+                                    Item { Layout.fillWidth: true }
+                                    AppButton { text: "复制全部"; variant: "link"; onClicked: controller.copyResultNotices() }
+                                }
+                                Text { Layout.fillWidth: true; text: "请按原文核对；条数不代表异常人数。"; color: root.textMuted; font.pixelSize: 11 }
+                                ListView {
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    clip: true; reuseItems: true; cacheBuffer: 100
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    model: controller.resultNoticeModel
+                                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                                    delegate: Text {
+                                        width: ListView.view.width; height: implicitHeight + 6
+                                        text: model.text; textFormat: Text.PlainText
+                                        wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
+                                        color: root.textMain; font.pixelSize: 12
+                                        ToolTip.visible: noticeHover.hovered && truncated
+                                        ToolTip.text: text
+                                        HoverHandler { id: noticeHover }
+                                    }
+                                }
+                            }
                         }
 
                         MaterialRunProgress {
