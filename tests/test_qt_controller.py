@@ -47,6 +47,42 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_update_byte_progress_does_not_refresh_tool_or_result_state(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        events = []
+        controller.updateProgressChanged.connect(lambda: events.append("progress"))
+        controller.updateChanged.connect(lambda: events.append("state"))
+        controller.selectionStateChanged.connect(lambda: events.append("selection"))
+        controller.lastResultChanged.connect(lambda: events.append("result"))
+        controller._update_busy = True
+        controller._apply_update_phase("downloading")
+        self.assertIn("progress", events)
+        self.assertIn("selection", events)
+        self.assertTrue(controller.updateBlocksTools)
+        events.clear()
+        controller._apply_update_progress(25, 100)
+        self.assertEqual(events, ["progress"])
+        self.assertEqual(controller.updateProgress, 0.25)
+        self.assertTrue(controller.updateBlocksTools)
+        controller._apply_update_progress(25, 100)
+        self.assertEqual(events, ["progress"])
+        controller._apply_update_progress(100, 100)
+        self.assertEqual(controller.updateProgress, 1.0)
+        events.clear()
+        controller._apply_update_phase("verifying")
+        self.assertIn("progress", events)
+        self.assertIn("state", events)
+        self.assertEqual(controller.updateProgress, -1.0)
+        self.assertTrue(controller.updateBlocksTools)
+        events.clear()
+        controller._apply_update_progress(50, 100)
+        self.assertEqual(events, [])
+        controller._apply_update_result("download-cancelled", None)
+        self.assertFalse(controller.updateBlocksTools)
+        self.assertIn("selection", events)
+        self.assertIn("progress", events)
+
     def test_notice_classification_is_conservative_and_filters_preserve_all_rows(self) -> None:
         category = AppController._notice_category
         info = "OCR 智能索引缓存：命中 12 次，实时识别 3 次，缓存文件：/tmp/cache.json"

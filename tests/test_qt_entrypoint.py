@@ -367,6 +367,20 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn('drag.getDataAsString("application/x-hr-toolkit-workspace")', target)
         self.assertIn("drag.urls, workspaceToken", target)
 
+    def test_update_waves_pause_during_native_window_movement(self) -> None:
+        qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml"
+        source = qml.read_text(encoding="utf-8")
+        self.assertIn("onXChanged: noteWindowMotion()", source)
+        self.assertIn("onYChanged: noteWindowMotion()", source)
+        self.assertIn("onTriggered: root.windowMoving = false", source)
+        wave = source.split("id: updateFill", 1)[1].split("contentItem: RowLayout", 1)[0]
+        self.assertIn("paintSuspended: root.windowMoving", wave)
+        self.assertIn("wavesRunning: !paintSuspended", wave)
+        self.assertIn("onPaintSuspendedChanged: if (!paintSuspended) requestPaint()", wave)
+        self.assertIn("if (paintSuspended) return", wave)
+        self.assertIn("interval: 50", wave)
+        self.assertNotIn("Behavior on level", wave)
+
     def test_remaining_ux_controls_preserve_explicit_confirmation(self) -> None:
         qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
         source = (qml / "Main.qml").read_text(encoding="utf-8")

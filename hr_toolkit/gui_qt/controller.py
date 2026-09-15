@@ -129,6 +129,7 @@ class AppController(QObject):
     trashChanged = Signal()
     materialChanged = Signal()
     updateChanged = Signal()
+    updateProgressChanged = Signal()
     updatePromptRequested = Signal("QVariantMap", arguments=["prompt"])
     releaseNotesRequested = Signal("QVariantMap", arguments=["details"])
     _updatePhaseIncoming = Signal(str)
@@ -341,6 +342,9 @@ class AppController(QObject):
         self._updateResult.connect(self._apply_update_result)
         self._updateProgressIncoming.connect(self._apply_update_progress)
         self._updatePhaseIncoming.connect(self._apply_update_phase)
+        # Phase changes also refresh the footer; byte progress must not fan
+        # out into selection checks and result models across the whole UI.
+        self.updateChanged.connect(self.updateProgressChanged.emit)
         self._inputItemsReady.connect(self._apply_input_items)
         self._selectionReady.connect(self._apply_selection)
         self._dropPreviewResult.connect(self._apply_drop_preview)
@@ -642,11 +646,11 @@ class AppController(QObject):
         info = self._ready_update or self._pending_update
         return info.version if info else ""
 
-    @Property(str, notify=updateChanged)
+    @Property(str, notify=updateProgressChanged)
     def updateStatus(self) -> str:
         return self._update_status
 
-    @Property(float, notify=updateChanged)
+    @Property(float, notify=updateProgressChanged)
     def updateProgress(self) -> float:
         return self._update_progress
 
@@ -3215,7 +3219,7 @@ class AppController(QObject):
             def progress(downloaded: int, total: int) -> None:
                 nonlocal last_emit
                 now = time.monotonic()
-                if now - last_emit >= 0.1 or (total > 0 and downloaded >= total):
+                if now - last_emit >= 0.25 or (total > 0 and downloaded >= total):
                     last_emit = now
                     self._updateProgressIncoming.emit(int(downloaded), int(total))
 
@@ -3237,8 +3241,9 @@ class AppController(QObject):
 
     @Slot(int, int)
     def _apply_update_progress(self, downloaded: int, total: int) -> None:
-        if self._update_phase != "downloading":
+        if self._closed or self._shutdown_requested or self._update_phase != "downloading":
             return
+        previous = (self._update_progress, self._update_status)
         megabytes = downloaded / 1024 / 1024
         if total > 0:
             self._update_progress = min(1.0, downloaded / total)
@@ -3246,7 +3251,8 @@ class AppController(QObject):
         else:
             self._update_progress = -1.0
             self._update_status = f"已下载 {megabytes:.1f} MB"
-        self.updateChanged.emit()
+        if previous != (self._update_progress, self._update_status):
+            self.updateProgressChanged.emit()
 
     @Slot(str)
     def _apply_update_phase(self, phase: str) -> None:

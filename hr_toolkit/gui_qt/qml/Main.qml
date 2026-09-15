@@ -52,6 +52,24 @@ ApplicationWindow {
     readonly property bool compactSidebar: false
     property bool wideContentInsets: false
 
+    // Native window movement needs no new content frame. Suspend only the
+    // decorative download water while moving; never pause the downloader.
+    property bool windowMoving: false
+    function noteWindowMotion() {
+        if (controller.updateBusy && controller.updatePhase !== "checking") {
+            windowMoving = true
+            windowMoveSettle.restart()
+        }
+    }
+    onXChanged: noteWindowMotion()
+    onYChanged: noteWindowMotion()
+    Timer {
+        id: windowMoveSettle
+        interval: 180
+        repeat: false
+        onTriggered: root.windowMoving = false
+    }
+
     // Keep breakpoint-only geometry stable during a live native resize.  The
     // window and its main content still resize through Qt on every frame; only
     // expensive responsive-mode changes and modal-dialog geometry wait until
@@ -463,31 +481,34 @@ ApplicationWindow {
                         Canvas {
                             id: updateFill
                             readonly property real fraction: controller.updateReady ? 0 : controller.updatePhase === "verifying" ? 1 : Math.max(0, Math.min(1, controller.updateProgress))
-                            property real level: fraction
+                            readonly property real level: fraction
                             property real wavePhase: 0
-                            readonly property bool wavesRunning: visible && root.visible
-                                && root.visibility !== Window.Minimized && Qt.application.state === Qt.ApplicationActive
+                            readonly property bool paintSuspended: root.windowMoving || !visible || !root.visible
+                                || root.visibility === Window.Minimized || Qt.application.state !== Qt.ApplicationActive
+                            readonly property bool wavesRunning: !paintSuspended
                                 && controller.updateBusy && controller.updatePhase === "downloading"
                                 && level > 0 && level < 1
                             anchors.fill: parent; anchors.margins: 1
                             visible: !controller.updateReady
                             renderTarget: Canvas.Image
                             renderStrategy: Canvas.Cooperative
-                            Behavior on level { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
-                            onLevelChanged: requestPaint()
-                            onWidthChanged: requestPaint()
-                            onHeightChanged: requestPaint()
-                            onVisibleChanged: if (visible) requestPaint()
+                            // Do not stack a per-frame level animation on top
+                            // of the wave timer. Repaint latest progress on resume.
+                            onLevelChanged: if (!paintSuspended) requestPaint()
+                            onWidthChanged: if (!paintSuspended) requestPaint()
+                            onHeightChanged: if (!paintSuspended) requestPaint()
+                            onPaintSuspendedChanged: if (!paintSuspended) requestPaint()
                             Timer {
-                                interval: 33
+                                interval: 50
                                 repeat: true
                                 running: updateFill.wavesRunning
                                 onTriggered: {
-                                    updateFill.wavePhase = (updateFill.wavePhase + 0.045) % (Math.PI * 2)
+                                    updateFill.wavePhase = (updateFill.wavePhase + 0.068) % (Math.PI * 2)
                                     updateFill.requestPaint()
                                 }
                             }
                             onPaint: {
+                                if (paintSuspended) return
                                 var ctx = getContext("2d")
                                 ctx.clearRect(0, 0, width, height)
                                 if (width <= 0 || height <= 0 || level <= 0)
