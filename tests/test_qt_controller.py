@@ -47,65 +47,6 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
-    def test_notice_filter_reuse_never_keeps_rows_from_previous_result(self) -> None:
-        controller = self.controller()
-        self.addCleanup(controller.close)
-        controller.selectTool("material_collector")
-        controller.refreshWorkspace = lambda: None
-        old = ["OCR 缓存写入失败：旧文件", "照片人员归属冲突，未提取：a.jpg"]
-        controller._apply_run_success({"warnings": old}, tempfile.gettempdir(), 1, False)
-        controller.setResultNoticeFilter("运行提醒")
-        resets = []
-        controller.resultNoticeModel.modelReset.connect(lambda: resets.append(True))
-        controller.setResultNoticeFilter("运行提醒")
-        self.assertEqual(resets, [])
-        controller.setResultNoticeFilter("全部")
-        self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], old)
-        controller.setResultNoticeFilter("运行提醒")
-        self.assertEqual(controller.resultNoticeModel.item_at(0)["text"], old[0])
-
-        new = ["OCR 缓存写入失败：新文件"]
-        controller._apply_run_success({"warnings": new}, tempfile.gettempdir(), 1, False)
-        controller.setResultNoticeFilter("运行提醒")
-        self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], new)
-        controller._apply_run_success({"warnings": []}, tempfile.gettempdir(), 1, False)
-        controller.setResultNoticeFilter("运行提醒")
-        self.assertEqual(controller.resultNoticeModel.items(), [])
-
-
-    def test_workspace_metadata_refresh_preserves_rows_and_structural_reset(self) -> None:
-        controller = self.controller()
-        self.addCleanup(controller.close)
-        controller._workspace_generation = 3
-        rows = [{"path": str(Path.cwd() / str(i)), "name": str(i), "isDir": False,
-                 "depth": 0, "expanded": False, "hasChildren": False, "detail": "old"}
-                for i in range(40)]
-        controller._apply_workspace_items(3, rows)
-        controller.selectWorkspaceRow(8)
-        resets, changes = [], []
-        controller.workspaceModel.modelReset.connect(lambda: resets.append(True))
-        controller.workspaceModel.dataChanged.connect(lambda first, last, roles: changes.append((first.row(), last.row())))
-        updated = [dict(row, detail="new") if i == 8 else dict(row) for i, row in enumerate(rows)]
-        controller._apply_workspace_items(3, updated)
-        self.assertEqual(resets, [])
-        self.assertEqual(changes, [(8, 8)])
-        self.assertEqual(controller.workspaceSelectedDetail, "new")
-        self.assertEqual(controller.workspaceModel.items(), updated)
-        controller._apply_workspace_items(3, list(updated))
-        controller._apply_workspace_items(2, [])
-        self.assertEqual(changes, [(8, 8)])
-        self.assertEqual(resets, [])
-
-        for replacement in (list(reversed(updated)),
-                            [dict(row, detail="all changed") for row in reversed(updated)],
-                            updated[:-1], []):
-            previous_resets = len(resets)
-            controller._apply_workspace_items(3, replacement)
-            self.assertEqual(len(resets), previous_resets + 1)
-            self.assertEqual(controller.workspaceModel.items(), replacement)
-        self.assertFalse(controller.workspaceSelectionAvailable)
-
-
     def test_update_byte_progress_does_not_refresh_tool_or_result_state(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)
@@ -174,6 +115,55 @@ class QtControllerTests(unittest.TestCase):
         controller.normalizeDateField("week_start", "20260230")
         self.assertEqual(controller._form_states[controller._state_key()]["week_start"], "20260230")
         self.assertTrue(controller.selectionFeedback["week_range"]["error"])
+
+    def test_notice_filter_reuse_never_keeps_rows_from_previous_result(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("material_collector")
+        controller.refreshWorkspace = lambda: None
+        old = ["OCR 缓存写入失败：旧文件", "照片人员归属冲突，未提取：a.jpg"]
+        controller._apply_run_success({"warnings": old}, tempfile.gettempdir(), 1, False)
+        controller.setResultNoticeFilter("运行提醒")
+        resets = []
+        controller.resultNoticeModel.modelReset.connect(lambda: resets.append(True))
+        controller.setResultNoticeFilter("运行提醒")
+        self.assertEqual(resets, [])
+        controller.setResultNoticeFilter("全部")
+        self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], old)
+        controller.setResultNoticeFilter("运行提醒")
+        self.assertEqual(controller.resultNoticeModel.item_at(0)["text"], old[0])
+
+        new = ["OCR 缓存写入失败：新文件"]
+        controller._apply_run_success({"warnings": new}, tempfile.gettempdir(), 1, False)
+        controller.setResultNoticeFilter("运行提醒")
+        self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], new)
+        controller._apply_run_success({"warnings": []}, tempfile.gettempdir(), 1, False)
+        controller.setResultNoticeFilter("运行提醒")
+        self.assertEqual(controller.resultNoticeModel.items(), [])
+
+    def test_unchanged_preferences_skip_write_but_changed_save_reports_errors(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "workspace-ui.json"
+            with patch.object(controller, "_settings_path", return_value=settings):
+                self.assertTrue(AppController._save_workspace_preferences(controller))
+                saved = json.loads(settings.read_text(encoding="utf-8"))
+                saved["external_field"] = {"keep": 42}
+                settings.write_text(json.dumps(saved), encoding="utf-8")
+                with patch("hr_toolkit.gui_qt.controller.os.replace", wraps=os.replace) as replace:
+                    self.assertTrue(AppController._save_workspace_preferences(controller))
+                    replace.assert_not_called()
+                    controller._release_notes_seen_version = "999.1"
+                    self.assertTrue(AppController._save_workspace_preferences(controller))
+                    replace.assert_called_once()
+                saved = json.loads(settings.read_text(encoding="utf-8"))
+                self.assertEqual(saved["external_field"], {"keep": 42})
+                self.assertEqual(saved["release_notes_seen_version"], "999.1")
+                controller._release_notes_seen_version = "999.2"
+                with patch("hr_toolkit.gui_qt.controller.os.replace", side_effect=OSError("read only")), patch("hr_toolkit.gui_qt.controller.runlog.log_exception"):
+                    self.assertFalse(AppController._save_workspace_preferences(controller))
+                self.assertEqual(json.loads(settings.read_text(encoding="utf-8")), saved)
 
     def test_selecting_preset_name_does_not_apply_it(self) -> None:
         controller = self.controller()
@@ -667,6 +657,38 @@ class QtControllerTests(unittest.TestCase):
         controller._apply_workspace_items(2, [])
         self.assertFalse(controller.workspaceSelectionAvailable)
         controller.close()
+
+    def test_workspace_metadata_refresh_preserves_rows_and_structural_reset(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._workspace_generation = 3
+        rows = [{"path": str(Path.cwd() / str(i)), "name": str(i), "isDir": False,
+                 "depth": 0, "expanded": False, "hasChildren": False, "detail": "old"}
+                for i in range(40)]
+        controller._apply_workspace_items(3, rows)
+        controller.selectWorkspaceRow(8)
+        resets, changes = [], []
+        controller.workspaceModel.modelReset.connect(lambda: resets.append(True))
+        controller.workspaceModel.dataChanged.connect(lambda first, last, roles: changes.append((first.row(), last.row())))
+        updated = [dict(row, detail="new") if i == 8 else dict(row) for i, row in enumerate(rows)]
+        controller._apply_workspace_items(3, updated)
+        self.assertEqual(resets, [])
+        self.assertEqual(changes, [(8, 8)])
+        self.assertEqual(controller.workspaceSelectedDetail, "new")
+        self.assertEqual(controller.workspaceModel.items(), updated)
+        controller._apply_workspace_items(3, list(updated))
+        controller._apply_workspace_items(2, [])
+        self.assertEqual(changes, [(8, 8)])
+        self.assertEqual(resets, [])
+
+        for replacement in (list(reversed(updated)),
+                            [dict(row, detail="all changed") for row in reversed(updated)],
+                            updated[:-1], []):
+            previous_resets = len(resets)
+            controller._apply_workspace_items(3, replacement)
+            self.assertEqual(len(resets), previous_resets + 1)
+            self.assertEqual(controller.workspaceModel.items(), replacement)
+        self.assertFalse(controller.workspaceSelectionAvailable)
 
     def test_workspace_folder_toggle_updates_rows_without_model_reset(self) -> None:
         controller = self.controller()

@@ -1932,6 +1932,7 @@ class AppController(QObject):
             runlog.log_exception("读取项目界面设置位置失败", exc)
             return False
         payload: dict[str, Any] = {}
+        existing = None
         try:
             if path.is_file():
                 existing = json.loads(path.read_text(encoding="utf-8"))
@@ -1951,6 +1952,10 @@ class AppController(QObject):
                 "release_notes_seen_version": self._release_notes_seen_version,
             }
         )
+        # Re-read on every call to preserve external settings changes, but do
+        # not serialize and replace an already identical on-disk document.
+        if isinstance(existing, dict) and payload == existing:
+            return True
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             temp = path.with_suffix(".tmp")
