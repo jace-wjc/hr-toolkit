@@ -13,12 +13,12 @@ from hr_toolkit.gui_qt.compat import QApplication, QObject, Property, Slot, QUrl
 from hr_toolkit.gui_qt.controller import AppController
 if QT_MAJOR == 6:
     from PySide6.QtCore import QEventLoop, QPoint, QPointF, QTimer
-    from PySide6.QtQml import QQmlApplicationEngine
+    from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     from PySide6.QtQuick import QQuickWindow
     from PySide6.QtTest import QTest
 else:
     from PySide2.QtCore import QEventLoop, QPoint, QPointF, QTimer
-    from PySide2.QtQml import QQmlApplicationEngine
+    from PySide2.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     from PySide2.QtQuick import QQuickWindow
     from PySide2.QtTest import QTest
 
@@ -277,6 +277,77 @@ def main():
             for width in (760, 1400):
                 root.setWidth(width); sample()
                 check_controls()
+    # Release on Windows Qt 5 exposed a log delegate height loop. Exercise
+    # variable-height rows during rapid resize and reuse, not only static logs.
+    controller.selectTool("data_statistics")
+    log_list = root.findChild(QObject, "logList")
+    log_entries = [
+        {"time": "12:00:00" if i % 2 else "12:00", "level": ("muted", "info", "warning", "error")[i % 4],
+         "text": ("短日志", "需要随宽度换行的长日志。" * 20,
+                  "explicit\nline break", "long_unbroken_path_" * 30)[i % 4]}
+        for i in range(120)
+    ]
+    controller._log_model.set_items(log_entries)
+    sample(50)
+    main_flickable = scroll.property("contentItem")
+    main_flickable.setProperty("contentY", max(0, main_flickable.property("contentHeight") - main_flickable.height()))
+    sample(50)
+
+    def check_log_rows():
+        items = nodes(log_list)
+        visual_refs.extend(items)
+        # Pooled delegates can retain visible=True and stale coordinates on
+        # Qt 6.11. Query the view's active index mapping, not its child pool.
+        # Dynamic PySide calls discard this invokable's QQuickItem* return;
+        # a QML expression preserves it on both supported Qt bindings.
+        expression = QQmlExpression(QQmlEngine.contextForObject(log_list), log_list, "")
+        active_rows = []
+        for index in range(log_list.property("count")):
+            expression.setExpression("itemAtIndex(%d)" % index)
+            value, undefined = expression.evaluate()
+            assert not expression.hasError() and not undefined
+            active_rows.append(value)
+        rows = sorted((item for item in active_rows if item is not None), key=lambda item: item.y())
+        visual_refs.extend(rows)
+        assert rows, ("No instantiated log rows", log_list.property("count"), log_list.property("contentY"))
+        previous_bottom = None
+        for row in rows:
+            text = next(item for item in row.childItems() if item.objectName() == "logText")
+            assert abs(row.width() - log_list.width()) < 1
+            assert text.width() > 0 and abs(text.x() + text.width() - row.width()) < 1
+            assert abs(row.height() - max(25, text.property("implicitHeight") + 4)) < 1
+            assert text.y() >= 0 and text.y() + text.height() <= row.height() + 1
+            if previous_bottom is not None:
+                assert row.y() >= previous_bottom - 1, ("Wrapped log rows overlap", root.width(),
+                    log_list.property("contentY"), previous_bottom,
+                    [(r.y(), r.height()) for r in rows])
+            previous_bottom = row.y() + row.height()
+            assert text.property("readOnly") and text.property("selectByMouse")
+            assert text.property("selectByKeyboard") and text.property("persistentSelection")
+        return rows
+
+    for widths in (range(1400, 759, -40), range(760, 1401, 40)):
+        for width in widths:
+            root.setWidth(width)
+            sample(20)
+        for position in ("start", "end"):
+            if position == "start":
+                log_list.positionViewAtBeginning()
+            else:
+                log_list.positionViewAtEnd()
+            sample(50)
+            check_log_rows()
+    # Reset/repopulate and append while at the tail exercise recycled text.
+    for entries in (log_entries[:1], log_entries):
+        controller._log_model.set_items(entries)
+        sample(50)
+        controller._log_model.append_batch([{"time": "12:34:56", "text": "新增日志\n第二行", "level": "success"}])
+        sample(50)
+        rows = check_log_rows()
+        text = next(item for item in rows[-1].childItems() if item.objectName() == "logText")
+        text.selectAll()
+        assert text.property("selectedText") == text.property("text")
+        text.deselect()
     sample(30)
     assert not errors, warning_contexts or errors
     (output / "geometry.json").write_text(json.dumps(frames, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -35,3 +35,22 @@
 原始本机日志：`/tmp/hr-ci-verified-qt515.log`、`/tmp/hr-ci-verified-qt66.log`、`/tmp/hr-ci-verified-qt611.log`；高 DPI 探针日志为 `/tmp/hr-ci-scale-qt515-pinned.log`、`/tmp/hr-ci-scale-qt66.log`。临时日志可能被系统清理。
 
 验证边界：上述均为 macOS 本机检查，不能代替 Windows 原生平台或 Python 3.8 运行验证；未运行全仓测试、全量构建、安装包、发布或远程 CI。没有声称后续 CI 必然不会失败。
+
+## 0.9.8 发布中的日志行循环补修
+
+失败运行：[Release 34951052536](https://github.com/jace-wjc/hr-toolkit/actions/runs/34951052536)，提交 `8be3aa8`。Win10/11 EXE 任务通过；Win7 任务在 `Run Python 3.8-compatible core tests` 阶段失败，尚未进入安装包生成。332 项测试中唯一失败的是工作区布局探针：`data_statistics`、1400×820，`Main.qml:1311` 的日志行 RowLayout 报 `height` 绑定循环。此前普通 CI 通过并未覆盖这次 Windows 发布运行触发的警告。
+
+### 修复范围
+
+- 日志行原先一边让 RowLayout 分配文字宽度，一边以文字换行后的隐式高度绑定 RowLayout 自身高度。这条尺寸反馈路径在前一轮外层布局修复中遗漏。
+- 日志行改为普通 Item：列表宽度决定行宽，圆点和时间的自然宽度决定正文起点，正文换行高度决定行高。消除布局容器参与的高度回算；不修改日志内容、跟尾、虚拟列表复用、颜色字体和选择复制菜单。
+- 维持原来的 7px 间距、最小行高 25px、正文上下共 4px 留白，以及布局原有的整数尺寸取整。Qt 5 对照短日志、中文长日志、显式换行在 760/1400/1600px 下的 9 个样本，修复前后行高及各文字项坐标、宽高一致。
+- 原探针新增 120 条混合日志、连续缩放、列表首尾切换、模型重置和追加、只读与选择检查；继续将所有 QML 警告判为失败。
+- Qt 6.11 的复用池对象可能仍保留 `visible=True` 和旧坐标；探针按 `ListView.itemAtIndex()` 获取当前有效行，检查有效行宽度、换行高度、边界和互不重叠，避免把未参与当前布局的池中对象算进去。
+
+### 补修验证结果
+
+- Qt 5.15.2 / Python 3.9.6、Qt 6.6.3 / Python 3.12.14、Qt 6.11.2 / Python 3.13.13：分别运行 `tests.test_qt_entrypoint` 的 36 项相关检查，均通过；包含上述新增日志场景，耗时分别约 21.4/19.9/20.2 秒，未提高原探针的 45 秒超时。
+- 修改的 Python 探针通过语法编译；`git diff --check` 通过。
+- 结果日志：`/tmp/hr-log-fix-entry-qt515.log`、`/tmp/hr-log-fix-entry-qt66.log`、`/tmp/hr-log-fix-entry-qt611.log`；几何对照：`/tmp/hr-log-row-before.json`、`/tmp/hr-log-row-after-rounded.json`。
+- 原始循环的直接证据来自 Windows 发布日志；本机短样本未复现该警告。以上验证均在 macOS 完成，不能据此声称 Windows 原生或 Win7 安装包已通过。未运行全仓测试、全量构建、打包或远程重跑；发布任务仍需在包含本修复的提交上复验。

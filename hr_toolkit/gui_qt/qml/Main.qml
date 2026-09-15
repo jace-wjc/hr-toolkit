@@ -1308,16 +1308,35 @@ ApplicationWindow {
                                     spacing: 3
                                     onCountChanged: positionViewAtEnd()
                                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                                    delegate: RowLayout {
+                                    delegate: Item {
+                                        objectName: "logRow"
                                         width: logList.width
                                         height: Math.max(25, logText.implicitHeight + 4)
-                                        spacing: 7
-                                        Text { text: level === "muted" ? "" : "●"; color: level === "error" ? "#C83A3A" : level === "warning" ? "#C28112" : level === "success" ? "#1D8E68" : root.primary; font.pixelSize: 9 }
-                                        Text { text: time; color: "#9A9D99"; font.pixelSize: 10; verticalAlignment: Text.AlignTop }
+                                        // Width flows from the list to the text; text height
+                                        // flows back only to this row. A RowLayout here would
+                                        // re-enter height calculation while assigning widths.
+                                        Text {
+                                            id: logBullet
+                                            width: Math.ceil(implicitWidth)
+                                            y: Math.round((parent.height - height) / 2)
+                                            text: level === "muted" ? "" : "●"
+                                            color: level === "error" ? "#C83A3A" : level === "warning" ? "#C28112" : level === "success" ? "#1D8E68" : root.primary
+                                            font.pixelSize: 9
+                                        }
+                                        Text {
+                                            id: logTime
+                                            x: logBullet.width + 7
+                                            width: Math.ceil(implicitWidth)
+                                            y: Math.round((parent.height - height) / 2)
+                                            text: time; color: "#9A9D99"; font.pixelSize: 10
+                                            verticalAlignment: Text.AlignTop
+                                        }
                                         TextEdit {
                                             id: logText
                                             objectName: "logText"
-                                            Layout.fillWidth: true
+                                            x: logTime.x + logTime.width + 7
+                                            y: Math.round((parent.height - height) / 2)
+                                            width: Math.max(0, parent.width - x)
                                             text: model.text
                                             color: level === "muted" ? root.textMuted : root.textMain
                                             font.pixelSize: 12
