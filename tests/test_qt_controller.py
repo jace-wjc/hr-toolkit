@@ -47,6 +47,39 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_workspace_metadata_refresh_preserves_rows_and_structural_reset(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._workspace_generation = 3
+        rows = [{"path": str(Path.cwd() / str(i)), "name": str(i), "isDir": False,
+                 "depth": 0, "expanded": False, "hasChildren": False, "detail": "old"}
+                for i in range(40)]
+        controller._apply_workspace_items(3, rows)
+        controller.selectWorkspaceRow(8)
+        resets, changes = [], []
+        controller.workspaceModel.modelReset.connect(lambda: resets.append(True))
+        controller.workspaceModel.dataChanged.connect(lambda first, last, roles: changes.append((first.row(), last.row())))
+        updated = [dict(row, detail="new") if i == 8 else dict(row) for i, row in enumerate(rows)]
+        controller._apply_workspace_items(3, updated)
+        self.assertEqual(resets, [])
+        self.assertEqual(changes, [(8, 8)])
+        self.assertEqual(controller.workspaceSelectedDetail, "new")
+        self.assertEqual(controller.workspaceModel.items(), updated)
+        controller._apply_workspace_items(3, list(updated))
+        controller._apply_workspace_items(2, [])
+        self.assertEqual(changes, [(8, 8)])
+        self.assertEqual(resets, [])
+
+        for replacement in (list(reversed(updated)),
+                            [dict(row, detail="all changed") for row in reversed(updated)],
+                            updated[:-1], []):
+            previous_resets = len(resets)
+            controller._apply_workspace_items(3, replacement)
+            self.assertEqual(len(resets), previous_resets + 1)
+            self.assertEqual(controller.workspaceModel.items(), replacement)
+        self.assertFalse(controller.workspaceSelectionAvailable)
+
+
     def test_update_byte_progress_does_not_refresh_tool_or_result_state(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

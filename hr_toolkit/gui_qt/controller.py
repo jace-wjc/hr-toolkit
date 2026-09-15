@@ -2164,10 +2164,29 @@ class AppController(QObject):
         if generation != self._workspace_generation or self._closed:
             return
         next_items = list(items)
-        changed = next_items != self._workspace_items
+        previous_items = self._workspace_items
+        changed = next_items != previous_items
         self._workspace_items = next_items
         if changed:
-            self._workspace_model.set_items(self._workspace_items)
+            # Keep delegates and their viewport positions for a small metadata
+            # refresh with identical row identities. Structural changes and
+            # large batches retain the existing reset behavior.
+            updates = [] if len(next_items) == len(previous_items) else None
+            if updates is not None:
+                for row, (before, after) in enumerate(zip(previous_items, next_items)):
+                    if before.get("path") != after.get("path"):
+                        updates = None
+                        break
+                    if before != after:
+                        updates.append((row, after))
+                        if len(updates) > 32:
+                            updates = None
+                            break
+            if updates is None:
+                self._workspace_model.set_items(self._workspace_items)
+            else:
+                for row, item in updates:
+                    self._workspace_model.update_at(row, item)
         selected_text = str(self._workspace_selected_path or "")
         self._workspace_selected_item = next(
             (
