@@ -13,7 +13,8 @@ import sys
 from typing import Callable
 
 
-WINDOW_BACKGROUND_RGB = (0xF7, 0xF5, 0xF1)
+# Match Main.qml's ApplicationWindow clear color for newly exposed pixels.
+WINDOW_BACKGROUND_RGB = (0xFC, 0xFC, 0xFB)
 
 
 def _windows_colorref(red: int, green: int, blue: int) -> int:
