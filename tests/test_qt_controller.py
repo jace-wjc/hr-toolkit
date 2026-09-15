@@ -47,6 +47,49 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_notice_classification_is_conservative_and_filters_preserve_all_rows(self) -> None:
+        category = AppController._notice_category
+        info = "OCR 智能索引缓存：命中 12 次，实时识别 3 次，缓存文件：/tmp/cache.json"
+        self.assertEqual(category("material_collector", info), "运行信息")
+        self.assertEqual(category("material_collector", "OCR 缓存写入失败：只读"), "运行提醒")
+        self.assertEqual(category("material_collector", "照片人员归属冲突，未提取：a.jpg"), "业务核对")
+        self.assertEqual(category("material_collector", info + "\n但是识别失败"), "其他提醒")
+        self.assertEqual(category("salary_merge", info), "其他提醒")
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("material_collector")
+        messages = [info, "OCR 缓存写入失败：只读", "照片人员归属冲突，未提取：a.jpg", "未知提醒"]
+        controller.refreshWorkspace = lambda: None
+        controller._apply_run_success({"warnings": messages}, tempfile.gettempdir(), 1, False)
+        controller.setResultNoticeFilter("运行信息")
+        self.assertEqual(controller.resultNoticeCount, 4)
+        self.assertEqual(controller.resultNoticeModel.rowCount(), 1)
+        self.assertEqual([row["text"] for row in controller._result_notice_rows], messages)
+        controller.setResultNoticeFilter("全部")
+        self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], messages)
+
+    def test_date_editing_normalizes_valid_text_without_replacing_invalid_text(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("data_statistics")
+        controller.setFieldValue("week_start", "20260915")
+        controller.normalizeDateField("week_start", "20260915")
+        self.assertEqual(controller._form_states[controller._state_key()]["week_start"], "2026-09-15")
+        controller.setFieldValue("week_start", "20260230")
+        controller.normalizeDateField("week_start", "20260230")
+        self.assertEqual(controller._form_states[controller._state_key()]["week_start"], "20260230")
+        self.assertTrue(controller.selectionFeedback["week_range"]["error"])
+
+    def test_selecting_preset_name_does_not_apply_it(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("material_collector")
+        before = dict(controller._form_states[controller._state_key()])
+        name = controller.materialPresets[0]
+        self.assertFalse(controller.isCustomMaterialPreset(name))
+        controller.setMaterialPresetName(name)
+        self.assertEqual(controller._form_states[controller._state_key()], before)
+
     def test_workspace_transfer_captures_path_and_rejects_changed_context(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

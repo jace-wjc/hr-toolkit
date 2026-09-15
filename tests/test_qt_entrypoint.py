@@ -367,6 +367,25 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn('drag.getDataAsString("application/x-hr-toolkit-workspace")', target)
         self.assertIn("drag.urls, workspaceToken", target)
 
+    def test_remaining_ux_controls_preserve_explicit_confirmation(self) -> None:
+        qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
+        source = (qml / "Main.qml").read_text(encoding="utf-8")
+        self.assertEqual(source.count("PresetMenuButton { backend: controller;"), 2)
+        self.assertIn("onEditingFinished: controller.normalizeDateField(field.startId, text)", source)
+        self.assertIn("controller.resultNoticeCategories", source)
+        menu = (qml / "components" / "PresetMenuButton.qml").read_text(encoding="utf-8")
+        self.assertIn("requestDeleteMaterialPreset(control.menuPreset)", menu)
+        self.assertIn("enabled: control.customPreset", menu)
+        self.assertNotIn("applyMaterialPreset", menu)
+        template = (qml / "components" / "TemplateChoiceDialog.qml").read_text(encoding="utf-8")
+        locator = template.split("function focusProblemControl", 1)[1].split("onAccepted:", 1)[0]
+        self.assertIn("forceActiveFocus(Qt.TabFocusReason)", locator)
+        self.assertIn("fieldRepeater.itemAt(i)", locator)
+        self.assertNotIn("confirmed.checked = true", locator)
+        self.assertNotIn(".skip =", locator)
+        self.assertNotIn("saveTemplateChoice", locator)
+        self.assertIn("(!problem && confirmed.checked)", template)
+
     def test_result_feedback_and_safe_lightweight_controls(self) -> None:
         qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
         source = (qml / "Main.qml").read_text(encoding="utf-8")
