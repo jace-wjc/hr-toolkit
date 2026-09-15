@@ -61,6 +61,18 @@ class QtEntrypointTests(unittest.TestCase):
         )
         self.assertIn("20/20 passed", completed.stdout)
 
+    def test_long_update_notes_keep_exact_layout_with_bounded_delegates(self) -> None:
+        self._qt_compat_or_skip()
+        probe = Path(__file__).with_name("qt_update_notes_probe.py")
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", str(probe)],
+            cwd=str(probe.resolve().parents[1]),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", timeout=45, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("virtual notes: wrapping, resize, scroll, history and bounded delegates OK", completed.stdout)
+
     def test_qml_dialog_signals_have_named_parameters_on_both_qt_versions(self) -> None:
         self._qt_compat_or_skip()
         from hr_toolkit.gui_qt.controller import AppController
