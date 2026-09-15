@@ -329,6 +329,13 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("value: Flickable.StopAtBounds", viewport)
         self.assertIn("ScrollBar.vertical.interactive: true", viewport)
 
+    def test_support_label_reserves_its_full_text_width(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml").read_text(encoding="utf-8")
+        label = source.split("id: supportFieldLabel", 1)[1].split("Item {", 1)[0]
+        self.assertIn("Layout.minimumWidth: Math.max(145, implicitWidth)", label)
+        self.assertIn("Layout.preferredWidth: Layout.minimumWidth", label)
+        self.assertIn("text: controller.supportLabel", label)
+
     def test_file_drop_targets_are_separate_and_do_not_add_polling(self) -> None:
         qml_root = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
         source = (qml_root / "Main.qml").read_text(encoding="utf-8")

@@ -872,7 +872,13 @@ ApplicationWindow {
                                         anchors.fill: parent; anchors.margins: 8; spacing: 4
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 10
-                                            Text { Layout.preferredWidth: 145; text: controller.supportLabel; color: root.textMain; font.pixelSize: 13 }
+                                            Text {
+                                                id: supportFieldLabel
+                                                Layout.minimumWidth: Math.max(145, implicitWidth)
+                                                Layout.preferredWidth: Layout.minimumWidth
+                                                text: controller.supportLabel
+                                                color: root.textMain; font.pixelSize: 13
+                                            }
                                             Item {
                                                 Layout.fillWidth: true
                                                 Layout.preferredHeight: 30
