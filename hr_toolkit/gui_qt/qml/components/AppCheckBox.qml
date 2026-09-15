@@ -15,6 +15,7 @@ CheckBox {
     indicator: Rectangle {
         implicitWidth: 16
         implicitHeight: 16
+        radius: 3
         x: control.leftPadding
         y: (control.height - height) / 2
         color: !control.enabled ? "#F2F0EA" : (control.checked ? "#17715B" : "#FFFFFF")
