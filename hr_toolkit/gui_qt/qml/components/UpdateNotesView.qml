@@ -97,33 +97,38 @@ Rectangle {
                     width: body.width
                     implicitHeight: versionHeader ? 34 : rowText.implicitHeight + (modelData.heading && index > 0 ? 8 : 0)
                     height: implicitHeight
-                    Button {
-                        id: versionButton
+                    // Ordinary note rows never show a version button. Create
+                    // its controls only for headers, keeping row geometry exact.
+                    Loader {
                         anchors.fill: parent
-                        visible: parent.versionHeader
-                        text: modelData.text
-                        Accessible.name: text + (modelData.expanded ? "，收起更新内容" : "，展开更新内容")
-                        onClicked: view.toggleVersion(modelData.version)
-                        background: Rectangle {
-                            radius: 5
-                            color: versionButton.hovered ? "#EEEEEB" : "#F6F6F4"
-                            border.width: versionButton.visualFocus ? 1 : 0
-                            border.color: "#99C7FF"
-                        }
-                        contentItem: Item {
-                            Text {
-                                anchors.left: parent.left; anchors.leftMargin: 8
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: versionButton.text
-                                font.pixelSize: 14; font.bold: true; color: "#242424"
+                        active: parent.versionHeader
+                        sourceComponent: Button {
+                            id: versionButton
+                            anchors.fill: parent
+                            text: modelData.text
+                            Accessible.name: text + (modelData.expanded ? "，收起更新内容" : "，展开更新内容")
+                            onClicked: view.toggleVersion(modelData.version)
+                            background: Rectangle {
+                                radius: 5
+                                color: versionButton.hovered ? "#EEEEEB" : "#F6F6F4"
+                                border.width: versionButton.visualFocus ? 1 : 0
+                                border.color: "#99C7FF"
                             }
-                            Item {
-                                anchors.right: parent.right; anchors.rightMargin: 10
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 8; height: 8
-                                rotation: modelData.expanded ? 90 : 0
-                                Rectangle { x: 3; y: 0; width: 1; height: 5; color: "#606060"; rotation: -45 }
-                                Rectangle { x: 3; y: 3; width: 1; height: 5; color: "#606060"; rotation: 45 }
+                            contentItem: Item {
+                                Text {
+                                    anchors.left: parent.left; anchors.leftMargin: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: versionButton.text
+                                    font.pixelSize: 14; font.bold: true; color: "#242424"
+                                }
+                                Item {
+                                    anchors.right: parent.right; anchors.rightMargin: 10
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 8; height: 8
+                                    rotation: modelData.expanded ? 90 : 0
+                                    Rectangle { x: 3; y: 0; width: 1; height: 5; color: "#606060"; rotation: -45 }
+                                    Rectangle { x: 3; y: 3; width: 1; height: 5; color: "#606060"; rotation: 45 }
+                                }
                             }
                         }
                     }
