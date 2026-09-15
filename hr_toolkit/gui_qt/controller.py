@@ -65,6 +65,7 @@ from .compat import (
 from .form_specs import (
     DEFAULT_VARIANTS,
     EXCEL_SUFFIXES,
+    normalize_report_date_text,
     FormValidationError,
     ToolInvocation,
     build_invocation,
@@ -856,6 +857,24 @@ class AppController(QObject):
         if field_id in {"rename_mode", "collect_all", "library_mode", "use_ocr_cache"}:
             self.specChanged.emit()
             self._bump_form_revision()
+
+    @Slot(str, str)
+    def normalizeDateField(self, field_id: str, text: str) -> None:
+        if (self._spec.tool_id != "data_statistics" or self._busy or self.updateBlocksTools
+                or field_id not in {"week_start", "week_end", "month_start", "month_end"}):
+            return
+        role = field_id.split("_", 1)[0] + "_range"
+        try:
+            normalized = normalize_report_date_text(text)
+        except ValueError as exc:
+            self._selection_message(role, str(exc), True)
+            return  # Retain invalid user text for correction, never substitute today.
+        state = self._form_states[self._state_key()]
+        if state[field_id] != normalized:
+            state[field_id] = normalized
+            self._bump_form_revision()
+        else:
+            self._selection_message(role, "")
 
     @Slot(str, str)
     def applyDatePreset(self, group: str, preset: str) -> None:

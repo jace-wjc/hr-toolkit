@@ -1382,6 +1382,7 @@ ApplicationWindow {
                         text: field.startValue === undefined || field.startValue === null ? "" : String(field.startValue)
                         placeholderText: field.startPlaceholder || ""
                         onTextEdited: controller.setFieldValue(field.startId, text)
+                        onEditingFinished: controller.normalizeDateField(field.startId, text)
                     }
                     Text { text: "至"; color: root.textMuted; font.pixelSize: 12 }
                     AppTextField {
@@ -1389,6 +1390,7 @@ ApplicationWindow {
                         text: field.endValue === undefined || field.endValue === null ? "" : String(field.endValue)
                         placeholderText: field.endPlaceholder || ""
                         onTextEdited: controller.setFieldValue(field.endId, text)
+                        onEditingFinished: controller.normalizeDateField(field.endId, text)
                     }
                     Text { Layout.fillWidth: true; text: field.hint || ""; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
                 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,19 @@ from hr_toolkit.common.inputs import is_supported_archive_file
 
 
 EXCEL_SUFFIXES = frozenset({".xlsx", ".xls"})
+
+
+def normalize_report_date_text(value: str) -> str:
+    """Normalize UI spelling only; keep the existing calendar validation."""
+    from hr_toolkit.tools.data_statistics import parse_report_date
+    if isinstance(value, date):
+        return parse_report_date(value).isoformat()
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) == 8 and text.isascii() and text.isdigit():
+        text = text[:4] + "-" + text[4:6] + "-" + text[6:]
+    return parse_report_date(text).isoformat()
 
 
 class FormValidationError(ValueError):
@@ -401,11 +415,13 @@ def build_invocation(
         from hr_toolkit.tools.data_statistics import resolve_month_range, resolve_week_range
 
         try:
-            week_range = resolve_week_range(values.get("week_start") or None, values.get("week_end") or None)
+            week_range = resolve_week_range(normalize_report_date_text(values.get("week_start")) or None,
+                                            normalize_report_date_text(values.get("week_end")) or None)
         except ValueError as exc:
             raise FormValidationError("日期填写有误", str(exc), "week_range") from exc
         try:
-            month_range = resolve_month_range(values.get("month_start") or None, values.get("month_end") or None)
+            month_range = resolve_month_range(normalize_report_date_text(values.get("month_start")) or None,
+                                              normalize_report_date_text(values.get("month_end")) or None)
         except ValueError as exc:
             raise FormValidationError("日期填写有误", str(exc), "month_range") from exc
         kwargs = {

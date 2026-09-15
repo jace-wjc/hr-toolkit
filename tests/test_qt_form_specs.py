@@ -10,10 +10,28 @@ from hr_toolkit.gui_qt.form_specs import (
     build_invocation,
     default_values,
     spec_for,
+    normalize_report_date_text,
 )
 
 
 class QtFormSpecTests(unittest.TestCase):
+    def test_ui_date_normalization_preserves_dates_and_rejects_invalid_calendar_days(self) -> None:
+        for raw in ("20260915", "2026/9/15", "2026.9.15", "2026年9月15日", "2026-09-15", date(2026, 9, 15)):
+            self.assertEqual(normalize_report_date_text(raw), "2026-09-15")
+        self.assertEqual(normalize_report_date_text("  "), "")
+        for raw in ("20260230", "20261301", "2026091", "9/15", "not a date"):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                normalize_report_date_text(raw)
+
+    def test_compact_ui_dates_map_to_identical_business_arguments(self) -> None:
+        compact = self.invocation("data_statistics", values={"week_start": "20260901", "week_end": "20260915"})
+        original = self.invocation("data_statistics", values={"week_start": "2026-09-01", "week_end": "2026-09-15"})
+        self.assertEqual(compact.args, original.args)
+        self.assertEqual(compact.kwargs, original.kwargs)
+        with self.assertRaises(FormValidationError) as caught:
+            self.invocation("data_statistics", values={"week_start": "20260915", "week_end": "20260901"})
+        self.assertEqual(caught.exception.field, "week_range")
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
