@@ -416,7 +416,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 32
                     visible: !controller.updateReady && !(controller.updateBusy && controller.updatePhase !== "checking")
-                    text: controller.updateBusy ? "更新处理中…" : "检查更新"
+                    text: controller.updateBusy ? "正在检查更新…" : "检查更新"
                     variant: "link"
                     leftPadding: 9
                     rightPadding: 9
