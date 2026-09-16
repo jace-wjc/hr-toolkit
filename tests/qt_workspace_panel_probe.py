@@ -267,6 +267,22 @@ def main():
         for width in (1400, 1240, 760):
             root.setWidth(width); sample()
             check_controls()
+            if tool == "data_statistics":
+                option_controls = [root.findChild(QObject, name) for name in
+                                   ("attendanceUnit", "attendanceBusinessTrip", "attendanceWorkdayTrip")]
+                visual_refs.extend(option_controls)
+                last = option_controls[-1]
+                assert abs(last.x() + last.width() + 40 - last.parentItem().width()) <= 1, "Attendance options lost their right inset"
+                for left, right in zip(option_controls, option_controls[1:]):
+                    assert left.x() + left.width() <= right.x(), "Attendance options overlap"
+                    assert abs(left.y() + left.height() / 2 - right.y() - right.height() / 2) <= 1
+                if form_scroll.property("needsHorizontalScroll"):
+                    form_scroll.setProperty("contentX", form_scroll.property("contentWidth") - form_scroll.width())
+                    sample(50)
+                    last = option_controls[-1]
+                    x = last.mapToItem(form_scroll, QPointF(0, 0)).x()
+                    assert x >= -1 and x + last.width() <= form_scroll.width() + 1, "Last option is unreachable"
+                    form_scroll.setProperty("contentX", 0)
             picture = capture_window(root)
             picture.save(str(output / (tool + "-" + str(width) + ".png")))
     controller.selectTool("material_collector")

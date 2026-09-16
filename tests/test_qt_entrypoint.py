@@ -356,6 +356,23 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("parent: mainPane", vertical_bar)
         self.assertIn("anchors.right: parent.right", vertical_bar)
 
+    def test_attendance_options_share_a_horizontally_scrollable_row(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml").read_text(encoding="utf-8")
+        self.assertIn("Math.max(520, attendanceOptions.implicitWidth)", source)
+        self.assertIn("contentWidth: Math.max(width, minimumFormWidth)", source)
+        self.assertIn("visible: modelData.visible && !groupedAttendanceField", source)
+        row = source.split("id: attendanceOptions", 1)[1].split("\n                                }\n", 1)[0]
+        self.assertIn('visible: controller.currentTool === "data_statistics"', row)
+        controls = ['attendanceUnit', 'attendanceBusinessTrip', 'attendanceWorkdayTrip']
+        self.assertEqual(sorted(controls, key=lambda name: row.index('objectName: "' + name + '"')), controls)
+        spacer = row.index("Item { Layout.fillWidth: true }")
+        self.assertLess(row.index('objectName: "attendanceUnit"'), spacer)
+        self.assertLess(spacer, row.index('objectName: "attendanceBusinessTrip"'))
+        self.assertIn("Layout.rightMargin: 40", row.split('objectName: "attendanceWorkdayTrip"', 1)[1])
+        self.assertEqual(row.count("Layout.minimumWidth: implicitWidth"), 2)
+        for field in ("remark_unit", "include_business_trip", "include_workday_business_trip"):
+            self.assertIn('controller.setFieldValue("' + field + '"', row)
+
     def test_support_label_reserves_its_full_text_width(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml").read_text(encoding="utf-8")
         column = source.split("id: supportSelectionColumn", 1)[1].split("RowLayout {", 1)[0]

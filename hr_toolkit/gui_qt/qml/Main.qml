@@ -910,9 +910,9 @@ ApplicationWindow {
                                 anchors.rightMargin: 24
                                 anchors.topMargin: 32
                                 anchors.bottomMargin: 22 + (needsHorizontalScroll ? 14 : 0)
-                                // Attendance keeps both date inputs and the
-                                // preset actions reachable in a narrow pane.
-                                readonly property real minimumFormWidth: controller.currentTool === "data_statistics" ? 520 : 0
+                                // Keep dates and the complete attendance options
+                                // row reachable without squeezing their controls.
+                                readonly property real minimumFormWidth: controller.currentTool === "data_statistics" ? Math.max(520, attendanceOptions.implicitWidth) : 0
                                 readonly property bool needsHorizontalScroll: width < minimumFormWidth
                                 contentWidth: Math.max(width, minimumFormWidth)
                                 contentHeight: formColumn.implicitHeight
@@ -1167,7 +1167,9 @@ ApplicationWindow {
                                     model: controller.currentTool === "material_collector" ? [] : root.formSnapshot.fields
                                     delegate: Loader {
                                         width: formColumn.width
-                                        visible: modelData.visible
+                                        readonly property bool groupedAttendanceField: controller.currentTool === "data_statistics"
+                                            && (modelData.id === "remark_unit" || modelData.id === "include_business_trip" || modelData.id === "include_workday_business_trip")
+                                        visible: modelData.visible && !groupedAttendanceField
                                         active: visible
                                         property var field: modelData
                                         sourceComponent: field.kind === "text" ? textFieldComponent
@@ -1176,6 +1178,47 @@ ApplicationWindow {
                                                        : field.kind === "date_range" ? dateRangeFieldComponent
                                                        : field.kind === "materials" ? materialsFieldComponent
                                                        : null
+                                    }
+                                }
+
+                                RowLayout {
+                                    id: attendanceOptions
+                                    objectName: "attendanceOptions"
+                                    width: formColumn.width
+                                    visible: controller.currentTool === "data_statistics"
+                                    spacing: 10
+                                    readonly property var unitField: root.fieldById("remark_unit")
+                                    readonly property var businessTripField: root.fieldById("include_business_trip")
+                                    readonly property var workdayTripField: root.fieldById("include_workday_business_trip")
+                                    Text {
+                                        Layout.minimumWidth: Math.max(145, implicitWidth)
+                                        text: attendanceOptions.unitField.label || ""
+                                        color: root.textMain; font.pixelSize: 13
+                                    }
+                                    AppComboBox {
+                                        objectName: "attendanceUnit"
+                                        Layout.minimumWidth: 220
+                                        Layout.preferredWidth: 220
+                                        model: attendanceOptions.unitField.options || []
+                                        textRole: "label"
+                                        currentIndex: root.choiceIndex(attendanceOptions.unitField)
+                                        onActivated: controller.setFieldValue("remark_unit", attendanceOptions.unitField.options[index].value)
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    AppCheckBox {
+                                        objectName: "attendanceBusinessTrip"
+                                        Layout.minimumWidth: implicitWidth
+                                        text: attendanceOptions.businessTripField.label || ""
+                                        checked: !!attendanceOptions.businessTripField.value
+                                        onToggled: controller.setFieldValue("include_business_trip", checked)
+                                    }
+                                    AppCheckBox {
+                                        objectName: "attendanceWorkdayTrip"
+                                        Layout.minimumWidth: implicitWidth
+                                        Layout.rightMargin: 40
+                                        text: attendanceOptions.workdayTripField.label || ""
+                                        checked: !!attendanceOptions.workdayTripField.value
+                                        onToggled: controller.setFieldValue("include_workday_business_trip", checked)
                                     }
                                 }
 
