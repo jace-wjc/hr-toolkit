@@ -16,6 +16,10 @@ SPEC.loader.exec_module(ci_scope)
 
 
 class CIScopeTests(unittest.TestCase):
+    def test_installer_progress_routes_cover_the_updater_protocol(self):
+        scope = ci_scope.select_scope(["packaging/windows/HRToolkit.iss"])
+        self.assertTrue({"tests.test_app_update", "tests.test_windows_packaging"}.issubset(scope["targets"]))
+
     def test_preset_menu_routes_include_gui_and_preferences(self):
         scope = ci_scope.select_scope(["hr_toolkit/gui_qt/qml/components/PresetMenuButton.qml"])
         self.assertTrue({"tests.test_material_preferences", "tests.test_qt_entrypoint", "tests.test_qt_controller"}.issubset(scope["targets"]))

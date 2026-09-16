@@ -32,6 +32,7 @@ ZIP_MAX_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
 ZIP_MAX_COMPRESSION_RATIO = 1000
 
 StatusCallback = Callable[[str], None]
+ProgressCallback = Callable[[int, str], None]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,15 +55,17 @@ def main(argv: list[str] | None = None) -> int:
     log_file = _resolve_log_file(args)
     ui = _create_ui(log_file) if args.ui else None
     if ui is None:
+        if args.ui and sys.platform.startswith("win"):
+            os.environ["HR_TOOLKIT_UPDATE_NOTIFY_ERRORS"] = "1"
         return _execute_update(args, log_file, status=None)
 
     exit_code = {"value": 1}
 
     def worker() -> None:
         try:
-            exit_code["value"] = _execute_update(args, log_file, status=ui.set_status)
+            exit_code["value"] = _execute_update(args, log_file, status=ui.set_status, progress=ui.set_progress)
         finally:
-            ui.request_close()
+            ui.finish(exit_code["value"])
 
     threading.Thread(target=worker, daemon=True).start()
     ui.run()
@@ -78,11 +81,12 @@ def _emit_updater_smoke_result() -> None:
         Path(output_path).write_text(result + "\n", encoding="utf-8")
 
 
-def _execute_update(args: argparse.Namespace, log_file: Path, status: StatusCallback | None) -> int:
+def _execute_update(args: argparse.Namespace, log_file: Path, status: StatusCallback | None,
+                    progress: ProgressCallback | None = None) -> int:
     _append_log(log_file, "")
     _append_log(log_file, f"===== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 更新开始 =====")
     try:
-        _run_update(args, log_file, status)
+        _run_update(args, log_file, status, progress)
     except Exception as exc:
         _append_log(log_file, f"更新失败：{exc}")
         _append_log(log_file, traceback.format_exc().rstrip())
@@ -131,7 +135,7 @@ class _UpdaterUI:
         import tkinter
         from tkinter import ttk
 
-        self._events: queue.Queue[str | None] = queue.Queue()
+        self._events: queue.Queue[tuple] = queue.Queue()
         self._root = tkinter.Tk()
         self._root.title("HR Toolkit 更新")
         self._root.resizable(False, False)
@@ -161,22 +165,25 @@ class _UpdaterUI:
             tkinter.Label(body, image=icon, bg=background, borderwidth=0).grid(
                 row=0, column=0, rowspan=3, sticky="nw", padx=(0, px(16)),
             )
-        tkinter.Label(
+        self._title_label = tkinter.Label(
             body,
             text="正在安装更新…",
             bg=background,
             fg="#242424",
             font=("", -px(14), "bold"),
-        ).grid(row=0, column=1, sticky="w")
+        )
+        self._title_label.grid(row=0, column=1, sticky="w")
+        self._percent_label = tkinter.Label(body, text="准备中", bg=background,
+                                              fg="#242424", font=("", -px(12)))
+        self._percent_label.grid(row=0, column=2, sticky="e", padx=(px(12), 0))
         style = ttk.Style(self._root)
         if "clam" in style.theme_names():
             style.theme_use("clam")
         style.configure("Update.Horizontal.TProgressbar", background="#007AFF",
                         troughcolor="#DEDEDE", borderwidth=0, thickness=px(6))
-        bar = ttk.Progressbar(body, mode="indeterminate", length=px(280),
+        self._bar = ttk.Progressbar(body, mode="determinate", maximum=100, length=px(280),
                               style="Update.Horizontal.TProgressbar")
-        bar.grid(row=1, column=1, sticky="ew", pady=(px(10), px(10)))
-        bar.start(30)
+        self._bar.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(px(10), px(10)))
         self._status_label = tkinter.Label(
             body,
             text="请稍候，安装完成后程序会自动打开。",
@@ -184,9 +191,11 @@ class _UpdaterUI:
             fg="#606060",
             font=("", -px(12)),
             wraplength=px(280),
+            height=3,
             justify="left",
         )
-        self._status_label.grid(row=2, column=1, sticky="w")
+        self._status_label.grid(row=2, column=1, columnspan=2, sticky="w")
+        self._close_button = ttk.Button(body, text="关闭", command=self._root.destroy)
         self._center()
         self._root.lift()
         self._root.attributes("-topmost", True)
@@ -202,10 +211,13 @@ class _UpdaterUI:
         self._root.geometry(f"+{x}+{y}")
 
     def set_status(self, text: str) -> None:
-        self._events.put(text)
+        self._events.put(("status", text))
 
-    def request_close(self) -> None:
-        self._events.put(None)
+    def set_progress(self, percent: int, filename: str) -> None:
+        self._events.put(("progress", percent, filename))
+
+    def finish(self, exit_code: int) -> None:
+        self._events.put(("finish", exit_code))
 
     def run(self) -> None:
         self._poll()
@@ -215,16 +227,107 @@ class _UpdaterUI:
         try:
             while True:
                 item = self._events.get_nowait()
-                if item is None:
-                    self._root.destroy()
+                if item[0] == "finish":
+                    if item[1] == 0:
+                        self._bar["value"] = 100
+                        self._percent_label.config(text="100%")
+                        self._title_label.config(text="更新安装完成")
+                        self._root.after(1500, self._root.destroy)
+                    else:
+                        self._title_label.config(text="更新未完成")
+                        self._percent_label.config(text="未完成")
+                        self._root.protocol("WM_DELETE_WINDOW", self._root.destroy)
+                        self._close_button.grid(row=3, column=1, columnspan=2, sticky="e")
                     return
-                self._status_label.config(text=item)
+                if item[0] == "progress":
+                    self._bar["value"] = item[1]
+                    self._percent_label.config(text=f"{item[1]}%")
+                    filename = item[2]
+                    text = ("正在替换：" + filename) if filename else "正在处理安装配置…"
+                    self._status_label.config(text=text)
+                else:
+                    self._status_label.config(text=item[1])
         except queue.Empty:
             pass
         self._root.after(self._POLL_MS, self._poll)
 
 
-def _run_update(args: argparse.Namespace, log_file: Path, status: StatusCallback | None = None) -> None:
+def _read_installer_progress(path: Path) -> tuple[int, str] | None:
+    """Read one small UTF-8 snapshot; concurrent/partial writes are retried."""
+    try:
+        with path.open("r", encoding="utf-8-sig") as stream:
+            text = stream.read(16385)
+        if len(text) > 16384 or not text.endswith("\n"):
+            return None
+        lines = text.splitlines()
+        if len(lines) != 3 or lines[0] != "HRToolkitProgress1":
+            return None
+        percent = int(lines[1])
+        if not 0 <= percent <= 99:
+            return None
+        return percent, lines[2]
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def _run_installer(package_path: Path, progress: ProgressCallback | None) -> int:
+    cmd = [str(package_path), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+    if progress is None:
+        return subprocess.run(cmd, check=False).returncode
+    # Private, per-run snapshot; no installer-log scraping and no fake timer
+    # percentage. The installer bounds writes, and this worker reads at 5 Hz.
+    with tempfile.TemporaryDirectory(prefix="hr_toolkit_install_progress_") as directory:
+        progress_path = Path(directory) / "progress.txt"
+        process = subprocess.Popen(cmd + ["/HRPROGRESS=" + str(progress_path)])
+        previous = None
+        while True:
+            code = process.poll()
+            current = _read_installer_progress(progress_path)
+            if current is not None and current != previous:
+                progress(*current)
+                previous = current
+            if code is not None:
+                return code
+            time.sleep(0.2)
+
+
+def _wait_for_launcher_window(process, timeout_seconds: float = 60) -> bool:
+    """Keep the updater visible through Windows/PyInstaller startup too."""
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = (callback_type, wintypes.LPARAM)
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = (wintypes.HWND,)
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    visible = False
+
+    @callback_type
+    def find_window(hwnd, _param):
+        nonlocal visible
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == process.pid and user32.IsWindowVisible(hwnd):
+            visible = True
+            return False
+        return True
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        user32.EnumWindows(find_window, 0)
+        if visible:
+            return True
+        if process.poll() is not None:
+            return False
+        time.sleep(0.2)
+    return False
+
+
+def _run_update(args: argparse.Namespace, log_file: Path, status: StatusCallback | None = None,
+                progress: ProgressCallback | None = None) -> None:
     app_dir = args.app_dir.resolve()
     package_path = (args.installer or args.zip or Path("")).resolve()
     _validate_app_dir(app_dir)
@@ -251,13 +354,15 @@ def _run_update(args: argparse.Namespace, log_file: Path, status: StatusCallback
         raise RuntimeError(f"更新文件不存在：{package_path}")
 
     if args.installer or package_path.suffix.lower() == ".exe":
-        _notify(status, "正在静默安装最新版本…")
+        _notify(status, "正在启动安装程序，请稍候…")
         _append_log(log_file, f"运行安装程序：{package_path}")
-        cmd = [str(package_path), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
-        result = subprocess.run(cmd, check=False)
-        _append_log(log_file, f"安装程序执行结束，退出码：{result.returncode}")
-        if result.returncode != 0:
-            raise RuntimeError(f"安装程序执行失败（退出码 {result.returncode}）")
+        return_code = _run_installer(package_path, progress)
+        _append_log(log_file, f"安装程序执行结束，退出码：{return_code}")
+        if return_code != 0:
+            raise RuntimeError(f"安装程序执行失败（退出码 {return_code}）")
+        if progress is not None:
+            progress(100, "")
+        _notify(status, "安装完成，正在清理临时文件…")
         try:
             package_path.unlink(missing_ok=True)
             _append_log(log_file, f"已清理安装包：{package_path}")
@@ -293,8 +398,13 @@ def _run_update(args: argparse.Namespace, log_file: Path, status: StatusCallback
         if launcher.exists():
             _notify(status, "安装完成，正在打开新版本…")
             _append_log(log_file, f"重新打开主程序：{launcher}")
-            subprocess.Popen([str(launcher)], cwd=str(launcher.parent), close_fds=True)
+            process = subprocess.Popen([str(launcher)], cwd=str(launcher.parent), close_fds=True)
+            if progress is not None and sys.platform.startswith("win"):
+                if not _wait_for_launcher_window(process):
+                    raise RuntimeError("安装已完成，但未检测到新版本窗口，请手动打开工具。")
         else:
+            if progress is not None and sys.platform.startswith("win"):
+                raise RuntimeError(f"安装已完成，但未找到新版本主程序：{launcher}")
             _append_log(log_file, f"跳过重新打开，未找到主程序：{launcher}")
 
 

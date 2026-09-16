@@ -73,6 +73,7 @@ ROUTES = {
     "hr_toolkit/tutorial_content.py": GUI,
     "hr_toolkit/_icon_data.py": "app_icons qt_entrypoint",
     "hr_toolkit/update_runner.py": "app_update",
+    "packaging/windows/HRToolkit.iss": "app_update windows_packaging release_metadata",
     "hr_toolkit/release_notes.py": "release release_metadata app_update qt_controller windows_packaging prepare_gitee_release",
     "hr_toolkit/material_preferences.py": MATERIAL,
     "hr_toolkit/tools/material_collector.py": MATERIAL,

@@ -14,7 +14,7 @@ import stat
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from hr_toolkit.app_update import (
     DEFAULT_UPDATE_MANIFEST_URL,
@@ -43,6 +43,71 @@ from hr_toolkit.update_runner import main as update_runner_main
 
 
 class AppUpdateTests(unittest.TestCase):
+    def test_installer_progress_snapshot_preserves_unicode_and_rejects_partial_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "progress.txt"
+            for percent, filename in ((0, ""), (42, "工资模板.xlsx"), (99, "HRToolkit.exe")):
+                path.write_text(f"HRToolkitProgress1\n{percent}\n{filename}\n", encoding="utf-8-sig")
+                self.assertEqual(update_runner._read_installer_progress(path), (percent, filename))
+            for text in ("HRToolkitProgress1\n42\n半截", "HRToolkitProgress1\n100\na\n",
+                         "HRToolkitProgress1\n-1\na\n", "HRToolkitProgress1\nNaN\na\n", "other\n42\na\n"):
+                path.write_text(text, encoding="utf-8")
+                self.assertIsNone(update_runner._read_installer_progress(path))
+
+    def test_installer_progress_uses_private_channel_and_deduplicates_updates(self) -> None:
+        received = []
+        process = Mock()
+        process.poll.side_effect = [None, None, 0]
+        with patch.object(update_runner.subprocess, "Popen", return_value=process) as start:
+            with patch.object(update_runner, "_read_installer_progress", side_effect=[(42, "文件.dll"), (42, "文件.dll"), (99, "")]):
+                with patch.object(update_runner.time, "sleep"):
+                    code = update_runner._run_installer(Path("setup.exe"), lambda *args: received.append(args))
+        self.assertEqual(code, 0)
+        self.assertEqual(received, [(42, "文件.dll"), (99, "")])
+        args = start.call_args[0][0]
+        self.assertEqual(args[:4], ["setup.exe", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        self.assertTrue(args[4].startswith("/HRPROGRESS="))
+        self.assertFalse(Path(args[4].split("=", 1)[1]).parent.exists())
+
+    def test_installer_failure_does_not_report_completion_or_remove_package(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "setup.exe"
+            package.write_bytes(b"installer")
+            args = SimpleNamespace(app_dir=root / "app", installer=package, zip=None, launcher="HRToolkit.exe",
+                                   wait_pid=None, relaunch=True)
+            progress = Mock()
+            with patch.object(update_runner, "_run_installer", return_value=5):
+                with patch.object(update_runner, "_switch_working_dir"):
+                    code = update_runner._execute_update(args, root / "update.log", status=None, progress=progress)
+            self.assertEqual(code, 1)
+            progress.assert_not_called()
+            self.assertTrue(package.exists())
+
+    def test_updater_failure_window_requires_acknowledgement(self) -> None:
+        import queue
+        ui = update_runner._UpdaterUI.__new__(update_runner._UpdaterUI)
+        ui._events = queue.Queue()
+        ui._root = Mock()
+        ui._title_label = Mock()
+        ui._percent_label = Mock()
+        ui._close_button = Mock()
+        ui.finish(1)
+        ui._poll()
+        ui._root.destroy.assert_not_called()
+        ui._root.after.assert_not_called()
+        ui._close_button.grid.assert_called_once()
+
+    def test_installer_script_exports_real_progress_for_both_windows_packages(self) -> None:
+        script = (Path(__file__).resolve().parents[1] / "packaging/windows/HRToolkit.iss").read_text(encoding="utf-8")
+        self.assertIn("BeforeInstall: ReportInstallingFile; AfterInstall: ClearInstallingFile", script)
+        self.assertIn("procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer)", script)
+        self.assertIn("SaveStringsToUTF8File(UpdateProgressPath, Lines, False)", script)
+        self.assertIn("HRToolkitProgress1", script)
+        self.assertIn("{param:HRPROGRESS|}", script)
+        self.assertIn("if UpdatePercent > 99 then UpdatePercent := 99", script)
+        self.assertLess(script.index("[Code]"), script.index("#ifndef CleanExistingPayload", script.index("[Code]")))
+
     def test_cache_cleanup_keeps_ready_recent_unknown_and_locked_payloads(self) -> None:
         from hr_toolkit import app_update
         import json

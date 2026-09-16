@@ -465,6 +465,15 @@ class QtControllerTests(unittest.TestCase):
             self.assertTrue(controller.requestClose())
             install.assert_not_called()
 
+    def test_restart_update_shows_installation_window_on_windows_only(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        for platform, expected in (("win32", True), ("darwin", False)):
+            with patch("hr_toolkit.gui_qt.controller.sys.platform", platform):
+                with patch.object(controller, "_launch_ready_update") as launch:
+                    controller.restartToUpdate()
+                    launch.assert_called_once_with(show_ui=expected)
+
     def test_manual_download_waits_for_restart_click(self) -> None:
         from hr_toolkit.app_update import UpdateInfo
         controller = self.controller()

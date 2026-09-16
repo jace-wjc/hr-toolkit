@@ -66,7 +66,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 [Files]
 ; 安装器和卸载器保留在 {app}，可自更新 payload 独立放在 {app}\app。
 ; HRToolkitUpdater 只替换 sys.executable.parent，因此不会删除 unins*.exe。
-Source: "{#SourceDir}\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs; BeforeInstall: ReportInstallingFile; AfterInstall: ClearInstallingFile
 
 [InstallDelete]
 #ifdef CleanExistingPayload
@@ -89,8 +89,77 @@ Filename: "{app}\app\{#MyAppExeName}"; Description: "启动 HRToolkit"; Flags: n
 Type: filesandordirs; Name: "{app}\app"
 Type: dirifempty; Name: "{app}"
 
-#ifndef CleanExistingPayload
 [Code]
+var
+  UpdateProgressPath, UpdateFilename, LastProgressText: String;
+  UpdatePercent: Integer;
+  LastProgressTick: Cardinal;
+
+function ProgressTick: Cardinal;
+  external 'GetTickCount@kernel32.dll stdcall';
+
+procedure WriteUpdateProgress(Force: Boolean);
+var
+  Lines: TArrayOfString;
+  Snapshot: String;
+  Tick: Cardinal;
+begin
+  if UpdateProgressPath = '' then Exit;
+  Tick := ProgressTick;
+  if not Force and (Tick >= LastProgressTick) and (Tick - LastProgressTick < 200) then Exit;
+  Snapshot := IntToStr(UpdatePercent) + #10 + UpdateFilename;
+  if not Force and (Snapshot = LastProgressText) then Exit;
+  SetArrayLength(Lines, 3);
+  Lines[0] := 'HRToolkitProgress1';
+  Lines[1] := IntToStr(UpdatePercent);
+  Lines[2] := UpdateFilename;
+  LastProgressTick := Tick;
+  // UI feedback must never abort file installation if the reader has exited.
+  if SaveStringsToUTF8File(UpdateProgressPath, Lines, False) then
+  begin
+    LastProgressText := Snapshot;
+  end;
+end;
+
+procedure InitializeWizard;
+begin
+  UpdateProgressPath := ExpandConstant('{param:HRPROGRESS|}');
+  UpdatePercent := 0;
+  WriteUpdateProgress(True);
+end;
+
+procedure ReportInstallingFile;
+begin
+  UpdateFilename := ExtractFileName(ExpandConstant(CurrentFilename));
+  WriteUpdateProgress(False);
+end;
+
+procedure ClearInstallingFile;
+begin
+  UpdateFilename := '';
+end;
+
+procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer);
+begin
+  if MaxProgress > 0 then
+  begin
+    UpdatePercent := Round((CurProgress * 1.0 / MaxProgress) * 100);
+    // Only the updater, after a successful installer exit, may show 100%.
+    if UpdatePercent > 99 then UpdatePercent := 99;
+    WriteUpdateProgress(False);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    UpdateFilename := '';
+    WriteUpdateProgress(True);
+  end;
+end;
+
+#ifndef CleanExistingPayload
 function ExistingPayloadIsWin7: Boolean;
 begin
   Result := FileExists(ExpandConstant('{app}\app\_internal\python38.dll'));

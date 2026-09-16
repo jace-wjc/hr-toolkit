@@ -3248,7 +3248,7 @@ class AppController(QObject):
 
     @Slot()
     def restartToUpdate(self) -> None:
-        self._launch_ready_update(show_ui=False)
+        self._launch_ready_update(show_ui=sys.platform.startswith("win"))
 
     def _launch_ready_update(self, *, show_ui: bool) -> None:
         if not self.updateReady or self._update_busy or self._closed or self._shutdown_requested:
