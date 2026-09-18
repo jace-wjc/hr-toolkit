@@ -211,7 +211,7 @@ class ProjectRunCoordinatorTests(unittest.TestCase):
             self.assertEqual(payload, {"count": 100})
             process_call.assert_called_once()
 
-    def test_project_snapshot_business_output_and_result_registration(self) -> None:
+    def test_original_inputs_business_output_and_result_registration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.txt"
@@ -248,6 +248,12 @@ class ProjectRunCoordinatorTests(unittest.TestCase):
                 self.assertEqual(len(summaries), 1)
                 self.assertEqual(summaries[0].status, "success")
                 self.assertEqual(source.read_text(encoding="utf-8"), "unchanged-business-value")
+                self.assertEqual(list(project_root.rglob("上传资料")), [])
+                self.assertEqual(list(store.staging_dir.iterdir()), [])
+                detail = store.get_batch(summaries[0].id)
+                self.assertEqual(detail.files_for("uploads"), ())
+                source.unlink()
+                self.assertTrue(store.verify_batch_files(summaries[0].id))
             finally:
                 store.close()
 

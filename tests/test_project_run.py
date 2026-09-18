@@ -28,6 +28,7 @@ class ProjectRunSourceImportTests(unittest.TestCase):
 
             store = ProjectStore.create(root / "project", "百文件事务测试")
             draft = store.create_draft(
+                retain_sources=True,
                 group_name="社保与保险",
                 tool_id="social_security",
                 tool_name="社保明细与汇总",
@@ -87,6 +88,7 @@ class ProjectRunSourceImportTests(unittest.TestCase):
 
             store = ProjectStore.create(root / "project", "重名文件测试")
             draft = store.create_draft(
+                retain_sources=True,
                 group_name="薪酬管理",
                 tool_id="salary_merge",
                 tool_name="多月工资合并",

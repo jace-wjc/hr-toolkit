@@ -2027,8 +2027,8 @@ ApplicationWindow {
         background: Rectangle { color: root.surface; radius: 9; border.color: root.border }
         contentItem: ColumnLayout {
             spacing: 3
-            AppButton { Layout.fillWidth: true; text: "导入文件"; onClicked: { workspaceAddMenu.close(); controller.importWorkspaceFiles() } }
-            AppButton { Layout.fillWidth: true; text: "导入文件夹"; onClicked: { workspaceAddMenu.close(); controller.importWorkspaceFolder() } }
+            AppButton { Layout.fillWidth: true; text: "选择处理文件"; onClicked: { workspaceAddMenu.close(); controller.importWorkspaceFiles() } }
+            AppButton { Layout.fillWidth: true; text: "选择处理文件夹"; onClicked: { workspaceAddMenu.close(); controller.importWorkspaceFolder() } }
         }
     }
 

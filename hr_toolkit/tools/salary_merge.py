@@ -8,7 +8,7 @@ import re
 # 预编译正则
 _PERIOD_COMPACT = re.compile(r"(20\d{2})\D{0,3}([01]?\d)")
 _PERIOD_PLAIN = re.compile(r"(20\d{2})([01]\d)")
-import tempfile
+from hr_toolkit.common.run_temp import temporary_directory
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -145,7 +145,7 @@ def merge_monthly_salary(
             raise FileNotFoundError(f"工资表文件、压缩包或文件夹不存在：{input_path}")
 
     warnings: list[str] = []
-    with tempfile.TemporaryDirectory(prefix="hr_salary_merge_") as temp_root:
+    with temporary_directory(prefix="hr_salary_merge_") as temp_root:
         temp_dir = Path(temp_root)
         working_summary_path = None if summary_path is None else ensure_xlsx_workbook(summary_path, temp_dir)
         source_keys: dict[Path, str] = {}
@@ -318,7 +318,7 @@ def inspect_salary_templates(
     groups: dict[str, dict[str, Any]] = {}
     issues, expected_sources = [], []
     summary = Path(existing_summary_path).expanduser().resolve() if existing_summary_path else None
-    with tempfile.TemporaryDirectory(prefix="hr_salary_headers_") as temp_root:
+    with temporary_directory(prefix="hr_salary_headers_") as temp_root:
         temp = Path(temp_root)
         source_keys: dict[Path, str] = {}
         warnings: list[str] = []

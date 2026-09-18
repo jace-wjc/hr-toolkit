@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
+from hr_toolkit.common.run_temp import temporary_directory
 from bisect import bisect_left
 from collections import OrderedDict
 from copy import copy
@@ -219,7 +219,7 @@ def split_salary_by_company(
     if input_path.suffix.lower() not in SUPPORTED_EXCEL_SUFFIXES:
         raise ValueError("当前工资拆分工具仅支持 .xlsx 或 .xls 文件")
 
-    with tempfile.TemporaryDirectory(prefix="hr_salary_split_") as temp_root:
+    with temporary_directory(prefix="hr_salary_split_") as temp_root:
         working_input_path = ensure_xlsx_workbook(input_path, Path(temp_root))
         workbook = load_workbook(working_input_path, data_only=False)
         try:

@@ -14,7 +14,7 @@ _SHEET_TITLE_INVALID = re.compile(r"[:\\/?*\[\]]")
 _FILENAME_INVALID = re.compile(r"[\\/:*?\"<>|]")
 _HEADER_WHITESPACE = re.compile(r"\s+")
 import shutil
-import tempfile
+from hr_toolkit.common.run_temp import temporary_directory
 from collections import OrderedDict
 from copy import copy
 from dataclasses import dataclass, field, replace
@@ -346,7 +346,7 @@ def generate_social_security_reports(
     if not is_supported_excel_file(roster):
         raise ValueError("参保人员花名册仅支持 .xlsx 或 .xls 文件。")
 
-    with tempfile.TemporaryDirectory(prefix="hr_social_security_") as temp_root:
+    with temporary_directory(prefix="hr_social_security_") as temp_root:
         temp_dir = Path(temp_root)
         roster_people = _read_roster(roster, temp_dir)
         source_files = _find_social_security_files(input_paths, temp_dir, warnings)

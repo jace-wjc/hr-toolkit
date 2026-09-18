@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
-import tempfile
+from hr_toolkit.common.run_temp import temporary_directory
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -252,7 +252,7 @@ def generate_data_statistics_reports(
         if staff_path.suffix.lower() not in {".xlsx", ".xls"}:
             raise ValueError("应汇报人员名单只支持 .xlsx 或 .xls 文件。")
 
-    with tempfile.TemporaryDirectory(prefix="hr_data_statistics_") as temp_root:
+    with temporary_directory(prefix="hr_data_statistics_") as temp_root:
         temp_dir = Path(temp_root)
         files = _find_source_files(input_paths, temp_dir, warnings)
         _check_cancelled(cancelled)

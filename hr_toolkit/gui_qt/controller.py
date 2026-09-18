@@ -2424,7 +2424,7 @@ class AppController(QObject):
         if not self.projectWritable or self._busy or self._workspace_busy:
             return
         names, _selected = QFileDialog.getOpenFileNames(
-            self._dialog_parent(), "选择要导入项目的文件", self._file_dialog_initial_dir(), "所有文件 (*)"
+            self._dialog_parent(), "选择本次处理的文件", self._file_dialog_initial_dir(), "所有文件 (*)"
         )
         if names:
             self._remember_file_dialog_path(names)
@@ -2435,7 +2435,7 @@ class AppController(QObject):
         if not self.projectWritable or self._busy or self._workspace_busy:
             return
         selected = QFileDialog.getExistingDirectory(
-            self._dialog_parent(), "选择要导入项目的文件夹", self._file_dialog_initial_dir()
+            self._dialog_parent(), "选择本次处理的文件夹", self._file_dialog_initial_dir()
         )
         if selected:
             self._remember_file_dialog_path(selected)
@@ -2481,62 +2481,10 @@ class AppController(QObject):
 
     def _start_workspace_import(self, sources: list[Path]) -> None:
         if self._workspace_recovery_blocked:
-            self.notificationRequested.emit(
-                "项目未安全恢复",
-                "当前项目处于未恢复状态，写入已锁定。请重新打开当前项目以恢复状态。",
-                "error",
-            )
+            self.notificationRequested.emit("项目未安全恢复", "请重新打开当前项目后再选择资料。", "error")
             return
-        resolved = self._workspace_import_target()
-        store = self._project_store
-        if resolved is None or store is None:
-            return
-        target, batch = resolved
-        self._workspace_busy = True
-        self._workspace_cancel_event = threading.Event()
-        self.workspaceBusyChanged.emit()
-        self._append_log(f"正在把 {len(sources)} 项资料安全保存到项目…", "info")
-
-        def worker() -> None:
-            try:
-                if batch is None:
-                    store.import_to_directory(
-                        target,
-                        sources,
-                        cancelled=self._workspace_cancel_event.is_set,
-                    )
-                else:
-                    batch_id, category = batch
-                    store.import_sources(
-                        batch_id,
-                        sources,
-                        category=category,
-                        role="workspace",
-                        cancelled=self._workspace_cancel_event.is_set,
-                    )
-            except ImportCancelled:
-                self._workspaceImportFinished.emit(False, "资料导入已取消。")
-            except Exception as exc:
-                runlog.log_exception("工作区资料导入失败", exc)
-                recovery_ok = True
-                try:
-                    store.refresh()
-                except Exception as refresh_exc:
-                    runlog.log_exception("工作区项目状态恢复失败", refresh_exc)
-                    recovery_ok = False
-                    self._workspace_recovery_blocked = True
-                    self._workspace_recovery_error = str(refresh_exc)
-                if recovery_ok:
-                    self._workspaceImportFinished.emit(False, f"资料没有导入，项目已恢复到安全状态：{exc}")
-                else:
-                    self._workspaceImportFinished.emit(
-                        False,
-                        f"项目状态恢复失败：{self._workspace_recovery_error}。写入与切换已被锁定，请重新打开当前项目。",
-                    )
-            else:
-                self._workspaceImportFinished.emit(True, "资料已安全保存到当前项目。")
-
-        threading.Thread(target=worker, daemon=True, name="HRToolkit-workspace-import").start()
+        # Selecting material must never create a permanent project copy.
+        self._submit_selection("input", sources, replace=not self.inputAllowsMultiple)
 
     @Slot()
     def cancelWorkspaceImport(self) -> None:
@@ -3040,7 +2988,7 @@ class AppController(QObject):
         title = summary.business_description or summary.directory_name or summary.tool_name
         self.confirmationRequested.emit(
             "移到项目回收站",
-            f"“{title}”的上传资料、处理结果和补充资料会一起移到当前项目回收站，不会永久删除。是否继续？",
+            f"“{title}”的处理结果及已有历史资料会一起移到当前项目回收站，不会永久删除。是否继续？",
             token,
         )
 

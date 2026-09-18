@@ -228,9 +228,9 @@ def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
 
 def _read_names_from_excel(excel_path: Path, name_column: str, header_row: int) -> list[str]:
     """从 Excel 文件中读取姓名列，保留非空数据行的原始顺序。"""
-    import tempfile
+    from hr_toolkit.common.run_temp import temporary_directory
 
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with temporary_directory() as temp_dir:
         working_path = ensure_xlsx_workbook(excel_path, Path(temp_dir))
         wb = load_workbook(working_path, data_only=True, read_only=True)
         try:

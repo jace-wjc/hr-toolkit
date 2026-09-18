@@ -9,7 +9,7 @@ _FILENAME_POLICY_PATTERN = re.compile(r"([A-Z]{3,}[A-Z0-9]{8,})")
 _HEADER_WHITESPACE = re.compile(r"\s+")
 _ID_CARD_STRIP_PATTERN = re.compile(r"[^0-9.\-]")
 import shutil
-import tempfile
+from hr_toolkit.common.run_temp import temporary_directory
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -151,7 +151,7 @@ def generate_insurance_ledger(
     if not is_supported_excel_file(roster):
         raise ValueError("人力资源分析表仅支持 .xlsx 或 .xls 文件。")
 
-    with tempfile.TemporaryDirectory(prefix="hr_insurance_ledger_") as temp_root:
+    with temporary_directory(prefix="hr_insurance_ledger_") as temp_root:
         temp_dir = Path(temp_root)
         working_roster = ensure_xlsx_workbook(roster, temp_dir)
         roster_people = _read_roster(

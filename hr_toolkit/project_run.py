@@ -308,7 +308,7 @@ def call_with_project_inputs(
     store: Any,
     batch_id: str,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
-    """Rebind a call from external inputs to immutable project snapshots."""
+    """Bind validated inputs and the result directory without changing business arguments."""
 
     bound = inspect.signature(tool_func).bind_partial(*args, **kwargs)
     bound.apply_defaults()
@@ -325,7 +325,7 @@ def call_with_project_inputs(
         role = "input_path" if name in PRIMARY_PATH_ARGUMENTS or name == "root_dir" else name
         copied_paths = replacements.get(role, [])
         if not copied_paths:
-            raise RuntimeError(f"没有完整保存 {name} 对应的原始资料。")
+            raise RuntimeError(f"没有可用的 {name} 原始资料，请重新选择。")
         original_values = value if isinstance(value, (list, tuple)) else [value]
         original_paths = [Path(item).expanduser() for item in original_values if item is not None]
         original_was_directory = len(original_paths) == 1 and original_paths[0].is_dir()

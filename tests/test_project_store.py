@@ -31,6 +31,61 @@ from hr_toolkit.project_store import (
 
 
 class ProjectStoreTests(unittest.TestCase):
+    def test_reference_batch_keeps_results_without_upload_directory(self) -> None:
+        from hr_toolkit.history_store import SourceSpec
+        source = self.sources / "名单.txt"
+        source.write_text("甲", encoding="utf-8")
+        draft = self.store.create_draft(group_name="测试", tool_id="probe", tool_name="测试",
+                                        retain_sources=False)
+        batch_id = draft.summary.id
+        self.assertFalse(draft.directories["uploads"].exists())
+        paths = self.store.reference_run_sources(batch_id, [SourceSpec(source, role="input_path")])
+        self.assertEqual(paths, {"input_path": [source]})
+        with self.assertRaises(ProjectStoreError):
+            self.store.import_sources(batch_id, [source])
+        self.store.start_batch(batch_id)
+        self.store.verify_run_sources(batch_id)
+        result = self.store.result_directory(batch_id) / "结果.txt"
+        result.write_text("结果", encoding="utf-8")
+        self.store.register_results(batch_id, result)
+        self.store.mark_success(batch_id)
+        self.store.release_run_sources(batch_id)
+        source.unlink()
+        self.assertTrue(self.store.verify_batch_files(batch_id))
+        self.assertEqual(list(self.project_root.rglob("上传资料")), [])
+        self.store.move_to_trash(batch_id)
+        self.store.restore_from_trash(batch_id)
+        self.assertTrue(self.store.verify_batch_files(batch_id))
+
+    def test_reference_inputs_detect_changes_without_retaining_copies(self) -> None:
+        from hr_toolkit.history_store import SourceSpec
+        source = self.sources / "名单.txt"
+        source.write_text("甲", encoding="utf-8")
+        draft = self.store.create_draft(group_name="测试", tool_id="probe", tool_name="测试",
+                                        retain_sources=False)
+        self.store.reference_run_sources(draft.summary.id, [SourceSpec(source, role="input_path")])
+        source.write_text("乙", encoding="utf-8")
+        with self.assertRaises(ProjectStoreError):
+            self.store.verify_run_sources(draft.summary.id)
+        self.store.release_run_sources(draft.summary.id)
+        self.assertEqual(list(self.project_root.rglob("上传资料")), [])
+
+    def test_run_temporary_files_are_cleaned_after_error_and_recovery(self) -> None:
+        from hr_toolkit.common.run_temp import temporary_directory
+        with self.assertRaisesRegex(RuntimeError, "停止"):
+            with self.store.run_temporary_directory() as root:
+                with temporary_directory() as child:
+                    self.assertEqual(Path(child).parent, root)
+                    (Path(child) / "中间资料.txt").write_text("临时", encoding="utf-8")
+                    self.assertTrue(root.is_dir())
+                    raise RuntimeError("停止")
+        self.assertFalse(root.exists())
+        stale = self.store.staging_dir / ("f" * 32)
+        stale.mkdir()
+        (stale / "中间资料.txt").write_text("临时", encoding="utf-8")
+        self.store.refresh()
+        self.assertFalse(stale.exists())
+
     def test_region_settings_persist_and_reject_invalid_configuration(self) -> None:
         self.assertEqual(self.store.read_region_overrides(), {})
         self.store.save_region_overrides({"上海": "01"})
@@ -58,6 +113,7 @@ class ProjectStoreTests(unittest.TestCase):
 
     def _draft(self, *, group_name: str = "甲公司", tool_name: str = "工资表拆分"):
         return self.store.create_draft(
+            retain_sources=True,  # Legacy archived batches must remain compatible.
             group_name=group_name,
             tool_id="salary_split",
             tool_name=tool_name,

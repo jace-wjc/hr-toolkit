@@ -1207,53 +1207,19 @@ class QtControllerTests(unittest.TestCase):
             with ProjectStore.open(parent / "测试项目", read_only_fallback=False) as reopened:
                 self.assertTrue(reopened.writable)
 
-    def test_controller_workspace_import_finalizing_error_recovers_store_and_failed_recovery_blocks(self) -> None:
+    def test_project_recovery_guard_still_blocks_operations_until_reopen(self) -> None:
         controller = self.controller()
+        self.addCleanup(controller.close)
         notifications = []
         controller.notificationRequested.connect(lambda *args: notifications.append(args))
-
-        # 1. Import error with successful store.refresh() -> project stays recovered
         mock_store = Mock()
-        mock_store.workspace.common_root = Path("/tmp/project/共用资料")
-        mock_store.list_batch_locations.return_value = ()
         mock_store.writable = True
-        mock_store.import_to_directory.side_effect = RuntimeError("磁盘临时写满")
         controller._project_store = mock_store
         controller._project_path = Path("/tmp/project")
-
-        controller._start_workspace_import([Path("/tmp/sample.txt")])
-        import time
-        for _ in range(20):
-            if not controller.workspaceBusy and notifications:
-                break
-            time.sleep(0.05)
-            QCoreApplication.processEvents()
-
-        mock_store.refresh.assert_called_once_with()
-        self.assertFalse(controller._workspace_recovery_blocked)
-        self.assertTrue(controller.projectWritable)
-        self.assertEqual(notifications[-1][0], "导入未完成")
-        self.assertIn("已恢复到安全状态", notifications[-1][1])
-
-        # 2. Import error with FAILED store.refresh() -> project recovery is blocked
-        notifications.clear()
-        mock_store.refresh.reset_mock()
-        mock_store.refresh.side_effect = OSError("无法读取清单文件，磁盘损坏")
-        mock_store.import_to_directory.side_effect = RuntimeError("保存提交失败")
-
-        controller._start_workspace_import([Path("/tmp/sample.txt")])
-        for _ in range(20):
-            if not controller.workspaceBusy and notifications:
-                break
-            time.sleep(0.05)
-            QCoreApplication.processEvents()
-
-        mock_store.refresh.assert_called_once_with()
-        self.assertTrue(controller._workspace_recovery_blocked)
-        self.assertFalse(controller.projectWritable)
-        self.assertEqual(notifications[-1][0], "项目未安全恢复")
-        self.assertIn("项目状态恢复失败", notifications[-1][1])
-
+        controller._workspace_recovery_blocked = True
+        with patch.object(controller, "_submit_selection") as submit:
+            controller._start_workspace_import([Path("/tmp/名单.xlsx")])
+            submit.assert_not_called()
         # 3. Operations are blocked while recovery is blocked
         notifications.clear()
         controller.createProject("新建项目", "/tmp")
@@ -1280,7 +1246,18 @@ class QtControllerTests(unittest.TestCase):
         self.assertFalse(controller._workspace_recovery_blocked)
         self.assertTrue(controller.projectWritable)
 
-        controller.close()
+
+    def test_workspace_file_selection_does_not_archive_sources(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        store = Mock()
+        controller._project_store = store
+        paths = [Path("/tmp/名单.xlsx")]
+        with patch.object(controller, "_submit_selection") as submit:
+            controller._start_workspace_import(paths)
+            submit.assert_called_once_with("input", paths, replace=not controller.inputAllowsMultiple)
+        store.import_sources.assert_not_called()
+        store.import_to_directory.assert_not_called()
 
     def test_controller_ocr_cache_mode_switch_restores_user_preference(self) -> None:
         controller = self.controller()

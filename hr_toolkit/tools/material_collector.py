@@ -1414,8 +1414,8 @@ def parse_employee_roster(
 
     source_path = Path(source) if isinstance(source, (str, Path)) else None
     if source_path and source_path.is_file() and is_supported_excel_file(source_path):
-        import tempfile
-        with tempfile.TemporaryDirectory() as temp_dir_str:
+        from hr_toolkit.common.run_temp import temporary_directory
+        with temporary_directory() as temp_dir_str:
             working_path = ensure_xlsx_workbook(source_path, Path(temp_dir_str))
             wb = load_workbook(working_path, data_only=True, read_only=True)
             try:

@@ -21,9 +21,7 @@ from .background_process import (
 from .project_run import (
     call_with_project_inputs,
     context_from_call,
-    import_project_run_sources,
     project_batch_is_closed,
-    rebase_project_replacements,
     serializable,
 )
 
@@ -254,6 +252,7 @@ class ProjectRunCoordinator:
                 tool_name=request.tool_name,
                 business_description=request.description,
                 business_period=time.strftime("%Y-%m-%d"),
+                retain_sources=False,
             )
             batch_id = draft.summary.id
             with self._lock:
@@ -262,7 +261,7 @@ class ProjectRunCoordinator:
                 callbacks.log(f"开始 {request.tool_name}（资料库只读检索，原件保留在原目录）")
             else:
                 callbacks.log(
-                    f"开始 {request.tool_name}（{len(sources)} 个资料来源，自动留存在当前项目）"
+                    f"开始 {request.tool_name}（{len(sources)} 个资料来源，仅读取原文件，项目只保存结果）"
                 )
 
             progress_state = {"last": 0.0, "phase": ""}
@@ -273,27 +272,16 @@ class ProjectRunCoordinator:
                 scanned = int(getattr(event, "files_scanned", 0) or 0)
                 completed = int(getattr(event, "files_completed", 0) or 0)
                 total = getattr(event, "files_total", None)
-                bytes_copied = int(getattr(event, "bytes_copied", 0) or 0)
-                bytes_total = getattr(event, "bytes_total", None)
                 force = phase != progress_state["phase"] or phase == "finalizing"
                 if not force and now - float(progress_state["last"]) < 0.25:
                     return
                 progress_state["last"] = now
                 progress_state["phase"] = phase
-                if phase == "copying":
-                    if bytes_total:
-                        percent = min(100, int(bytes_copied * 100 / int(bytes_total)))
-                        text = f"正在安全保存项目资料：{percent}%"
-                    else:
-                        text = f"正在安全保存项目资料：已完成 {completed} 个文件"
-                elif phase == "finalizing":
-                    text = "项目资料已复制完成，正在核对并登记..."
-                else:
-                    text = f"正在检查项目资料：已发现 {scanned} 个文件"
+                text = f"正在检查原文件：已发现 {scanned} 个文件"
                 callbacks.progress(completed, int(total or 0), text)
 
             # Only the explicitly selected existing change summary opts into
-            # a current-version snapshot. Other tools/inputs keep strict reuse.
+            # current-version reading. Other tools/inputs keep strict reuse.
             current_version_roles = (
                 frozenset({"template_path"})
                 if request.tool_id == "personnel_change_merge"
@@ -301,26 +289,19 @@ class ProjectRunCoordinator:
                 and getattr(request.function, "__name__", "") == "merge_personnel_changes"
                 else frozenset()
             )
-            replacements = import_project_run_sources(
-                store,
+            replacements = store.reference_run_sources(
                 batch_id,
                 sources,
-                cancel_event,
+                cancelled=cancel_event.is_set,
                 on_progress=import_progress,
                 current_version_roles=current_version_roles,
             )
             if cancel_event.is_set():
                 raise BusinessProcessCancelled("本次处理已停止。")
             if current_version_roles and replacements.get("template_path"):
-                callbacks.log("已使用当前选择的汇总表，并保存本次处理副本。")
-            old_upload_root = draft.directories["uploads"]
-            running = store.start_batch(batch_id)
+                callbacks.log("已使用当前选择的汇总表，原文件由用户自行保存。")
+            store.start_batch(batch_id)
             started = True
-            replacements = rebase_project_replacements(
-                replacements,
-                old_upload_root,
-                running.directories["uploads"],
-            )
             result_dir = store.result_directory(batch_id)
             call_args, call_kwargs = call_with_project_inputs(
                 request.function,
@@ -331,15 +312,13 @@ class ProjectRunCoordinator:
                 store,
                 batch_id,
             )
-            payload, isolated = self._business_call(
-                request,
-                call_args,
-                call_kwargs,
-                cancel_event,
-                callbacks,
-            )
+            with store.run_temporary_directory():
+                payload, isolated = self._business_call(
+                    request, call_args, call_kwargs, cancel_event, callbacks,
+                )
             if cancel_event.is_set():
                 raise BusinessProcessCancelled("本次处理已停止。")
+            store.verify_run_sources(batch_id)
             material_progress = request.tool_id == "material_collector"
             if material_progress:
                 callbacks.progress(0, 2, "【登记结果】已完成 0/2 项；正在登记结果文件")
@@ -351,12 +330,6 @@ class ProjectRunCoordinator:
             store.mark_success(batch_id)
             if material_progress:
                 callbacks.progress(2, 2, "【登记结果】已完成 2/2 项；结果文件和批次状态均已保存")
-            try:
-                upload_path = Path(store.root) / running.directories["uploads"]
-                if upload_path.is_dir() and not any(upload_path.iterdir()):
-                    upload_path.rmdir()
-            except OSError:
-                pass
             elapsed = time.monotonic() - started_at
             runlog.log_line(
                 f"完成 {request.tool_name}，耗时 {elapsed:.1f} 秒"
@@ -394,6 +367,8 @@ class ProjectRunCoordinator:
                 runlog.log_exception(f"{request.tool_name} 失败", exc)
                 callbacks.error(exc)
         finally:
+            if batch_id is not None:
+                store.release_run_sources(batch_id)
             with self._lock:
                 self._active_batch_id = None
                 self._cancel_event = None

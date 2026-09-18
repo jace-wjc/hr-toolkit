@@ -3,7 +3,8 @@
 The project directory is the portable unit.  User files live in ordinary,
 visible folders while control data (project identity, batch manifests, locks,
 staging files and the recycle bin) lives below ``.hrtoolkit``.  Batch manifests
-are the source of truth; every stored path is relative to the project root.
+are the source of truth; retained results use project-relative paths. New
+input references describe user-owned files and are not required to reopen results.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import stat as stat_module
 import sys
 import threading
 import uuid
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -286,6 +287,8 @@ class ProjectStore:
         self._closed = False
         self._session_id = uuid.uuid4().hex
         self._mutex = threading.RLock()
+        self._run_input_sessions: dict[str, dict[str, Any]] = {}
+        self._active_run_temp: set[str] = set()
 
     @classmethod
     def create(cls, root: str | Path, name: str) -> "ProjectStore":
@@ -487,6 +490,7 @@ class ProjectStore:
         tool_name: str,
         business_description: str = "",
         business_period: str = "",
+        retain_sources: bool = False,
     ) -> BatchDetail:
         self._require_writable()
         group = str(group_name).strip() or "默认分组"
@@ -518,6 +522,7 @@ class ProjectStore:
             "directories": directories,
             "files": [],
             "source_directories": [],
+            "source_retention": "archive" if retain_sources else "references",
             "pending_import": None,
             "pending_rename": None,
             "pending_trash": None,
@@ -532,7 +537,7 @@ class ProjectStore:
             try:
                 batch_root.mkdir(parents=True, exist_ok=False)
                 _make_private(batch_root, directory=True)
-                for category in (CATEGORY_UPLOADS, CATEGORY_RESULTS):
+                for category in ((CATEGORY_UPLOADS, CATEGORY_RESULTS) if retain_sources else (CATEGORY_RESULTS,)):
                     path = _project_join(self.root, directories[category])
                     path.mkdir(mode=0o700, exist_ok=False)
                     _make_private(path, directory=True)
@@ -552,6 +557,7 @@ class ProjectStore:
         tool_name: str,
         business_description: str = "",
         business_period: str = "",
+        retain_sources: bool = False,
     ) -> BatchDetail:
         return self.create_draft_batch(
             group_name=group_name,
@@ -559,6 +565,7 @@ class ProjectStore:
             tool_name=tool_name,
             business_description=business_description,
             business_period=business_period,
+            retain_sources=retain_sources,
         )
 
     def start_processing(
@@ -801,6 +808,8 @@ class ProjectStore:
             _report_import_progress(on_progress, ImportProgress(phase="checking"))
             _raise_if_cancelled(cancelled)
             manifest = self._load_active_manifest(batch_id)
+            if manifest.get("source_retention") == "references":
+                raise ProjectStoreError("新处理批次不再保存源文件副本，请直接选择原文件。")
             batch = _batch_object(manifest)
             allowed = {"draft"} if category == CATEGORY_UPLOADS else BATCH_STATUSES
             if batch["status"] not in allowed:
@@ -1082,10 +1091,132 @@ class ProjectStore:
             raise ProjectStoreError("只有正在处理的批次可以写入结果。")
         return detail.directories[CATEGORY_RESULTS]
 
+    def reference_run_sources(self, batch_id, sources, *, current_version_roles=frozenset(),
+                              cancelled=None, on_progress=None) -> dict[str, list[Path]]:
+        """Validate original files without archiving them; keep checks only for this run."""
+        self._require_writable()
+        with self._mutex:
+            manifest = self._load_active_manifest(batch_id)
+            if _batch_object(manifest)["status"] != "draft" or manifest.get("source_retention") != "references":
+                raise ProjectStoreError("当前批次不支持直接读取源文件。")
+            target = _project_join(self.root, _directory_map(manifest)[CATEGORY_RESULTS]).parent
+            groups: dict[tuple[str, bool, bool, bool], list[Path]] = {}
+            replacements: dict[str, list[Path]] = {}
+            references = []
+            for source in sources:
+                path = Path(source.path).expanduser().absolute()
+                project_source = _is_inside(path, self.root)
+                current = project_source and source.role in current_version_roles
+                key = (source.role, project_source, source.preserve_directories, current)
+                groups.setdefault(key, []).append(path)
+                replacements.setdefault(source.role, []).append(path)
+                references.append({"path": str(path), "role": source.role})
+            session = {"groups": groups, "target": target, "cancelled": cancelled,
+                       "checks": {}, "topology": {}}
+            checks, topology = self._inspect_run_sources(session, on_progress=on_progress)
+            session["checks"], session["topology"] = checks, topology
+            manifest["input_references"] = references
+            self._write_active_manifest(batch_id, manifest)
+            self._run_input_sessions[batch_id] = session
+            return replacements
+
+    def _inspect_run_sources(self, session, *, on_progress=None):
+        checks, topology = {}, {}
+        cancelled = session["cancelled"]
+        for (_role, project_source, preserve, current), paths in session["groups"].items():
+            options = {"allow_empty": preserve, "cancelled": cancelled, "on_progress": on_progress}
+            if project_source:
+                items = self._collect_project_sources(paths, target_batch_root=session["target"],
+                    use_current_version=current, **options)
+            else:
+                items = self._collect_external_sources(paths, **options)
+            if preserve:
+                self._collect_source_directories(paths, project_sources=project_source,
+                    target_batch_root=session["target"], cancelled=cancelled)
+                for path in paths:
+                    topology[path.resolve()] = _directory_parts_strict(path.resolve(),
+                        ignore_temporary=not project_source, cancelled=cancelled)
+            for item in items:
+                _raise_if_cancelled(cancelled)
+                _assert_existing_ancestors_are_real(item.path.absolute(), allow_macos_root_aliases=not project_source)
+                metadata = _hash_stable_file(item.path)
+                if not current and item.expected_sha256 is not None and (
+                    metadata["sha256"] != item.expected_sha256 or metadata["size_bytes"] != item.expected_size_bytes
+                ):
+                    raise ProjectStoreError(f"项目资料已发生变化：{item.path.name}")
+                checks[item.path] = metadata
+        return checks, topology
+
+    def verify_run_sources(self, batch_id: str) -> None:
+        with self._mutex:
+            session = self._run_input_sessions.get(batch_id)
+            if session is None:
+                raise ProjectStoreError("本次源文件校验记录已失效，请重新导入。")
+            checks, topology = self._inspect_run_sources(session)
+            if checks != session["checks"] or topology != session["topology"]:
+                raise ProjectStoreError("处理期间源文件发生变化，请关闭源文件后重新处理。")
+
+    def release_run_sources(self, batch_id: str) -> None:
+        with self._mutex:
+            self._run_input_sessions.pop(batch_id, None)
+
+    @contextmanager
+    def run_temporary_directory(self):
+        """Only this task's intermediates; stale paths are reclaimed on project reopen."""
+        from .common.run_temp import temporary_root
+        self._require_writable()
+        token = uuid.uuid4().hex
+        path = self.staging_dir / token
+        with self._mutex:
+            _assert_no_link_components(self.root, path.relative_to(self.root))
+            path.mkdir(mode=0o700)
+            self._active_run_temp.add(token)
+        try:
+            with temporary_root(path):
+                yield path
+        finally:
+            with self._mutex:
+                self._active_run_temp.discard(token)
+                try:
+                    _assert_no_link_components(self.root, path.relative_to(self.root))
+                    shutil.rmtree(path)
+                except OSError as exc:
+                    from . import runlog
+                    runlog.log_line(f"本次临时资料暂未清理，将在重新打开项目时重试：{type(exc).__name__}")
+
+    def _create_reference_working_copy(self, batch_id: str, source: str | Path) -> Path:
+        session = self._run_input_sessions.get(batch_id)
+        if session is None:
+            raise ProjectStoreError("源文件校验记录失效，请重新选择资料。")
+        source = Path(source).resolve()
+        directory_parts = session["topology"].get(source)
+        if directory_parts is None:
+            raise ProjectStoreError("该文件夹未登记为本次处理来源。")
+        self.verify_run_sources(batch_id)
+        destination = self.result_directory(batch_id) / _visible_component(source.name)
+        expected = {path: metadata for path, metadata in session["checks"].items() if _is_inside(path, source)}
+        self._ensure_free_space(sum(item["size_bytes"] for item in expected.values()))
+        destination.mkdir(mode=0o700, exist_ok=False)
+        try:
+            for parts in directory_parts:
+                _raise_if_cancelled(session["cancelled"])
+                (destination / Path(*parts)).mkdir(parents=True, exist_ok=True)
+            for path, metadata in expected.items():
+                _assert_existing_ancestors_are_real(path.absolute())
+                copied = _copy_external_file(path, destination / path.relative_to(source),
+                    cancelled=session["cancelled"], on_chunk=None)
+                if copied != metadata:
+                    raise ProjectStoreError(f"建立结果副本期间源文件变化：{path.name}")
+        except BaseException:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise
+        return destination
+
     def create_result_working_copy(self, batch_id: str, source: str | Path) -> Path:
         """Create a verified directory copy for tools that modify a folder tree.
 
-        Only files declared in this batch's upload manifest are copied.  The
+        New batches copy validated originals directly into the result folder.
+        Legacy batches copy files declared in the upload manifest. The
         copy is made file-by-file with no-follow opens and every copied digest
         must still match the upload snapshot, so later links or unregistered
         files in the visible upload directory cannot enter formal results.
@@ -1097,6 +1228,8 @@ class ProjectStore:
             batch = _batch_object(manifest)
             if batch["status"] != "running":
                 raise ProjectStoreError("只有正在处理的批次可以建立结果副本。")
+            if manifest.get("source_retention") == "references":
+                return self._create_reference_working_copy(batch_id, source)
             directories = _directory_map(manifest)
             upload_root = _project_join(self.root, directories[CATEGORY_UPLOADS])
             result_root = _project_join(self.root, directories[CATEGORY_RESULTS])
@@ -2322,7 +2455,7 @@ class ProjectStore:
             )
 
     def _recover_workspace(self) -> None:
-        referenced_staging: set[str] = set()
+        referenced_staging: set[str] = set(self._active_run_temp)
         for path in sorted(self.manifest_dir.glob("*.json")):
             if _is_link_like(path) or not path.is_file():
                 raise ProjectStoreError("批次清单目录包含不安全项目。")
@@ -2342,7 +2475,7 @@ class ProjectStore:
                 self._recover_pending_trash(batch_id, manifest)
                 continue
             batch = _batch_object(manifest)
-            if batch["status"] == "running":
+            if batch["status"] == "running" and batch_id not in self._run_input_sessions:
                 self._quarantine_unregistered_results(manifest, reason="startup_recovery")
                 batch["status"] = "stopped"
                 batch["finished_at"] = _utc_now()

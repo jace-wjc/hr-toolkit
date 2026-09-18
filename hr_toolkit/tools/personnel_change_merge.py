@@ -9,7 +9,7 @@ _PERIOD_FROM_TEXT_MONTH_ONLY = re.compile(r"([01]?\d)月")
 _PERIOD_FROM_TEXT_YEAR_ONLY = re.compile(r"(20\d{2})年")
 _PERIOD_FROM_CELL_PATTERN = re.compile(r"(20\d{2})年?([01]?\d)月")
 _HEADER_WHITESPACE = re.compile(r"\s+")
-import tempfile
+from hr_toolkit.common.run_temp import temporary_directory
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
@@ -249,7 +249,7 @@ def merge_personnel_changes(
         if not path.exists():
             raise FileNotFoundError(f"异动表文件、压缩包或文件夹不存在：{path}")
 
-    with tempfile.TemporaryDirectory(prefix="hr_change_merge_") as temp_root:
+    with temporary_directory(prefix="hr_change_merge_") as temp_root:
         temp_dir = Path(temp_root)
         source_files = _find_change_files(input_paths, temp_dir, warnings)
         _check_cancelled(cancelled)
@@ -353,7 +353,7 @@ def update_roster_from_change_summaries(
     if not is_supported_excel_file(analysis_template):
         raise ValueError("人力资源花名册目前只支持 .xlsx 或 .xls 文件。")
 
-    with tempfile.TemporaryDirectory(prefix="hr_roster_update_") as temp_root:
+    with temporary_directory(prefix="hr_roster_update_") as temp_root:
         temp_dir = Path(temp_root)
         working_analysis_template = ensure_xlsx_workbook(analysis_template, temp_dir)
         summary_files = _find_summary_files(input_paths, warnings, temp_dir)

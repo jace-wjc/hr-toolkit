@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .project_run import serializable
+from .common.run_temp import current_temporary_root
 
 
 PROCESS_FILE_THRESHOLD_BYTES = 8 * 1024 * 1024
@@ -134,6 +135,7 @@ def _child_entry(
     function_name: str,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    temporary_root: str | None = None,
 ) -> None:
     started = time.monotonic()
     terminal_message: tuple[Any, ...]
@@ -148,6 +150,10 @@ def _child_entry(
 
     try:
         try:
+            if temporary_root is not None:
+                # This process handles one call only, including nested worker threads.
+                import tempfile
+                tempfile.tempdir = temporary_root
             module = importlib.import_module(module_name)
             function = getattr(module, function_name)
             call_kwargs = dict(kwargs)
@@ -231,6 +237,7 @@ def run_business_process(
                 function_name,
                 args,
                 kwargs,
+                current_temporary_root(),
             ),
             daemon=False,
             name=f"HRToolkit-{function_name}",

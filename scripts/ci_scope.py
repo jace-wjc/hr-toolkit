@@ -43,6 +43,7 @@ PIN_TEST = (
 
 # Entries add caller coverage to the matching test_<filename>.py, when it exists.
 ROUTES = {
+    "hr_toolkit/common/run_temp.py": BUSINESS + " " + PROCESS + " " + STORE,
     "hr_toolkit/gui_qt/drop_paths.py": "input_selection " + GUI,
     "hr_toolkit/region_codes.py": "archive_import project_store " + GUI,
     "hr_toolkit/gui_qt/input_selection.py": "input_selection " + GUI,

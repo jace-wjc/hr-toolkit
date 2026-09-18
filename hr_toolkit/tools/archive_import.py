@@ -10,7 +10,7 @@ _HEADER_WHITESPACE = re.compile(r"\s+")
 _OTHER_PART_SEPARATOR = re.compile(r"[；;]+")
 
 import shutil
-import tempfile
+from hr_toolkit.common.run_temp import temporary_directory
 from copy import copy
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
@@ -248,7 +248,7 @@ def import_archive_transfers(
         if not is_supported_excel_file(target):
             raise ValueError("档案汇总表目前只支持 .xlsx 或 .xls 文件。")
 
-    with tempfile.TemporaryDirectory(prefix="hr_archive_import_") as temp_root:
+    with temporary_directory(prefix="hr_archive_import_") as temp_root:
         temp_dir = Path(temp_root)
         source_files = _find_source_files(input_paths, temp_dir, warnings)
         if not source_files:
@@ -333,7 +333,7 @@ def export_company_archive_tables(
 
     warnings: list[str] = []
     _check_archive_cancelled(cancelled)
-    with tempfile.TemporaryDirectory(prefix="hr_archive_export_") as temp_root:
+    with temporary_directory(prefix="hr_archive_export_") as temp_root:
         temp_dir = Path(temp_root)
         summary_files = _find_excel_input_files(summary_paths, temp_dir, warnings)
         if not summary_files:
