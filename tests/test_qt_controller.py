@@ -415,7 +415,7 @@ class QtControllerTests(unittest.TestCase):
                 self.assertEqual(controller.selectionFeedback, {})
                 self.assertEqual(controller._input_states[controller._state_key()], [])
 
-    def test_hover_checks_actual_folder_type_and_requires_matching_completed_preview(self) -> None:
+    def test_hover_checks_actual_folder_type_and_requires_matching_preview(self) -> None:
         from hr_toolkit.gui_qt.compat import QUrl
         controller = self.controller()
         self.addCleanup(controller.close)
@@ -427,11 +427,13 @@ class QtControllerTests(unittest.TestCase):
             urls = [QUrl.fromLocalFile(str(folder)).toString()]
             with patch("hr_toolkit.gui_qt.controller.threading.Thread"):
                 initial = controller.beginDropPreview("input", urls)
-                self.assertFalse(controller.finishDropPreview(initial["token"], "input", urls))
-                controller._check_drop_previews()
-                self.assertTrue(previews[-1]["accepted"])
+                self.assertTrue(initial["pending"])
+                # 悬停校验尚未完成时也允许松手（见 test_drop_can_finish_while_hover_validation_is_pending），
+                # 但角色或路径对不上的一律拒绝。
                 self.assertFalse(controller.finishDropPreview(initial["token"], "support", urls))
                 self.assertFalse(controller.finishDropPreview(initial["token"], "input", []))
+                controller._check_drop_previews()
+                self.assertTrue(previews[-1]["accepted"])
                 self.assertTrue(controller.finishDropPreview(initial["token"], "input", urls))
                 self.assertTrue(controller.selectionChecking)
 
