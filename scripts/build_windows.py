@@ -218,6 +218,9 @@ RELEASE_TEMPLATE_NAMES = (
     "social_security_detail_template.xlsx",
     "social_security_summary_template.xlsx",
 )
+# Excel/WPS 编辑模板时会留下隐藏的属主锁文件，跨卷拷贝还可能留下 AppleDouble 副本。
+# pathlib 的 glob 会匹配这类隐藏文件，若不排除，白名单校验会把本机残留误报成「多出模板」。
+TEMPLATE_IGNORED_PREFIXES = (".", "~$")
 PE_MACHINE_AMD64 = 0x8664
 WINDOWS_TARGET_MODERN = "modern"
 WINDOWS_TARGET_WIN7 = "win7"
@@ -1017,9 +1020,15 @@ def pyinstaller_commands(
     return main, updater
 
 
+def is_ignored_template_entry(path: Path) -> bool:
+    """判断模板目录中的条目是否为 Office 锁文件等本机残留（macOS `.~名称.xlsx`、Windows `~$名称.xlsx`）。"""
+    return path.name.startswith(TEMPLATE_IGNORED_PREFIXES)
+
+
 def release_template_files() -> tuple[Path, ...]:
     expected = set(RELEASE_TEMPLATE_NAMES)
-    discovered = {path.name for path in TEMPLATES_DIR.glob("*.xlsx") if path.is_file()}
+    discovered = {path.name for path in TEMPLATES_DIR.glob("*.xlsx")
+                  if path.is_file() and not is_ignored_template_entry(path)}
     if discovered != expected:
         missing = sorted(expected - discovered)
         extra = sorted(discovered - expected)

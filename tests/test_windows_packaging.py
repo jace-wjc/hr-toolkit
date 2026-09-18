@@ -165,6 +165,31 @@ class WindowsPackagingTests(unittest.TestCase):
         self.assertFalse(any(value.startswith(str(build_windows.TEMPLATES_DIR) + ";") for value in data_values))
         self.assertFalse(any("附件" in value or "outputs" in value for value in data_values))
 
+    def test_release_template_whitelist_ignores_local_office_lock_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            templates = Path(tmp)
+            for name in build_windows.RELEASE_TEMPLATE_NAMES:
+                (templates / name).write_bytes(b"template")
+            # Excel/WPS 打开模板时留下的锁文件不应被误判成内置模板。
+            for junk in (
+                ".~archive_company_template.xlsx",
+                "~$social_security_detail_template.xlsx",
+                "._data_statistics_template.xlsx",
+            ):
+                (templates / junk).write_bytes(b"lock")
+            with patch.object(build_windows, "TEMPLATES_DIR", templates):
+                self.assertEqual(
+                    tuple(path.name for path in build_windows.release_template_files()),
+                    build_windows.RELEASE_TEMPLATE_NAMES,
+                )
+                (templates / "extra_template.xlsx").write_bytes(b"extra")
+                with self.assertRaisesRegex(RuntimeError, "多出="):
+                    build_windows.release_template_files()
+                (templates / "extra_template.xlsx").unlink()
+                (templates / build_windows.RELEASE_TEMPLATE_NAMES[0]).unlink()
+                with self.assertRaisesRegex(RuntimeError, "缺少="):
+                    build_windows.release_template_files()
+
     def test_win7_pyinstaller_lane_is_isolated_and_bundles_compatibility_runtimes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
