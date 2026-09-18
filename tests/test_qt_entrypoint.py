@@ -443,7 +443,13 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertNotIn("confirmed.checked = true", locator)
         self.assertNotIn(".skip =", locator)
         self.assertNotIn("saveTemplateChoice", locator)
+        self.assertNotIn("extra.checked = true", locator)
         self.assertIn("(!problem && confirmed.checked)", template)
+        self.assertIn("remember: rememberChoice.checked", template)
+        self.assertIn("rememberChoice.checked = false", template)
+        self.assertIn("dialog.backend.editTemplateProfile(savedProfile.key)", template)
+        self.assertIn("dialog.backend.deleteTemplateProfile(savedProfile.key)", template)
+        self.assertIn("dialog.profilesPage && dialog.backend ? dialog.backend.templateSavedProfiles : []", template)
 
     def test_result_feedback_and_safe_lightweight_controls(self) -> None:
         qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"

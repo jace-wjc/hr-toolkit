@@ -252,6 +252,9 @@ class AppController(QObject):
         self._template_settings_tool = ""
         self._template_issue_project = ""
         self._template_input_snapshot = ""
+        self._template_session_rules: dict[str, Any] | None = None
+        self._template_session_snapshot = ""
+        self._template_continuing = False
         self._salary_pending: ToolInvocation | None = None
         self._salary_project_key = ""
         self._salary_inspection: dict[str, Any] = {}
@@ -3388,6 +3391,8 @@ class AppController(QObject):
         if not store.writable:
             self.notificationRequested.emit("当前项目只能查看", store.workspace.read_only_reason or "项目为只读状态。", "warning")
             return
+        if not self._template_continuing:
+            self._reset_template_session()
         self._prepare_invocation(preview=self._spec.tool_id == "folder_rename")
 
     @Slot(result="QVariantMap")
@@ -3519,6 +3524,59 @@ class AppController(QObject):
     def templateSelectionData(self):
         return self._template_issue
 
+    @Property("QVariantList", notify=specChanged)
+    def templateSavedProfiles(self):
+        from hr_toolkit.common.template_mapping import SUPPORTED_TOOLS, saved_choices
+        tool = self._spec.tool_id
+        if tool not in SUPPORTED_TOOLS or not self.templateSavedProfileCount:
+            return []
+        return saved_choices(tool, self._header_name_rules.get(tool, {}))
+
+    @Property(int, notify=specChanged)
+    def templateSavedProfileCount(self):
+        # The main toolbar must not load spreadsheet parsers just to show a count.
+        profiles = self._header_name_rules.get(self._spec.tool_id, {}).get("profiles", [])
+        return len(profiles) if isinstance(profiles, list) else 0
+
+    def _reset_template_session(self):
+        self._template_session_rules = None
+        self._template_session_snapshot = ""
+
+    @Slot(str, result=bool)
+    def deleteTemplateProfile(self, key):
+        if self._busy or self._template_settings_tool != self._spec.tool_id:
+            return False
+        from hr_toolkit.common.template_mapping import clean_rules
+        try:
+            tool = self._spec.tool_id
+            rules = clean_rules(tool, self._header_name_rules.get(tool, {}))
+            rules["profiles"] = [p for p in rules["profiles"] if p["key"] != key]
+            previous = dict(self._header_name_rules)
+            self._header_name_rules[tool] = rules
+            if not self._save_workspace_preferences():
+                self._header_name_rules = previous
+                raise ValueError("删除未能保存，请重试")
+            self._reset_template_session()
+            self.specChanged.emit()
+            return True
+        except (ValueError, TypeError, KeyError) as exc:
+            self.notificationRequested.emit("未能删除选择", str(exc), "warning")
+            return False
+
+    @Slot(str)
+    def editTemplateProfile(self, key):
+        if self._busy or self._template_settings_tool != self._spec.tool_id:
+            return
+        from hr_toolkit.common.template_mapping import profile_issue
+        try:
+            tool = self._spec.tool_id
+            self._template_issue = profile_issue(tool, self._header_name_rules.get(tool, {}), key)
+            self._template_issue_project = str(self._project_path)
+            self._template_input_snapshot = self._template_current_inputs()
+            self.templateSelectionRequested.emit()
+        except (ValueError, TypeError, KeyError) as exc:
+            self.notificationRequested.emit("请重新选择列名", str(exc), "warning")
+
     @Slot()
     def reviewTemplateRules(self):
         if self._busy or not self.supportsTemplateRules:
@@ -3564,6 +3622,8 @@ class AppController(QObject):
             if not self._save_workspace_preferences():
                 self._header_name_rules = previous
                 raise ValueError("保存失败，请重试")
+            self._reset_template_session()
+            self.specChanged.emit()
             self.notificationRequested.emit("名称规则已保存", "请重新点击开始处理。不同工具的设置互不影响。", "success")
             return True
         except (ValueError, TypeError, KeyError) as exc:
@@ -3574,21 +3634,39 @@ class AppController(QObject):
     def saveTemplateChoice(self, payload):
         if self._busy:
             return
-        from hr_toolkit.common.template_mapping import save_choice
+        from hr_toolkit.common.template_mapping import clean_rules, save_choice
         try:
             tool = self._template_issue.get("tool")
             if tool != self._spec.tool_id or self._template_issue_project != str(self._project_path):
                 raise ValueError("当前工具或项目已改变，请重新开始处理")
             if self._template_input_snapshot != self._template_current_inputs():
                 raise ValueError("选择的文件或处理选项已改变，请返回主界面重新开始处理")
-            rules = save_choice(tool, self._header_name_rules.get(tool, {}), self._template_issue, json.loads(payload))
-            previous = dict(self._header_name_rules)
-            self._header_name_rules[tool] = rules
-            if not self._save_workspace_preferences():
-                self._header_name_rules = previous
-                raise ValueError("对应关系未能保存，请重试")
+            selection = json.loads(payload)
+            editing = self._template_issue.get("editing_profile")
+            persistent = self._header_name_rules.get(tool, {})
+            base = self._template_session_rules if self._template_session_snapshot == self._template_input_snapshot else None
+            rules = save_choice(tool, base if base is not None else persistent, self._template_issue, selection)
+            if editing or selection.get("remember") is True:
+                if editing:
+                    persistent = clean_rules(tool, persistent)
+                    if not any(p["key"] == editing for p in persistent["profiles"]):
+                        raise ValueError("这条选择已删除，请返回重新选择")
+                    persistent["profiles"] = [p for p in persistent["profiles"] if p["key"] != editing]
+                saved = save_choice(tool, persistent, self._template_issue, selection)
+                previous = dict(self._header_name_rules)
+                self._header_name_rules[tool] = saved
+                if not self._save_workspace_preferences():
+                    self._header_name_rules = previous
+                    raise ValueError("对应关系未能保存，请重试")
+                self.specChanged.emit()
             self._template_issue = {}
-            self._append_log("已记住这份表的列名选择，继续处理。", "info")
+            if editing:
+                self._reset_template_session()
+                self.notificationRequested.emit("选择已修改", "下次处理相同表头时使用新选择。", "success")
+                return
+            self._template_session_rules = rules
+            self._template_session_snapshot = self._template_input_snapshot
+            self._append_log("已确认列名，继续处理。" + ("已记住，可在“已记住的选择”中修改或删除。" if selection.get("remember") is True else "本次选择不会保存到下次。"), "info")
             # 回到正常入口，重新检查项目状态和输入；不复用失败任务的运行目录。
             QTimer.singleShot(0, self._continue_template_run)
         except (ValueError, TypeError, KeyError) as exc:
@@ -3610,9 +3688,14 @@ class AppController(QObject):
         if self._closed or self._shutdown_requested:
             return
         if self._busy or self._template_input_snapshot != self._template_current_inputs():
-            self.notificationRequested.emit("列名选择已保存", "当前处理状态已改变，请回到主界面重新开始处理。", "warning")
+            self._reset_template_session()
+            self.notificationRequested.emit("请重新确认列名", "当前处理状态已改变，请回到主界面重新开始处理。", "warning")
             return
-        self.runOrCancel()
+        self._template_continuing = True
+        try:
+            self.runOrCancel()
+        finally:
+            self._template_continuing = False
 
     @Property("QVariantList", notify=salaryMappingChanged)
     def salaryAliasSections(self) -> list[dict[str, Any]]:
@@ -4013,8 +4096,12 @@ class AppController(QObject):
             return
         from hr_toolkit.common.template_mapping import SUPPORTED_TOOLS
         if invocation.tool_id in SUPPORTED_TOOLS:
+            self._template_settings_tool = invocation.tool_id
+            rules = self._header_name_rules.get(invocation.tool_id, {})
+            if self._template_session_snapshot == self._template_current_inputs() and self._template_session_rules is not None:
+                rules = self._template_session_rules
             invocation = replace(invocation, kwargs={**invocation.kwargs,
-                "template_rules": json.loads(json.dumps(self._header_name_rules.get(invocation.tool_id, {}), ensure_ascii=False))})
+                "template_rules": json.loads(json.dumps(rules, ensure_ascii=False))})
             self._template_issue_project = str(self._project_path)
             self._template_input_snapshot = self._template_current_inputs()
         request = RunRequest(
@@ -4112,6 +4199,7 @@ class AppController(QObject):
 
     @Slot(object, str, float, bool)
     def _apply_run_success(self, payload, result_dir: str, elapsed: float, isolated: bool) -> None:
+        self._reset_template_session()
         self._drain_run_progress()
         self._flush_material_progress()
         if self._run_progress_visible:
@@ -4173,12 +4261,14 @@ class AppController(QObject):
             except (ValueError, TypeError, AttributeError):
                 pass
         self._append_log(f"处理失败：{message}", "error")
+        self._reset_template_session()
         self._flush_logs()
         self.notificationRequested.emit("处理失败", message, "error")
         self.refreshWorkspace()
 
     @Slot()
     def _apply_run_stopped(self) -> None:
+        self._reset_template_session()
         self._drain_run_progress()
         self._flush_material_progress()
         if self._run_progress_visible:

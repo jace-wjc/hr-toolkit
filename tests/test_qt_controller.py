@@ -36,6 +36,19 @@ def _preview_probe(*, cancelled=None):
     }
 
 
+def _prepare_template_choice(controller):
+    from hr_toolkit.common.template_mapping import catalog
+    controller.selectTool("data_statistics")
+    controller._template_issue = {
+        "tool": "data_statistics", "file": "考勤.xlsx",
+        "roles": [{"key": "attendance_summary", **catalog("data_statistics")["attendance_summary"]}],
+        "sheets": [{"name": "考勤表", "rows": [["222", "名字", "应出勤天数"], ["28", "测试人员", "20"]]}],
+    }
+    controller._template_issue_project = str(controller._project_path)
+    controller._template_input_snapshot = controller._template_current_inputs()
+    return {"role": "attendance_summary", "sheet": "考勤表", "row": 1, "columns": {"姓名": 1}}
+
+
 @unittest.skipUnless(AppController is not None, "PySide GUI runtime is not installed")
 class QtControllerTests(unittest.TestCase):
     @classmethod
@@ -46,6 +59,75 @@ class QtControllerTests(unittest.TestCase):
         value = AppController()
         value._save_workspace_preferences = lambda: None
         return value
+
+    def test_template_choice_defaults_to_current_run_and_manual_start_clears_it(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        choice = _prepare_template_choice(controller)
+        controller._save_workspace_preferences = Mock(return_value=True)
+        with patch("hr_toolkit.gui_qt.controller.QTimer.singleShot"):
+            controller.saveTemplateChoice(json.dumps(choice))
+        controller._save_workspace_preferences.assert_not_called()
+        self.assertNotIn("data_statistics", controller._header_name_rules)
+        self.assertEqual(controller._template_session_rules["profiles"][0]["columns"], {"姓名": 1})
+        self.assertEqual(controller._template_session_snapshot, controller._template_current_inputs())
+        # More prompts in the same continuation keep earlier one-time choices.
+        _prepare_template_choice(controller)
+        controller._template_issue["sheets"][0]["rows"][0][0] = "333"
+        with patch("hr_toolkit.gui_qt.controller.QTimer.singleShot"):
+            controller.saveTemplateChoice(json.dumps(choice))
+        self.assertEqual(len(controller._template_session_rules["profiles"]), 2)
+        continuing = []
+        with patch.object(controller, "runOrCancel", side_effect=lambda: continuing.append(controller._template_continuing)):
+            controller._continue_template_run()
+        self.assertEqual(continuing, [True])
+        self.assertFalse(controller._template_continuing)
+        controller._project_store = Mock(writable=True)
+        with patch.object(controller, "_prepare_invocation") as prepare:
+            controller.runOrCancel()
+            prepare.assert_called_once()
+        self.assertIsNone(controller._template_session_rules)
+        self.assertEqual(controller._template_session_snapshot, "")
+
+    def test_remembered_template_choice_can_be_edited_and_deleted_with_save_rollback(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        choice = _prepare_template_choice(controller)
+        controller._save_workspace_preferences = Mock(return_value=True)
+        with patch("hr_toolkit.gui_qt.controller.QTimer.singleShot"):
+            controller.saveTemplateChoice(json.dumps({**choice, "remember": True}))
+        controller.reviewTemplateRules()
+        saved = controller.templateSavedProfiles[0]
+        self.assertIn("姓名 ← 222", saved["description"])
+        controller.editTemplateProfile(saved["key"])
+        with patch("hr_toolkit.gui_qt.controller.QTimer.singleShot") as schedule:
+            controller.saveTemplateChoice(json.dumps({**choice, "columns": {"姓名": 2}}))
+        schedule.assert_not_called()  # Editing settings must not start processing.
+        self.assertIn("姓名 ← 名字", controller.templateSavedProfiles[0]["description"])
+        self.assertIsNone(controller._template_session_rules)
+        controller._save_workspace_preferences.return_value = False
+        self.assertFalse(controller.deleteTemplateProfile(saved["key"]))
+        self.assertEqual(len(controller.templateSavedProfiles), 1)
+        controller._save_workspace_preferences.return_value = True
+        self.assertTrue(controller.deleteTemplateProfile(saved["key"]))
+        self.assertEqual(controller.templateSavedProfiles, [])
+
+    def test_legacy_template_choice_stays_visible_and_can_be_removed(self) -> None:
+        from hr_toolkit.common.template_mapping import save_choice
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        choice = _prepare_template_choice(controller)
+        rules = save_choice("data_statistics", {}, controller._template_issue, choice)
+        profile = rules["profiles"][0]
+        for key in ("headers", "file", "required", "one_of"):
+            profile.pop(key, None)
+        controller._header_name_rules["data_statistics"] = rules
+        controller._save_workspace_preferences = Mock(return_value=True)
+        controller.reviewTemplateRules()
+        self.assertFalse(controller.templateSavedProfiles[0]["editable"])
+        self.assertIn("姓名 ← 第 1 列", controller.templateSavedProfiles[0]["description"])
+        self.assertTrue(controller.deleteTemplateProfile(profile["key"]))
+        self.assertEqual(controller._header_name_rules["data_statistics"]["profiles"], [])
 
     def test_update_byte_progress_does_not_refresh_tool_or_result_state(self) -> None:
         controller = self.controller()

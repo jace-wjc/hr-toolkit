@@ -33,6 +33,57 @@ def invoke(tool, callback, rules=None):
 
 
 class TemplateMappingTest(unittest.TestCase):
+    def test_summary_with_renamed_name_suggests_summary_without_changing_parser(self):
+        from hr_toolkit.tools.data_statistics import _adapt_statistics_grid
+        ws = sheet(["222", "应出勤天数", "实际出勤天数", "请假天数"], ["张三", 19, 19, 0], name="考勤表")
+        self.addCleanup(ws.parent.close)
+        grid = SheetGrid(ws)
+        self.assertIsNone(invoke("data_statistics", lambda: _adapt_statistics_grid(grid, "考勤.xlsx")))
+        with self.assertRaises(TemplateSelectionRequired) as caught:
+            invoke("data_statistics", lambda: request_selection([grid], ["attendance", "attendance_summary", "weekly", "monthly"], file="考勤.xlsx"))
+        issue = caught.exception.payload
+        self.assertEqual(issue["suggested_role"], "attendance_summary")
+        spec = next(role for role in issue["roles"] if role["key"] == issue["suggested_role"])
+        self.assertEqual(spec["required"], ["姓名"])
+        rules = save_choice("data_statistics", {}, issue,
+                            {"role": "attendance_summary", "sheet": "考勤表", "row": 1, "columns": {"姓名": 1}})
+        mapped = invoke("data_statistics", lambda: _adapt_statistics_grid(grid, "考勤.xlsx"), rules)
+        self.assertEqual(mapped.mapping_role, "attendance_summary")
+        self.assertEqual(mapped.cell(2, 1).value, "张三")
+        self.assertEqual(ws.cell(1, 1).value, "222")
+
+    def test_role_suggestion_does_not_guess_ambiguous_weekly_monthly(self):
+        ws = sheet(["汇报编号", "汇报人", "汇报时间"])
+        self.addCleanup(ws.parent.close)
+        with self.assertRaises(TemplateSelectionRequired) as caught:
+            invoke("data_statistics", lambda: request_selection([ws], ["weekly", "monthly"]))
+        self.assertEqual(caught.exception.payload["suggested_role"], "")
+
+    def test_saved_choice_can_be_edited_using_headers_without_saving_personal_rows(self):
+        from hr_toolkit.common.template_mapping import profile_issue, saved_choices
+        ws = sheet(["222", "名字", "应出勤天数"], [28, "测试人员", 20], name="考勤表")
+        self.addCleanup(ws.parent.close)
+        with self.assertRaises(TemplateSelectionRequired) as caught:
+            invoke("data_statistics", lambda: map_sheet(ws, "attendance_summary"))
+        rules = save_choice("data_statistics", {}, caught.exception.payload,
+                            {"role": "attendance_summary", "sheet": "考勤表", "row": 1, "columns": {"姓名": 1}})
+        profile = rules["profiles"][0]
+        self.assertNotIn("测试人员", json.dumps(profile, ensure_ascii=False))
+        self.assertIn("姓名 ← 222", saved_choices("data_statistics", rules)[0]["description"])
+        issue = profile_issue("data_statistics", rules, profile["key"])
+        updated = save_choice("data_statistics", rules, issue,
+                              {"role": "attendance_summary", "sheet": "考勤表", "row": 1, "columns": {"姓名": 2}})
+        self.assertEqual(len(updated["profiles"]), 1)
+        mapped = invoke("data_statistics", lambda: map_sheet(ws, "attendance_summary"), updated)
+        self.assertEqual(mapped.cell(1, 1).value, "222")
+        self.assertEqual(mapped.cell(1, 2).value, "姓名")
+        self.assertEqual(mapped.cell(2, 2).value, "测试人员")
+        legacy = {"profiles": [{k: v for k, v in profile.items() if k not in {"headers", "required", "one_of", "file"}}]}
+        self.assertFalse(saved_choices("data_statistics", legacy)[0]["editable"])
+        self.assertEqual(invoke("data_statistics", lambda: map_sheet(ws, "attendance_summary"), legacy).cell(1, 1).value, "姓名")
+        with self.assertRaisesRegex(ValueError, "删除后重新处理"):
+            profile_issue("data_statistics", legacy, profile["key"])
+
     def test_normalization_is_reused_without_changing_source_or_column_priority(self):
         from hr_toolkit.common import template_mapping as mapping
         marker = " 唯一未使用表头 "

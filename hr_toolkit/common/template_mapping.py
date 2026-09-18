@@ -200,6 +200,25 @@ def field_label(name):
             "成本中心.名称": "成本中心"}.get(name, name)
 
 
+def suggest_role(roles, sheets):
+    """Suggest a UI starting point from headers only; never assign a parser role."""
+    scores = {}
+    for role in roles:
+        if role["key"] == "_ignore":
+            continue
+        best = 0
+        required = set(role["required"])
+        for sheet in sheets:
+            for row in sheet["rows"]:
+                values = {normalize_alias(value) for value in row if value}
+                score = sum(3 if name in required else 1 for name, aliases in role["fields"].items()
+                            if values.intersection(normalize_alias(alias) for alias in aliases))
+                best = max(best, score)
+        scores[role["key"]] = best
+    winners = [key for key, score in scores.items() if score and score == max(scores.values())]
+    return winners[0] if len(winners) == 1 else ""
+
+
 def request_selection(sheets, roles, *, file="", message="请选择原表对应的列", row=1, allow_ignore=False, required_fields=None, one_of=None, selected_sheet=""):
     if not active():
         raise ValueError(message)
@@ -215,10 +234,12 @@ def request_selection(sheets, roles, *, file="", message="请选择原表对应�
                           "one_of": (one_of or {}).get(role, [])})
     if allow_ignore:
         described.append({"key": "_ignore", "label": "此工作表不是本次业务数据，不参与处理", "fields": {}, "required": []})
+    previews = [{"name": _title(ws), "rows": preview(ws)} for ws in sheets]
     raise TemplateSelectionRequired({"tool": tool, "file": str(file), "message": message, "row": row,
         "selected_sheet": selected_sheet,
+        "suggested_role": roles[0] if len(roles) == 1 else suggest_role(described, previews),
         "roles": described,
-        "sheets": [{"name": _title(ws), "rows": preview(ws)} for ws in sheets]})
+        "sheets": previews})
 
 
 def _ignore_key(file, name, rows):
@@ -440,5 +461,48 @@ def save_choice(tool, rules, issue, payload):
         raise ValueError("请至少选择一项金额对应列；个人、单位及险种不同的金额请分别选择")
     key = profile_key(sheet["name"], row, values)
     rules["profiles"] = [p for p in rules["profiles"] if p["key"] != key]
-    rules["profiles"].append({"key": key, "role": role, "sheet": sheet["name"], "row": row, "columns": cleaned})
+    rules["profiles"].append({"key": key, "role": role, "sheet": sheet["name"], "row": row, "columns": cleaned,
+                              "file": issue.get("file", ""), "headers": list(values),
+                              "required": list(spec["required"]), "one_of": list(spec.get("one_of", []))})
     return clean_rules(tool, rules)
+
+
+def profile_issue(tool, rules, key):
+    """Reopen a saved choice using headers only. Legacy profiles remain deletable."""
+    rules = clean_rules(tool, rules)
+    profile = next((p for p in rules["profiles"] if p["key"] == key), None)
+    if profile is None:
+        raise ValueError("这条选择已不存在，请重新打开设置")
+    headers, row = profile.get("headers"), int(profile.get("row", 0))
+    if (profile["role"] == "_ignore" or not isinstance(headers, list) or not 1 <= row <= 30
+            or len(headers) > 512 or any(not isinstance(h, str) or len(h) > 200 for h in headers)):
+        raise ValueError("这条旧版记录未保存列名，请删除后重新处理原文件，重新选择对应列")
+    spec = catalog(tool)[profile["role"]]
+    fields = {name: rules["fields"].get(profile["role"] + "|" + name, aliases) for name, aliases in spec["fields"].items()}
+    required = list(dict.fromkeys([*spec["required"], *profile.get("required", []),
+                                  *(name for name in fields if profile["role"] + "|" + name in rules["fields"])]))
+    described = {**spec, "key": profile["role"], "fields": fields, "required": required,
+                 "field_labels": {name: field_label(name) for name in fields}, "one_of": profile.get("one_of", [])}
+    return {"tool": tool, "file": profile.get("file", ""), "editing_profile": key, "row": row,
+            "selected_sheet": profile["sheet"], "suggested_role": profile["role"], "roles": [described],
+            "selected_columns": dict(profile["columns"]),
+            "sheets": [{"name": profile["sheet"], "rows": [[] for _ in range(row - 1)] + [headers]}]}
+
+
+def saved_choices(tool, rules):
+    rules = clean_rules(tool, rules)
+    specs = catalog(tool)
+    result = []
+    for profile in rules["profiles"]:
+        headers = profile.get("headers", [])
+        descriptions = []
+        for name, col in profile["columns"].items():
+            col = int(col)
+            header = headers[col - 1] if 1 <= col <= len(headers) else ""
+            descriptions.append(f"{field_label(name)} ← {header or '第 ' + str(col) + ' 列'}")
+        result.append({"key": profile["key"], "sheet": profile.get("sheet", ""),
+                       "file": profile.get("file", ""), "row": profile.get("row", 0),
+                       "label": specs.get(profile["role"], {}).get("label", "不参与处理"),
+                       "description": "；".join(descriptions) or "此工作表不参与处理",
+                       "editable": bool(headers) and profile["role"] != "_ignore"})
+    return result

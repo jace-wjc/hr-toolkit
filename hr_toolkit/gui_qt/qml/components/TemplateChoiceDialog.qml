@@ -14,6 +14,11 @@ AppDialog {
     property var chosen: ({})
     property string lastPayload: ""
     property bool rulesPage: false
+    property bool profilesPage: false
+    property bool detailsExpanded: false
+    property bool roleDetailsExpanded: false
+    property var attentionFields: []
+    property bool editingSaved: !!mappingData.editing_profile && !salaryMode
     property bool hasDocument: false
     property bool salaryMode: false
     property bool closingFromBackend: false
@@ -34,14 +39,14 @@ AppDialog {
     }, 0))
     property var columnChoices: makeColumns()
     property string problem: salaryMode ? salaryProblem() : selectionProblem()
-    title: "模板适配"
+    title: profilesPage ? "已记住的选择" : rulesPage ? "常用列名" : editingSaved ? "修改已记住的选择" : "确认列名"
     width: Math.min(parent ? parent.width - 24 : 900, 900)
     height: Math.min(parent ? parent.height - 24 : 790, 790)
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
-    rejectText: "返回"
-    acceptText: rulesPage ? (hasDocument ? "保存名称并重新检查" : "保存常用名称") : !hasDocument ? "开始检查并处理" : salaryMode ? "确认全部并继续处理" : skipping ? "确认跳过并继续" : "确认并继续处理"
-    acceptButtonEnabled: !working && (rulesPage || !hasDocument || (!problem && confirmed.checked))
+    rejectText: profilesPage ? "关闭" : "返回"
+    acceptText: profilesPage ? "完成" : rulesPage ? (hasDocument ? "保存名称并重新检查" : "保存常用名称") : editingSaved ? "保存修改" : !hasDocument ? "开始检查并处理" : salaryMode ? "确认全部并继续处理" : skipping ? "确认跳过并继续" : "确认并继续处理"
+    acceptButtonEnabled: !working && (profilesPage || rulesPage || !hasDocument || (!problem && confirmed.checked))
     onPageSizeChanged: columnPage = 0
     onOpened: Qt.callLater(function() { if (dialog.opened && !dialog.working) dialog.locateProblem() })
 
@@ -51,6 +56,23 @@ AppDialog {
         return text.replace(/\s/g, "").toLowerCase()
     }
     function fieldLabel(name) { return (role.field_labels || {})[name] || name }
+    function readingModeLabel(option) {
+        var labels = {attendance_summary: "每人一行", attendance: "每天一条考勤记录",
+                      weekly: "按周报记录读取", monthly: "按月报记录读取", _ignore: "本次不读取"}
+        return labels[option.key] || option.label || ""
+    }
+    function columnConfirmationHeading() {
+        if (editingSaved) return "修改列对应关系"
+        if (salaryMode) return "请核对工资表对应列"
+        if (skipping) return "确认本次跳过"
+        if (!role.key) return "请确认数据的读取方式"
+        var names = (role.required || []).filter(function(name) {
+            return attentionFields.indexOf(name) >= 0
+        }).map(fieldLabel)
+        if (names.length === 1) return "请确认“" + names[0] + "”在哪一列"
+        if (names.length > 1) return "请确认这些内容对应的列：" + names.join("、")
+        return "请核对列对应关系"
+    }
     function letter(col) {
         var result = ""
         while (col > 0) { col--; result = String.fromCharCode(65 + col % 26) + result; col = Math.floor(col / 26) }
@@ -77,7 +99,7 @@ AppDialog {
         var values = sheet.rows[headerRow - 1] || []
         var result = [{col: 0, label: "请选择原表中的列"}]
         for (var i = 0; i < values.length; i++)
-            if (values[i]) result.push({col: i + 1, label: letter(i + 1) + "列 · " + values[i] + " · " + sample(i + 1)})
+            if (values[i]) result.push({col: i + 1, label: letter(i + 1) + "列 · " + values[i] + (editingSaved ? "" : " · " + sample(i + 1))})
         return result
     }
     function resetChoices() {
@@ -91,9 +113,19 @@ AppDialog {
             result[name] = (role.required.indexOf(name) >= 0 || (role.one_of || []).indexOf(name) >= 0) && matches.length === 1 ? matches[0] : 0
         })
         chosen = result
+        attentionFields = fieldNames().filter(function(name) {
+            return ((role.required || []).indexOf(name) >= 0 && !result[name]) || (role.one_of || []).indexOf(name) >= 0
+        })
         confirmed.checked = false
         search.text = ""
         columnSearch.text = ""
+    }
+    function fieldNames() {
+        var names = (role.required || []).concat(role.one_of || []).concat(Object.keys(role.fields))
+        return names.filter(function(name, index) { return names.indexOf(name) === index })
+    }
+    function recognizedCount() {
+        return Object.keys(chosen).filter(function(name) { return !!chosen[name] && attentionFields.indexOf(name) < 0 }).length
     }
     function suggestRow() {
         var best = 0, rows = []
@@ -117,15 +149,26 @@ AppDialog {
         else resetChoices()
     }
     function showData(payload) {
-        salaryMode = false; hasDocument = true; rulesPage = false
+        salaryMode = false; hasDocument = true; rulesPage = false; profilesPage = false
+        roleDetailsExpanded = false
+        confirmed.checked = false
+        rememberChoice.checked = false
         var signature = JSON.stringify(payload)
-        if (signature !== lastPayload) {
+        if (signature !== lastPayload || !opened || payload.editing_profile) {
             mappingData = payload
-            roleIndex = 0; sheetIndex = 0; columnPage = 0
+            roleIndex = payload.roles.length === 1 ? 0 : -1; sheetIndex = 0; columnPage = 0
+            for (var r = 0; r < payload.roles.length; r++)
+                if (payload.roles[r].key === payload.suggested_role) roleIndex = r
             for (var i = 0; i < payload.sheets.length; i++)
                 if (payload.sheets[i].name === payload.selected_sheet) sheetIndex = i
             extra.checked = false
             suggestRow()
+            if (payload.editing_profile) {
+                headerRow = payload.row
+                chosen = Object.assign({}, payload.selected_columns || {})
+                attentionFields = fieldNames().filter(function(name) { return !!chosen[name] || role.required.indexOf(name) >= 0 })
+            }
+            detailsExpanded = !headerRow
             lastPayload = signature
         }
         open()
@@ -133,13 +176,13 @@ AppDialog {
     function showRules(sections) {
         if (!opened) { hasDocument = false; salaryMode = false }
         nameEditor.showSections(sections)
-        rulesPage = true
+        rulesPage = true; profilesPage = false
         open()
     }
     function showSalaryData(payload) {
         var previousFile = salaryMode && hasDocument && (salaryGroup.files || []).length ? salaryGroup.files[0].key : ""
         var skippedIssues = salaryMode && hasDocument ? salaryIssues.filter(function(i) { return !!i.skip }).map(function(i) { return i.key }) : []
-        salaryMode = true; hasDocument = true; rulesPage = false
+        salaryMode = true; hasDocument = true; rulesPage = false; profilesPage = false
         salaryGroups = JSON.parse(JSON.stringify(payload.groups || []))
         salaryIssues = JSON.parse(JSON.stringify(payload.issues || []))
         salaryIndex = 0
@@ -153,6 +196,7 @@ AppDialog {
         open()
     }
     function loadSalaryGroup() {
+        roleDetailsExpanded = false
         var g = salaryGroup, keys = g.role === "summary" ? ["name", "id_card"] : ["name", "id_card", "amount"]
         var fields = {}, labels = {name: "姓名", id_card: "身份证号码", amount: "应发工资"}
         keys.forEach(function(k) { fields[k] = (g.field_aliases || {})[k] || [labels[k]] })
@@ -212,6 +256,7 @@ AppDialog {
         closingFromBackend = true; close(); closingFromBackend = false
     }
     function applyChoices() {
+        if (profilesPage) { close(); return }
         if (rulesPage) { nameEditor.submit(); return }
         if (!hasDocument) {
             close()
@@ -233,6 +278,7 @@ AppDialog {
         return 0
     }
     function selectionProblem() {
+        if (!role.key) return "请选择数据的读取方式。"
         if (!sheet.rows.length) return "这张工作表没有可预览的内容，请换一张工作表或返回重新选文件。"
         if (skipping) return ""
         if (!headerRow) return "还不能确定哪一行写着列名，请在原表预览中点选；如果文件选错了，请返回重新选择。"
@@ -258,7 +304,8 @@ AppDialog {
         control.forceActiveFocus(Qt.TabFocusReason)
     }
     function focusField(name) {
-        search.text = ""; columnSearch.text = ""; extra.checked = true
+        search.text = ""; columnSearch.text = ""
+        if (attentionFields.indexOf(name) < 0) attentionFields = attentionFields.concat([name])
         Qt.callLater(function() {
             if (!dialog.opened || dialog.working) return
             for (var i = 0; i < fieldRepeater.count; i++) {
@@ -271,11 +318,12 @@ AppDialog {
         })
     }
     function locateProblem() {
-        if (working || rulesPage || !hasDocument) return
+        if (working || rulesPage || profilesPage || !hasDocument) return
+        if (!role.key) { focusProblemControl(rolePicker); return }
         if (salaryMode && !salaryGroups.length) { focusProblemControl(salaryFilesSection); return }
         if (!skipping && salaryNeedsRead()) { focusProblemControl(readHeadersButton); return }
         if (!sheet.rows.length) { focusProblemControl(sheetPicker.visible ? sheetPicker : sourceSection); return }
-        if (!skipping && !headerRow) { focusProblemControl(preview); return }
+        if (!skipping && !headerRow) { detailsExpanded = true; focusProblemControl(preview); return }
         if (!skipping) {
             var required = role.required || []
             for (var i = 0; i < required.length; i++)
@@ -319,7 +367,7 @@ AppDialog {
         confirmed.forceActiveFocus(Qt.TabFocusReason)
     }
     onAccepted: backend.saveTemplateChoice(JSON.stringify({role: role.key, sheet: sheet.name,
-        row: skipping ? 1 : headerRow, columns: chosen}))
+        row: skipping ? 1 : headerRow, columns: chosen, remember: rememberChoice.checked}))
     onRejected: { lastPayload = ""; confirmed.checked = false }
     onClosed: {
         if (salaryMode && !closingFromBackend && backend) backend.cancelSalaryMappings()
@@ -329,7 +377,8 @@ AppDialog {
         spacing: 12
         RowLayout {
             Layout.fillWidth: true
-            AppButton { text: "本次文件确认"; variant: dialog.rulesPage ? "secondary" : "primary"; onClicked: dialog.rulesPage = false }
+            AppButton { text: "本次文件确认"; variant: dialog.rulesPage || dialog.profilesPage ? "secondary" : "primary"; onClicked: { dialog.rulesPage = false; dialog.profilesPage = false } }
+            AppButton { text: "已记住的选择（" + (dialog.backend ? dialog.backend.templateSavedProfileCount : 0) + "）"; visible: dialog.backend && dialog.backend.currentTool !== "salary_merge"; variant: dialog.profilesPage ? "primary" : "secondary"; enabled: !dialog.working; onClicked: { dialog.rulesPage = false; dialog.profilesPage = true } }
             AppButton { text: "常用名称管理"; variant: dialog.rulesPage ? "primary" : "secondary"; enabled: !dialog.working; onClicked: dialog.backend.reviewTemplateRules() }
             Item { Layout.fillWidth: true }
         }
@@ -345,14 +394,44 @@ AppDialog {
                 if (resume) dialog.backend.runOrCancel()
             }
         }
+        ColumnLayout {
+            Layout.fillWidth: true; Layout.fillHeight: true; visible: dialog.profilesPage
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.Wrap
+                text: "这些选择会用于当前工具中工作表名和表头相同的文件。列的含义变了，请修改或删除；删除后按原有名称识别，不认识的列会重新询问。"
+            }
+            Label { visible: dialog.backend && !dialog.backend.templateSavedProfileCount; text: "还没有记住任何选择。确认列名时默认仅本次使用。"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            ScrollView {
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
+                Column {
+                    width: parent.width; spacing: 12
+                    Repeater {
+                        model: dialog.profilesPage && dialog.backend ? dialog.backend.templateSavedProfiles : []
+                        delegate: ColumnLayout {
+                            property var savedProfile: modelData
+                            width: parent.width; spacing: 6
+                            Label { Layout.fillWidth: true; text: savedProfile.label + " · " + savedProfile.sheet + " · 第 " + savedProfile.row + " 行"; font.bold: true; textFormat: Text.PlainText; wrapMode: Text.Wrap }
+                            Label { Layout.fillWidth: true; visible: !!savedProfile.file; text: "首次确认文件：" + savedProfile.file; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: "#77746D" }
+                            Label { Layout.fillWidth: true; text: savedProfile.description; textFormat: Text.PlainText; wrapMode: Text.Wrap }
+                            Label { Layout.fillWidth: true; visible: !savedProfile.editable; text: "旧版或跳过记录可直接删除；重新处理文件时再选择。"; color: "#77746D"; wrapMode: Text.Wrap }
+                            RowLayout {
+                                AppButton { text: "修改"; visible: savedProfile.editable; enabled: !dialog.working; onClicked: dialog.backend.editTemplateProfile(savedProfile.key) }
+                                AppButton { text: "删除"; enabled: !dialog.working; onClicked: dialog.backend.deleteTemplateProfile(savedProfile.key) }
+                            }
+                            Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: "#E3E0D8" }
+                        }
+                    }
+                }
+            }
+        }
         Label {
-            Layout.fillWidth: true; Layout.fillHeight: true; visible: !dialog.rulesPage && !dialog.hasDocument
+            Layout.fillWidth: true; Layout.fillHeight: true; visible: !dialog.rulesPage && !dialog.profilesPage && !dialog.hasDocument
             wrapMode: Text.Wrap
             text: "开始处理时，工具会自动检查已选择的资料。能识别的直接使用，需要你确认的会显示在这里。\n\n如果只是想添加、修改或删除列名，请切换到“常用名称管理”。"
         }
         Flickable {
         id: problemViewport
-        Layout.fillWidth: true; Layout.fillHeight: true; visible: !dialog.rulesPage && dialog.hasDocument
+        Layout.fillWidth: true; Layout.fillHeight: true; visible: !dialog.rulesPage && !dialog.profilesPage && dialog.hasDocument
         clip: true
         contentHeight: body.implicitHeight
         contentWidth: width
@@ -400,31 +479,52 @@ AppDialog {
                     onToggled: { dialog.salaryGroup.skip = checked; dialog.salaryRevision++; confirmed.checked = false }
                 }
             }
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                text: dialog.columnConfirmationHeading()
+                font.bold: true; font.pixelSize: 16
+            }
             Text {
                 Layout.fillWidth: true
-                text: "请先核对文件用途，再看着原表确认列名。已认出的列会预先选好；如果文件选错了，可以返回重新选择。"
+                text: dialog.editingSaved ? "修改后仅保存选择，不会开始处理文件。" : "请选出未识别内容所在的列。下拉选项里有原表内容，方便核对。"
                 color: "#55534D"; font.pixelSize: 13; wrapMode: Text.Wrap
             }
             Text {
                 Layout.fillWidth: true
-                text: "当前文件：" + (dialog.mappingData.file || "本次选择的资料")
-                textFormat: Text.PlainText; wrapMode: Text.Wrap; font.pixelSize: 13; color: "#292825"
+                text: "文件：" + (dialog.mappingData.file || "本次选择的资料")
+                textFormat: Text.PlainText; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#77746D"
             }
-            Label { text: "1. 确认这张表用来做什么"; font.bold: true; font.pixelSize: 14 }
             Label {
-                Layout.fillWidth: true; wrapMode: Text.Wrap
-                visible: dialog.mappingData.roles.length === 1
-                text: "当前需要：" + (dialog.role.label || "")
+                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                text: "所在工作表：" + (dialog.sheet.name || "未选择")
+                font.pixelSize: 12; color: "#77746D"
+            }
+            RowLayout {
+                Layout.fillWidth: true; visible: !!dialog.role.key
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                    text: (dialog.role.key === "attendance_summary" || dialog.role.key === "attendance" ? "数据排列方式：" : "读取方式：") + dialog.readingModeLabel(dialog.role)
+                    font.pixelSize: 12; color: "#55534D"
+                }
+                AppButton {
+                    text: dialog.roleDetailsExpanded ? "收起" : "修改"
+                    variant: "link"; visible: dialog.mappingData.roles.length > 1
+                    Accessible.name: "修改数据读取方式"
+                    onClicked: dialog.roleDetailsExpanded = !dialog.roleDetailsExpanded
+                }
             }
             ColumnLayout {
-                Layout.fillWidth: true; visible: dialog.mappingData.roles.length > 1
-                Label { text: "这张表的用途" }
+                Layout.fillWidth: true
+                visible: dialog.mappingData.roles.length > 1 && (dialog.roleDetailsExpanded || !dialog.role.key)
+                Label { text: "按数据的排列方式选择" }
                 AppComboBox {
+                    id: rolePicker
                     Layout.fillWidth: true
-                    Accessible.name: "这张表的用途"
-                    model: dialog.mappingData.roles.map(function(r) { return r.label })
+                    Accessible.name: "数据读取方式"
+                    model: dialog.mappingData.roles.map(function(r) { return dialog.readingModeLabel(r) })
                     currentIndex: dialog.roleIndex
-                    onActivated: function(index) { dialog.roleIndex = index; dialog.suggestRow() }
+                    displayText: currentIndex >= 0 ? currentText : "请选择数据的读取方式"
+                    onActivated: function(index) { dialog.roleIndex = index; dialog.suggestRow(); dialog.roleDetailsExpanded = false }
                 }
             }
             Label { visible: dialog.mappingData.sheets.length > 1; text: "读取哪个工作表（Excel 底部的标签）" }
@@ -436,15 +536,23 @@ AppDialog {
                 currentIndex: dialog.sheetIndex
                 onActivated: function(index) { dialog.changeSheet(index) }
             }
-            Label { visible: dialog.mappingData.sheets.length === 1; text: "工作表：" + (dialog.sheet.name || ""); textFormat: Text.PlainText }
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; visible: dialog.skipping; color: "#A26713"
                 text: "这张工作表将不参与本次处理。请确认它不是需要统计的业务数据。"
             }
             ColumnLayout {
                 id: sourceSection
-                visible: !dialog.skipping; Layout.fillWidth: true; spacing: 8
-                Label { text: "2. 点选写着列名的那一行"; font.bold: true; font.pixelSize: 14 }
+                visible: !dialog.skipping && !!dialog.role.key; Layout.fillWidth: true; spacing: 8
+                AppButton {
+                    visible: !dialog.salaryMode && dialog.headerRow > 0
+                    text: "列名在第 " + dialog.headerRow + " 行 · " + (dialog.detailsExpanded ? "收起原表" : "查看原表 / 调整行号")
+                    variant: "link"
+                    onClicked: dialog.detailsExpanded = !dialog.detailsExpanded
+                }
+                ColumnLayout {
+                Layout.fillWidth: true; spacing: 8
+                visible: dialog.salaryMode || dialog.detailsExpanded || !dialog.headerRow
+                Label { text: "点选写着列名的那一行"; font.bold: true; font.pixelSize: 14 }
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap
                     text: dialog.headerRow ? "当前选中第 " + dialog.headerRow + " 行，请核对。选错了，点另一行即可。"
@@ -500,22 +608,23 @@ AppDialog {
                     AppButton { id: readHeadersButton; text: "读取这些列名"; onClicked: dialog.backend.rescanSalaryHeader(dialog.salaryGroup.group_id, dialog.sheet.name, dialog.headerRow, dialog.headerBottom, dialog.salaryPayload()) }
                     AppButton { text: "恢复自动识别"; onClicked: dialog.backend.resetSalaryHeader(dialog.salaryGroup.group_id, dialog.salaryPayload()) }
                 }
-                Label { text: "3. 告诉工具，各项内容在哪一列"; font.bold: true; font.pixelSize: 14 }
-                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "已认出的必需列会预先选好。金额、小时、天数要与原列含义一致，这里不会换算。"; color: "#55534D"; font.pixelSize: 12 }
+                }
+                Label { text: dialog.editingSaved ? "修改对应列" : "需要你确认的列"; font.bold: true; font.pixelSize: 14 }
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !dialog.salaryMode && dialog.recognizedCount() > 0; text: "另有 " + dialog.recognizedCount() + " 项已识别，可展开下方选项查看或修改。"; color: "#17715B"; font.pixelSize: 12 }
                 AppTextField { id: search; Layout.fillWidth: true; visible: extra.checked && Object.keys(dialog.role.fields).length > 8; placeholderText: "要找哪一项？例如：公司、金额"; Accessible.name: "查找需要对应的内容" }
                 AppTextField { id: columnSearch; Layout.fillWidth: true; visible: dialog.columnChoices.length > 16; placeholderText: "原表列太多？输入列名或内容，缩小下拉选项范围"; Accessible.name: "筛选原表中的列" }
-                AppCheckBox { id: extra; text: "查看其他可选内容（没有就不用选）"; onToggled: if (!checked) search.text = "" }
+                AppCheckBox { id: extra; text: "查看已识别和其他可选列"; onToggled: if (!checked) search.text = "" }
                 Repeater {
                     id: fieldRepeater
-                    model: Object.keys(dialog.role.fields)
+                    model: dialog.fieldNames()
                     delegate: ColumnLayout {
                         property var editor: fieldEditor
                         property string fieldName: modelData
                         property bool requiredField: dialog.role.required.indexOf(fieldName) >= 0
-                        visible: (requiredField || (dialog.role.one_of || []).indexOf(fieldName) >= 0 || extra.checked || search.text.length > 0)
+                        visible: ((dialog.salaryMode && requiredField) || dialog.attentionFields.indexOf(fieldName) >= 0 || extra.checked || search.text.length > 0)
                                  && (!search.text || dialog.fieldLabel(fieldName).toLowerCase().indexOf(search.text.toLowerCase()) >= 0)
                         Layout.fillWidth: true; spacing: 4
-                        Label { text: dialog.fieldLabel(fieldName) + (requiredField ? "（必须选择）" : "（可不选）"); textFormat: Text.PlainText; font.pixelSize: 13 }
+                        Label { text: dialog.fieldLabel(fieldName) + "对应列" + (requiredField ? "（必须选择）" : "（可不选）"); textFormat: Text.PlainText; font.pixelSize: 13 }
                         AppComboBox {
                             id: fieldEditor
                             Layout.fillWidth: true; enabled: dialog.headerRow > 0 && !dialog.salaryNeedsRead()
@@ -525,13 +634,13 @@ AppDialog {
                             displayText: currentIndex > 0 ? currentText : (requiredField ? "请选择“" + dialog.fieldLabel(fieldName) + "”所在列" : "不指定，保留原来的读取方式")
                             onActivated: function(index) { dialog.chooseColumn(fieldName, model[index].col) }
                         }
-                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !!dialog.chosen[fieldName]; text: "原表内容示例：" + dialog.sample(dialog.chosen[fieldName]); textFormat: Text.PlainText; color: "#77746D"; font.pixelSize: 12; maximumLineCount: 2; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !!dialog.chosen[fieldName] && !dialog.editingSaved; text: "原表内容示例：" + dialog.sample(dialog.chosen[fieldName]); textFormat: Text.PlainText; color: "#77746D"; font.pixelSize: 12; maximumLineCount: 2; elide: Text.ElideRight }
                     }
                 }
             }
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                text: dialog.problem || "选择已齐全，请核对后继续。下次遇到同样的表会自动使用这次选择。"
+                text: dialog.problem || (dialog.editingSaved ? "请核对后保存修改。" : "选择已齐全，请核对后继续。")
                 color: dialog.problem ? "#A26713" : "#17715B"; font.pixelSize: 13
             }
         }
@@ -546,21 +655,22 @@ AppDialog {
             anchors.margins: 12; spacing: 6
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
-                text: dialog.working ? "正在读取，请稍候…" : dialog.rulesPage ? "系统内置名称不能修改或删除；自定义名称保存后生效。" : !dialog.hasDocument ? "原文件不会被修改。" : dialog.problem || (!confirmed.checked ? "对应关系已齐全，请完成下方人工核对并勾选确认。" : "已完成核对，可以继续。")
+                text: dialog.working ? "正在读取，请稍候…" : dialog.profilesPage ? "修改或删除已记住的选择，不会修改原文件和已有结果。" : dialog.rulesPage ? "常用名称对当前工具长期生效；如“222”含义会变，请使用本次文件确认。" : !dialog.hasDocument ? "原文件不会被修改。" : dialog.problem || (!confirmed.checked ? "请核对所选列的含义。" : "已完成核对，可以继续。")
                 textFormat: Text.PlainText; color: dialog.problem ? "#A26713" : "#17715B"; font.pixelSize: 12
             }
             AppCheckBox {
                 id: confirmed
                 Layout.fillWidth: true
-                visible: !dialog.rulesPage && dialog.hasDocument
-                text: dialog.salaryMode ? "已核对本次全部模板及跳过的文件" : dialog.skipping ? "确认这张工作表不需要处理" : "已核对：工作表用途和所选列的含义正确"
+                visible: !dialog.rulesPage && !dialog.profilesPage && dialog.hasDocument
+                text: dialog.salaryMode ? "已核对本次全部模板及跳过的文件" : dialog.skipping ? "确认这张工作表不需要处理" : "已核对：读取方式和所选列的含义正确"
                 enabled: !dialog.working && !dialog.problem
             }
             AppCheckBox { id: rememberSalary; visible: dialog.salaryMode && dialog.hasDocument && !dialog.rulesPage; text: "记住本项目的选择"; checked: true; enabled: !dialog.working }
+            AppCheckBox { id: rememberChoice; visible: !dialog.salaryMode && !dialog.editingSaved && dialog.hasDocument && !dialog.rulesPage && !dialog.profilesPage; text: "记住相同表头的选择（不勾选仅本次，可随时撤销）"; checked: false; enabled: !dialog.working }
             Flow {
                 Layout.fillWidth: true; Layout.preferredHeight: childrenRect.height
                 layoutDirection: Qt.RightToLeft; spacing: 8
-                AppButton { text: dialog.problem ? "定位待处理项" : "定位确认"; variant: "link"; visible: dialog.hasDocument && !dialog.rulesPage; enabled: !dialog.working; onClicked: dialog.locateProblem() }
+                AppButton { text: dialog.problem ? "查看未完成项" : "核对选择"; variant: "link"; visible: dialog.hasDocument && !dialog.rulesPage && !dialog.profilesPage; enabled: !dialog.working; onClicked: dialog.locateProblem() }
                 AppButton { text: dialog.acceptText; variant: "primary"; enabled: dialog.acceptButtonEnabled; onClicked: dialog.applyChoices() }
                 AppButton { visible: dialog.salaryMode && !dialog.rulesPage; text: "仅保存"; enabled: !dialog.working && rememberSalary.checked && !dialog.problem; onClicked: dialog.backend.applySalaryMappings(dialog.salaryPayload(), true, false) }
                 AppButton { text: dialog.rejectText; onClicked: dialog.reject() }
