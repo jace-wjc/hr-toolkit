@@ -3395,6 +3395,40 @@ class AppController(QObject):
             return
         self._prepare_invocation(preview=self._spec.tool_id == "folder_rename")
 
+    @Slot(result="QVariantMap")
+    def regionCodeSettings(self):
+        try:
+            from hr_toolkit.region_codes import effective_region_codes
+            store = self._project_store
+            if store is None:
+                raise ValueError("请先打开工作项目。")
+            custom = store.read_region_overrides()
+            return {"project": str(store.root), "rows": [
+                {"name": name, "code": code, "custom": name in custom}
+                for name, code in effective_region_codes(custom).items()], "error": ""}
+        except Exception as exc:
+            return {"project": "", "rows": [], "error": str(exc)}
+
+    @Slot(str, str, str, bool, result=str)
+    def saveRegionCode(self, project: str, name: str, code: str, remove: bool = False) -> str:
+        try:
+            from hr_toolkit.region_codes import validate_overrides
+            store = self._project_store
+            if self._busy or store is None or str(store.root) != project or self._workspace_recovery_blocked:
+                raise ValueError("当前项目或任务状态已变化，请关闭后重新打开维护窗口。")
+            custom = store.read_region_overrides()
+            name, code = name.strip(), code.strip()
+            if remove:
+                custom.pop(name, None)
+            else:
+                entry = validate_overrides({name: code})
+                custom = {key: value for key, value in custom.items() if key != name and int(value) != int(code)}
+                custom.update(entry)
+            store.save_region_overrides(custom)
+            return ""
+        except Exception as exc:
+            return str(exc)
+
     def _prepare_invocation(self, *, preview: bool, preview_result=None) -> None:
         if self._block_run_for_update():
             return
@@ -3406,6 +3440,7 @@ class AppController(QObject):
             output_dir=self._project_path, preview=preview, preview_result=preview_result,
         )
         force_dialog = self._salary_force_next
+        store = self._project_store
         event = threading.Event()
         self._preview_cancel_event = event
         self._set_busy(True)
@@ -3413,6 +3448,9 @@ class AppController(QObject):
         def worker() -> None:
             try:
                 invocation = build_invocation(spec, **kwargs)
+                if spec.tool_id == "archive_import" and store is not None:
+                    invocation = replace(invocation, kwargs={**invocation.kwargs,
+                        "region_overrides": store.read_region_overrides()})
             except Exception as exc:
                 self._invocationReady.emit(None, exc, force_dialog)
             else:

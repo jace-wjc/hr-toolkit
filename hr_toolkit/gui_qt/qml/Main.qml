@@ -653,6 +653,13 @@ ApplicationWindow {
                         onClicked: helpDialog.open()
                     }
                     AppButton {
+                        text: "地区编号维护"
+                        visible: controller.currentTool === "archive_import" || controller.currentTool === "personnel_change_merge"
+                        enabled: controller.hasProject && controller.selectionEnabled
+                        variant: "link"
+                        onClicked: regionCodeDialog.open()
+                    }
+                    AppButton {
                         objectName: "releaseNotesButton"
                         text: "更新记录"
                         variant: "link"
@@ -2461,6 +2468,7 @@ ApplicationWindow {
         }
     }
 
+    RegionCodeDialog { id: regionCodeDialog; backend: controller; anchors.centerIn: parent }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }
 
     Connections {

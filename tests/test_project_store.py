@@ -31,6 +31,19 @@ from hr_toolkit.project_store import (
 
 
 class ProjectStoreTests(unittest.TestCase):
+    def test_region_settings_persist_and_reject_invalid_configuration(self) -> None:
+        self.assertEqual(self.store.read_region_overrides(), {})
+        self.store.save_region_overrides({"上海": "01"})
+        self.assertEqual(self.store.read_region_overrides(), {"上海": "01"})
+        with self.assertRaises(ValueError):
+            self.store.save_region_overrides({"上海": "01", "北京": "1"})
+        self.assertEqual(self.store.read_region_overrides(), {"上海": "01"})
+        path = self.store.metadata_dir / "region-codes.json"
+        path.write_text('{"version":99,"overrides":{}}', encoding="utf-8")
+        with self.assertRaises(ProjectStoreError):
+            self.store.save_region_overrides({})
+        self.assertIn('99', path.read_text(encoding="utf-8"))
+
     def setUp(self) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         self.base = Path(self._temporary.name).resolve()

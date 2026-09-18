@@ -12,7 +12,7 @@ _OTHER_PART_SEPARATOR = re.compile(r"[；;]+")
 import shutil
 import tempfile
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -24,6 +24,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from hr_toolkit.region_codes import REGION_CODES, effective_region_codes
 from hr_toolkit.common.resources import open_template_resource
 from hr_toolkit.common.excel_compat import (
     XlsxSaveCompatibilitySnapshot,
@@ -79,48 +80,6 @@ _HISTORY_DATE_TEXT = re.compile(
     r"(?P<day>\d{1,2})(?:日)?(?:\s+00:00(?::00)?)?$"
 )
 
-REGION_CODES = {
-    "总部": "00",
-    "南昌": "01",
-    "南昌分公司": "01",
-    "抚州": "02",
-    "鹰潭": "03",
-    "达州": "04",
-    "乐山": "05",
-    "成都": "06",
-    "广州": "07",
-    "河源": "08",
-    "云浮": "09",
-    "阳江": "10",
-    "茂名": "11",
-    "普洱": "12",
-    "德宏": "13",
-    "上海": "14",
-    "新疆": "15",
-    "青岛": "16",
-    "青海": "17",
-    "研发部": "18",
-    "南京": "19",
-    "福建": "20",
-    "河南": "21",
-    "湖南": "22",
-    "北京": "23",
-    "江西工程": "24",
-    "惠州": "25",
-    "陕西": "26",
-    "贵州": "27",
-    "攀枝花": "28",
-    "山东": "29",
-    "西藏": "30",
-    "中山": "31",
-    "临沧": "32",
-    "上饶": "33",
-    "公路事业部": "34",
-    "九江": "35",
-    "湖州": "36",
-    "舟山": "37",
-    "绍兴": "38",
-}
 
 DIRECT_FIELD_MAP = {
     "姓名": "姓名",
@@ -173,6 +132,7 @@ class ArchiveTransferRecord:
     source_file: str
     source_title: str
     source_row: int
+    region_codes: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -270,8 +230,10 @@ def import_archive_transfers(
     target_path: str | Path | None,
     output_dir: str | Path,
     *,
+    region_overrides: dict[str, str] | None = None,
     dry_run: bool = False,
 ) -> ArchiveImportResult:
+    region_codes = effective_region_codes(region_overrides)
     input_paths = _normalize_input_paths(input_path)
     display_input = input_paths[0] if len(input_paths) == 1 else input_paths[0].parent
     target = None if target_path is None else Path(target_path).expanduser().resolve()
@@ -305,7 +267,7 @@ def import_archive_transfers(
             warnings.extend(file_warnings)
             if file_records:
                 source_names.append(str(source_file))
-            records.extend(file_records)
+            records.extend(replace(record, region_codes=region_codes) for record in file_records)
 
         result = ArchiveImportResult(
             input_path=display_input,
@@ -1295,7 +1257,8 @@ def _column_ref(layout: ArchiveSheetLayout, header: str, row_index: int) -> str:
 
 def _detect_region_code(record: ArchiveTransferRecord) -> str | None:
     haystack = f"{record.source_file} {record.source_title} {record.company}"
-    for name, code in sorted(REGION_CODES.items(), key=lambda item: len(item[0]), reverse=True):
+    codes = REGION_CODES if record.region_codes is None else record.region_codes
+    for name, code in sorted(codes.items(), key=lambda item: len(item[0]), reverse=True):
         if name in haystack:
             return code
     return None

@@ -443,6 +443,27 @@ class ProjectStore:
             reason = self.workspace.read_only_reason or "项目当前为只读状态。"
             raise ProjectStoreError(reason)
 
+    def read_region_overrides(self) -> dict[str, str]:
+        from .region_codes import validate_overrides
+        path = self.metadata_dir / "region-codes.json"
+        with self._mutex:
+            _assert_no_link_components(self.root, path.relative_to(self.root))
+            if not path.exists():
+                return {}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("version") != 1:
+                raise ProjectStoreError("地区编号配置版本无效，请修正后再处理。")
+            return validate_overrides(payload.get("overrides"))
+
+    def save_region_overrides(self, overrides: dict[str, str]) -> None:
+        from .region_codes import validate_overrides
+        self._require_writable()
+        with self._mutex:
+            # Never replace malformed or future-version configuration silently.
+            self.read_region_overrides()
+            path = self.metadata_dir / "region-codes.json"
+            _write_json(path, {"version": 1, "overrides": validate_overrides(overrides)})
+
     def _prepare_known_layout(self) -> None:
         _require_regular_directory(self.metadata_dir, "项目管理目录")
         _hide_on_windows(self.metadata_dir)

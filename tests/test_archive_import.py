@@ -23,6 +23,21 @@ from hr_toolkit.tools.archive_import import (
 
 
 class ArchiveImportTest(unittest.TestCase):
+    def test_region_overrides_replace_conflicts_and_restore_defaults(self) -> None:
+        from hr_toolkit.region_codes import REGION_CODES, effective_region_codes
+        from hr_toolkit.tools.archive_import import ArchiveTransferRecord, _detect_region_code, _target_values_for_record
+        original = dict(REGION_CODES)
+        custom = effective_region_codes({"上海": "01"})
+        self.assertEqual(custom["上海"], "01")
+        self.assertNotIn("南昌", custom)
+        self.assertNotIn("南昌分公司", custom)
+        self.assertEqual(custom["北京"], "23")
+        record = ArchiveTransferRecord("上海", "甲", "123", {"编号": "99"}, "资料.xlsx", "表", 2, custom)
+        self.assertEqual(_detect_region_code(record), "01")
+        self.assertEqual(_target_values_for_record(record, {"编号": 1})["编号"], "99")
+        self.assertEqual(effective_region_codes({}), original)
+        self.assertEqual(REGION_CODES, original)
+
     def test_footer_scan_reads_worksheet_dimensions_once(self) -> None:
         class CountingSheet:
             title = "性能公司"
