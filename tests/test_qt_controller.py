@@ -284,6 +284,33 @@ class QtControllerTests(unittest.TestCase):
             self.assertFalse(controller.describeDrop("input", ["文字"])["accepted"])
             self.assertFalse(controller.describeDrop("support", [QUrl.fromLocalFile(str(path.with_suffix(".exe"))).toString()])["accepted"])
 
+    def test_windows_drop_paths_preserve_local_characters_and_shares(self) -> None:
+        from hr_toolkit.gui_qt.drop_paths import local_drop_paths, native_mime_paths
+        from hr_toolkit.gui_qt.compat import QUrl
+        from types import SimpleNamespace
+        paths = ["C:\\Users\\甲方\\Desktop\\表 #100%.xlsx", "\\\\server\\share\\工资.xlsx"]
+        self.assertEqual([str(p) for p in local_drop_paths(paths, windows=True)], paths)
+        url = QUrl.fromLocalFile("C:/Users/甲方/Desktop/表 #100%.xlsx").toString()
+        self.assertEqual(str(local_drop_paths([url], windows=True)[0]), "C:/Users/甲方/Desktop/表 #100%.xlsx")
+        key = 'application/x-qt-windows-mime;value="FileNameW"'
+        mime = SimpleNamespace(urls=lambda: [], formats=lambda: [key],
+                               data=lambda _: (paths[0] + "\x00").encode("utf-16-le"))
+        self.assertEqual(native_mime_paths(mime), paths[:1])
+        for invalid in ("https://example.com/a.xlsx", "C:relative.xlsx", "C:\\Desktop\\快捷方式.lnk"):
+            with self.assertRaises(ValueError):
+                local_drop_paths([invalid], windows=True)
+
+    def test_drop_can_finish_while_hover_validation_is_pending(self) -> None:
+        from hr_toolkit.gui_qt.compat import QUrl
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        url = QUrl.fromLocalFile(str(Path(tempfile.gettempdir()) / "工资.xlsx")).toString()
+        with patch("threading.Thread.start"), patch.object(controller, "_submit_selection") as submit:
+            preview = controller.beginDropPreview("input", [url])
+            self.assertTrue(preview["pending"])
+            controller.finishDropPreview(preview["token"], "input", [url])
+            submit.assert_called_once()
+
     def test_hover_type_error_is_reported_before_drop_without_changing_selection(self) -> None:
         from hr_toolkit.gui_qt.compat import QUrl
         controller = self.controller()

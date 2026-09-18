@@ -130,6 +130,7 @@ def main() -> int:
         controller.close()
         return 1
     root_window = engine.rootObjects()[0]
+    root_window.installEventFilter(controller)
     root_window.setIcon(app.windowIcon())
     from .window_chrome import integrate_mac_titlebar
 

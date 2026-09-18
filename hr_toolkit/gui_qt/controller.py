@@ -53,6 +53,7 @@ from hr_toolkit.tutorial_content import tutorial_groups
 from .compat import (
     Property,
     QCoreApplication,
+    QEvent,
     QDesktopServices,
     QFileDialog,
     QGuiApplication,
@@ -76,6 +77,7 @@ from .form_specs import (
 )
 from .models import HistoryModel, InputFileModel, LogModel, TrashModel, WorkspaceModel, ObjectListModel
 from .input_selection import selection_hint, selection_mode, validate_selection
+from .drop_paths import local_drop_paths, native_mime_paths, text_paths
 
 
 NAV_GROUPS = (
@@ -187,6 +189,7 @@ class AppController(QObject):
         self._selection_request = None
         self._selection_messages: dict[tuple[str, str], dict[str, tuple[str, bool]]] = {}
         self._drop_preview_request = None
+        self._native_drop_urls = []
         self._drop_preview_pending = None
         self._drop_preview_lock = threading.Lock()
         self._drop_preview_running = False
@@ -1274,16 +1277,25 @@ class AppController(QObject):
 
     @staticmethod
     def _local_drop_paths(urls) -> list[Path]:
-        paths = []
-        for value in urls:
-            url = value if isinstance(value, QUrl) else QUrl(str(value))
-            if not url.isValid() or not url.isLocalFile() or not url.toLocalFile() or url.hasQuery() or url.hasFragment():
-                raise ValueError("请先将附件保存到本地；这里不接收网页、文字或未下载的附件。")
-            text = url.toLocalFile()
-            if "\x00" in text or not Path(text).is_absolute():
-                raise ValueError("无法识别本地文件位置，请重新选择。")
-            paths.append(Path(text))
-        return paths
+        return local_drop_paths(urls)
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.DragEnter, QEvent.Drop):
+            self._native_drop_urls = []
+            try:
+                mime = event.mimeData()
+                self._native_drop_urls = native_mime_paths(mime)
+                runlog.log_line(f"拖拽元数据：阶段={int(event.type())}，URL数={len(mime.urls())}，"
+                                f"候选数={len(self._native_drop_urls)}，格式={list(mime.formats())}")
+            except (AttributeError, UnicodeError, LookupError, ValueError) as exc:
+                runlog.log_line(f"拖拽路径解码失败：{type(exc).__name__}")
+        elif event.type() == QEvent.DragLeave:
+            self._native_drop_urls = []
+        return False
+
+    @Slot("QVariantList", str, str, result="QVariantList")
+    def resolveDropUrls(self, urls, uri_text: str, path_text: str):
+        return list(urls) or list(self._native_drop_urls) or text_paths(uri_text) or text_paths(path_text)
 
     @Slot(str, "QVariantList", result="QVariantMap")
     def describeDrop(self, role: str, urls) -> dict[str, Any]:
@@ -1296,7 +1308,7 @@ class AppController(QObject):
             mode = selection_mode(self._spec, role)
             paths = self._local_drop_paths(urls)
             if not paths:
-                raise ValueError("请先将附件保存到本地后再拖入。")
+                raise ValueError("拖拽未提供可用文件路径，请点击选择文件；未下载的附件请先保存到本地。")
             if mode != "excel_archive_multi" and len(paths) != 1:
                 raise ValueError("这里只接收" + selection_hint(mode) + "，不能一次拖入多项。")
             # File-only targets can reject incompatible names without stat().
@@ -1331,7 +1343,7 @@ class AppController(QObject):
         token = str(self._drop_preview_serial)
         request = {"token": token, "role": role, "paths": self._local_drop_paths(urls),
                    "mode": selection_mode(self._spec, role), "context": self._selection_context(),
-                   "cancel": threading.Event(), "message": initial["message"], "accepted": False,
+                   "cancel": threading.Event(), "message": initial["message"], "accepted": False, "checked": False,
                    "workspace_source": source}
         self._drop_preview_request = request
         with self._drop_preview_lock:
@@ -1376,6 +1388,7 @@ class AppController(QObject):
                 or request["context"] != self._selection_context() or not self.selectionEnabled):
             return
         request["accepted"] = not error
+        request["checked"] = True
         self.dropPreviewReady.emit({"token": request["token"], "pending": False,
                                     "accepted": not error, "message": error or request["message"]})
 
@@ -1395,7 +1408,7 @@ class AppController(QObject):
     def finishDropPreview(self, token: str, role: str, urls) -> bool:
         request = self._drop_preview_request
         if (request is None or request["token"] != token or request["role"] != role
-                or not request["accepted"] or request["cancel"].is_set()
+                or (request["checked"] and not request["accepted"]) or request["cancel"].is_set()
                 or request["context"] != self._selection_context() or not self.selectionEnabled):
             return False
         try:

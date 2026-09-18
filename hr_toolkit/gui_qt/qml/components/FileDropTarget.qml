@@ -10,6 +10,15 @@ Item {
     property var feedback: ({accepted: false, message: ""})
     readonly property bool highlighted: receiver.containsDrag && canReceive && !!feedback.message
 
+    function urlsFor(event) {
+        var uri = event.formats.indexOf("text/uri-list") >= 0 ? event.getDataAsString("text/uri-list") : ""
+        return backend.resolveDropUrls(event.urls, uri, event.hasText ? event.text : "")
+    }
+    function workspaceTokenFor(event) {
+        return event.formats.indexOf("application/x-hr-toolkit-workspace") >= 0
+            ? event.getDataAsString("application/x-hr-toolkit-workspace") : ""
+    }
+
     function resetPreview() {
         if (backend && feedback.token) backend.cancelDropPreview(feedback.token)
         feedback = ({accepted: false, message: ""})
@@ -55,18 +64,20 @@ Item {
         enabled: dropTarget.canReceive
         onEntered: {
             dropTarget.enteredContext = dropTarget.contextKey
-            var workspaceToken = drag.formats.indexOf("application/x-hr-toolkit-workspace") >= 0
-                ? drag.getDataAsString("application/x-hr-toolkit-workspace") : ""
-            dropTarget.feedback = workspaceToken
-                ? dropTarget.backend.beginDropPreview(dropTarget.role, drag.urls, workspaceToken)
-                : dropTarget.backend.beginDropPreview(dropTarget.role, drag.urls)
+            dropTarget.feedback = dropTarget.backend.beginDropPreview(
+                dropTarget.role, dropTarget.urlsFor(drag), dropTarget.workspaceTokenFor(drag))
             drag.accepted = true
         }
         onExited: dropTarget.resetPreview()
         onDropped: {
+            var urls = dropTarget.urlsFor(drop)
+            // Some Windows sources only expose paths when released.
+            if (!dropTarget.feedback.token && dropTarget.enteredContext === dropTarget.contextKey)
+                dropTarget.feedback = dropTarget.backend.beginDropPreview(
+                    dropTarget.role, urls, dropTarget.workspaceTokenFor(drop))
             if (dropTarget.enteredContext === dropTarget.contextKey
-                    && dropTarget.feedback.accepted && !dropTarget.feedback.pending
-                    && dropTarget.backend.finishDropPreview(dropTarget.feedback.token, dropTarget.role, drop.urls))
+                    && (dropTarget.feedback.accepted || dropTarget.feedback.pending)
+                    && dropTarget.backend.finishDropPreview(dropTarget.feedback.token, dropTarget.role, urls))
                 drop.accept(Qt.CopyAction)
             else
                 drop.accepted = false
