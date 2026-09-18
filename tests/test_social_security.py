@@ -25,6 +25,25 @@ from hr_toolkit.tools.social_security import (
 
 
 class SocialSecurityTest(unittest.TestCase):
+    def test_difference_headers_use_only_each_category_periods(self) -> None:
+        from hr_toolkit.tools.social_security import DIFFERENCE_COLUMNS, _write_difference_headers
+        workbook = Workbook()
+        self.addCleanup(workbook.close)
+        ws = workbook.active
+        record = SimpleNamespace(difference_periods={
+            "医疗": {"202603", "202605"}, "养老": {"202601"},
+            "失业": {"202512", "202601"}, "补充工伤": {"202604"},
+        })
+        _write_difference_headers(ws, [record])
+        expected = {"医疗": "医疗2026年3月-5月补差", "养老": "养老2026年1月补差",
+                    "失业": "失业2025年12月-2026年1月补差", "工伤": "工伤补差",
+                    "补充工伤": "补充工伤2026年4月补差"}
+        for category, text in expected.items():
+            self.assertEqual(ws.cell(2, DIFFERENCE_COLUMNS[category]["基数"]).value, text)
+        _write_difference_headers(ws, [SimpleNamespace(difference_periods={"工伤": {"未知"}})])
+        for category, columns in DIFFERENCE_COLUMNS.items():
+            self.assertEqual(ws.cell(2, columns["基数"]).value, f"{category}补差")
+
     def test_amount_diagnostics_preserve_parsing_and_do_not_log_cell_contents(self) -> None:
         from hr_toolkit.tools import social_security as social
         context = _source_context(Path("2026年6月社保.xlsx"))

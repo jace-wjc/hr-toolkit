@@ -1295,6 +1295,8 @@ def _append_payment_nature_warnings(record: DetailRecord, warnings: list[str]) -
     difference_categories = [category for category in SOCIAL_CATEGORIES if category in record.difference_periods]
     if difference_categories:
         for category in difference_categories:
+            if not any(_is_period(period) for period in record.difference_periods[category]):
+                warnings.append(f"{record.name} {category}补差未识别有效期间，补差表头不显示日期。")
             multiple_base = len(record.difference_bases.get(category, set())) > 1
             multiple_rate = any(len(values) > 1 for values in record.difference_rates.get(category, {}).values())
             if multiple_base or multiple_rate:
@@ -1547,21 +1549,16 @@ def _write_template_amount(
 
 
 def _write_difference_headers(ws: Worksheet, records: list[DetailRecord]) -> None:
-    periods: set[str] = set()
-    injury_periods: set[str] = set()
+    periods_by_category: dict[str, set[str]] = {category: set() for category in DIFFERENCE_COLUMNS}
     for record in records:
         for category, category_periods in record.difference_periods.items():
-            if category == "补充工伤":
-                injury_periods.update(category_periods)
-            else:
-                periods.update(category_periods)
-    if injury_periods:
-        ws.cell(2, DIFFERENCE_COLUMNS["补充工伤"]["基数"]).value = f"补充工伤{_format_chinese_period_span(injury_periods)}补差"
-    if not periods:
-        return
-    period_text = _format_chinese_period_span(periods)
-    for category in ("养老", "失业", "工伤", "医疗"):
-        ws.cell(2, DIFFERENCE_COLUMNS[category]["基数"]).value = f"{category}{period_text}补差"
+            if category in periods_by_category:
+                periods_by_category[category].update(category_periods)
+    for category, columns in DIFFERENCE_COLUMNS.items():
+        periods = periods_by_category[category]
+        # Supplementary injury keeps its existing independent formatting.
+        period_text = _format_chinese_period_span(periods, compact_same_year=category != "补充工伤")
+        ws.cell(2, columns["基数"]).value = f"{category}{period_text}补差"
 
 
 def _write_difference_cells(ws: Worksheet, row_index: int, record: DetailRecord) -> None:
@@ -2213,7 +2210,7 @@ def _format_period_span(periods: set[str]) -> str:
     return "、".join(normalized)
 
 
-def _format_chinese_period_span(periods: set[str]) -> str:
+def _format_chinese_period_span(periods: set[str], *, compact_same_year: bool = False) -> str:
     normalized = sorted(period for period in periods if _is_period(period))
     if not normalized:
         return ""
@@ -2221,7 +2218,7 @@ def _format_chinese_period_span(periods: set[str]) -> str:
     end = normalized[-1]
     if start == end:
         return f"{start[:4]}年{int(start[4:]):d}月"
-    if start[:4] == end[:4] and normalized == _period_sequence(start, end):
+    if start[:4] == end[:4] and (compact_same_year or normalized == _period_sequence(start, end)):
         return f"{start[:4]}年{int(start[4:]):d}月-{int(end[4:]):d}月"
     return f"{start[:4]}年{int(start[4:]):d}月-{end[:4]}年{int(end[4:]):d}月"
 
