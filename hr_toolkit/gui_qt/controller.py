@@ -217,6 +217,7 @@ class AppController(QObject):
         except ValueError:
             self._workspace_read_limit = 2
         self._workspace_generation = 0
+        self._workspace_refresh_pending = False
         self._workspace_scope = "all"
         self._workspace_search = ""
         self._workspace_selected_path: Path | None = None
@@ -2141,6 +2142,7 @@ class AppController(QObject):
         self._workspace_generation += 1
         self._workspace_child_loads.clear()
         generation = self._workspace_generation
+        self._workspace_refresh_pending = root is not None
         if root is None:
             self._workspace_items = []
             self._workspace_selected_path = None
@@ -2149,18 +2151,42 @@ class AppController(QObject):
             self.workspaceSelectionChanged.emit()
             return
         query = self._workspace_search.casefold()
+        expanded_paths = frozenset(
+            str(item["path"]) for item in self._workspace_items
+            if item.get("isDir") and item.get("expanded")
+        )
 
         def worker() -> None:
             items = (
                 self._search_workspace(root, query, cancelled=cancel_event.is_set)
                 if query
-                else self._scan_directory(root, cancelled=cancel_event.is_set)
+                else self._scan_workspace_tree(root, expanded_paths, cancelled=cancel_event.is_set)
             )
             if cancel_event.is_set():
                 return
             self._workspaceItemsReady.emit(generation, items)
 
         self._schedule_workspace_read(generation, worker)
+
+    @classmethod
+    def _scan_workspace_tree(cls, root: Path, expanded_paths: frozenset[str], *, cancelled=None):
+        """Refresh visible branches, preserving expansion by stable directory path."""
+        items = []
+        pending = [iter(cls._scan_directory(root, cancelled=cancelled))]
+        while pending:
+            if cancelled is not None and cancelled():
+                return []
+            item = next(pending[-1], None)
+            if item is None:
+                pending.pop()
+                continue
+            items.append(item)
+            if item.get("isDir") and str(item["path"]) in expanded_paths:
+                item["expanded"] = True
+                children = cls._scan_directory(Path(item["path"]), depth=int(item["depth"]) + 1,
+                                               cancelled=cancelled)
+                pending.append(iter(children))
+        return items
 
     def _schedule_workspace_read(self, generation: int, worker) -> None:
         with self._workspace_read_lock:
@@ -2196,6 +2222,7 @@ class AppController(QObject):
     def _apply_workspace_items(self, generation: int, items: list[dict[str, Any]]) -> None:
         if generation != self._workspace_generation or self._closed:
             return
+        self._workspace_refresh_pending = False
         next_items = list(items)
         previous_items = self._workspace_items
         changed = next_items != previous_items
@@ -2248,9 +2275,16 @@ class AppController(QObject):
             remove_count = end - row - 1
             del self._workspace_items[row + 1 : end]
             self._workspace_model.splice(row + 1, remove_count)
+            if self._workspace_refresh_pending:
+                self.refreshWorkspace()
             return
         item["expanded"] = True
         self._workspace_model.update_at(row, item)
+        if self._workspace_refresh_pending:
+            # A refresh in flight contains an older expansion snapshot. Restart
+            # it so a late result cannot undo this click or duplicate children.
+            self.refreshWorkspace()
+            return
         generation = self._workspace_generation
         path = Path(str(item["path"]))
         path_text = str(path)

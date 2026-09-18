@@ -763,6 +763,66 @@ class QtControllerTests(unittest.TestCase):
         self.assertEqual(len(resets), 2)
         self.assertEqual(model.rowCount(), 2)
 
+    def test_workspace_refresh_keeps_expanded_branches_and_shows_new_results(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            results = root / "业务" / "工具" / "处理结果"
+            results.mkdir(parents=True)
+            closed = root / "未展开"
+            closed.mkdir()
+            (closed / "隐藏行.xlsx").touch()
+            selected = results / "原结果.xlsx"
+            selected.touch()
+            controller._project_path = root
+            expanded = frozenset(str(path) for path in (results.parent.parent, results.parent, results))
+            controller._apply_workspace_items(controller._workspace_generation,
+                                              controller._scan_workspace_tree(root, expanded))
+            selected_row = next(i for i, item in enumerate(controller._workspace_items)
+                                if item["path"] == str(selected))
+            controller.selectWorkspaceRow(selected_row)
+            (results / "新结果.xlsx").touch()
+            jobs = []
+            with patch.object(controller, "_schedule_workspace_read", side_effect=lambda generation, worker: jobs.append(worker)):
+                controller.refreshWorkspace()
+            with patch.object(AppController, "_scan_directory", wraps=AppController._scan_directory) as scan:
+                jobs.pop()()
+            self.assertEqual({item["path"] for item in controller._workspace_items if item["expanded"]}, expanded)
+            self.assertIn(str(results / "新结果.xlsx"), {item["path"] for item in controller._workspace_items})
+            self.assertNotIn(closed, [call.args[0] for call in scan.call_args_list])
+            self.assertEqual(controller.workspaceSelectedPath, str(selected))
+            self.assertTrue(controller.workspaceSelectionAvailable)
+            self.assertFalse(controller._workspace_refresh_pending)
+
+    def test_workspace_toggle_during_refresh_overrides_stale_expansion_snapshot(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = root / "资料"
+            folder.mkdir()
+            (folder / "名单.xlsx").touch()
+            controller._project_path = root
+            controller._apply_workspace_items(controller._workspace_generation,
+                                              controller._scan_workspace_tree(root, frozenset({str(folder)})))
+            jobs = []
+            with patch.object(controller, "_schedule_workspace_read", side_effect=lambda generation, worker: jobs.append(worker)):
+                controller.refreshWorkspace()
+                controller.toggleWorkspaceRow(0)
+                jobs[0]()  # The stale expanded view must not restore itself.
+                jobs[1]()
+                self.assertEqual(len(controller._workspace_items), 1)
+                self.assertFalse(controller._workspace_items[0]["expanded"])
+                jobs.clear()
+                controller.refreshWorkspace()
+                controller.toggleWorkspaceRow(0)
+                jobs[0]()  # The stale collapsed view must not undo expansion.
+                jobs[1]()
+            self.assertEqual(len(controller._workspace_items), 2)
+            self.assertTrue(controller._workspace_items[0]["expanded"])
+            self.assertEqual(controller._workspace_items[1]["path"], str(folder / "名单.xlsx"))
+
     def test_workspace_folder_toggle_updates_rows_without_model_reset(self) -> None:
         controller = self.controller()
         root_path = Path.cwd() / "共用资料"
