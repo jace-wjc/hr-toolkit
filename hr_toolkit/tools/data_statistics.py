@@ -322,6 +322,7 @@ def generate_data_statistics_reports(
         _check_cancelled(cancelled)
         output.mkdir(parents=True, exist_ok=True)
         output_file = output / OUTPUT_FILENAME
+        _order_attendance_for_output(attendance_summaries, attendance_exceptions, expected_reporters)
         _write_output_workbook(
             output_file,
             attendance_summaries,
@@ -340,6 +341,22 @@ def generate_data_statistics_reports(
         )
         result.output_file = output_file
         return result
+
+
+def _order_attendance_for_output(
+    summaries: list[AttendancePersonSummary],
+    exceptions: list[AttendanceException],
+    expected_reporters: list[ExpectedReporter],
+) -> None:
+    """Change presentation order only; keep unmatched rows and per-person order."""
+    if not expected_reporters:
+        return
+    ranks: dict[str, int] = {}
+    for reporter in expected_reporters:
+        ranks.setdefault(reporter.name, len(ranks))
+    unmatched = len(ranks)
+    summaries.sort(key=lambda item: ranks.get(item.name, unmatched))
+    exceptions.sort(key=lambda item: ranks.get(item.name, unmatched))
 
 
 def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:

@@ -8,6 +8,7 @@ import unittest
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import py7zr
@@ -25,6 +26,21 @@ from hr_toolkit.tools.data_statistics import (
 
 
 class DataStatisticsTest(unittest.TestCase):
+    def test_attendance_output_follows_staff_without_changing_records(self) -> None:
+        from hr_toolkit.tools.data_statistics import _order_attendance_for_output
+        rows = [SimpleNamespace(name=name, value=index) for index, name in
+                enumerate(["名单外甲", "乙", "甲", "乙", "名单外乙"])]
+        summaries, details = list(rows), list(rows)
+        staff = [SimpleNamespace(name=name) for name in ["甲", "无考勤", "乙", "甲"]]
+        _order_attendance_for_output(summaries, details, staff)
+        expected = [rows[2], rows[1], rows[3], rows[0], rows[4]]
+        self.assertEqual(summaries, expected)
+        self.assertEqual(details, expected)
+        self.assertEqual([row.value for row in rows], list(range(5)))
+        unchanged = list(rows)
+        _order_attendance_for_output(unchanged, list(rows), [])
+        self.assertEqual(unchanged, rows)
+
     def test_generate_data_statistics_reports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
