@@ -373,7 +373,9 @@ class QtControllerTests(unittest.TestCase):
         paths = ["C:\\Users\\甲方\\Desktop\\表 #100%.xlsx", "\\\\server\\share\\工资.xlsx"]
         self.assertEqual([str(p) for p in local_drop_paths(paths, windows=True)], paths)
         url = QUrl.fromLocalFile("C:/Users/甲方/Desktop/表 #100%.xlsx").toString()
-        self.assertEqual(str(local_drop_paths([url], windows=True)[0]), "C:/Users/甲方/Desktop/表 #100%.xlsx")
+        # Path 的字符串形式随平台变化（Windows 用反斜杠），这里只关心 #、% 与中文是否原样保留。
+        self.assertEqual(local_drop_paths([url], windows=True)[0].as_posix(),
+                         "C:/Users/甲方/Desktop/表 #100%.xlsx")
         key = 'application/x-qt-windows-mime;value="FileNameW"'
         mime = SimpleNamespace(urls=lambda: [], formats=lambda: [key],
                                data=lambda _: (paths[0] + "\x00").encode("utf-16-le"))
