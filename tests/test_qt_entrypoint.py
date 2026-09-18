@@ -409,8 +409,15 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertNotIn("workspaceDrawer.close()", proxy)
         self.assertNotIn("restoreDrawer", proxy)
         target = (qml / "components" / "FileDropTarget.qml").read_text(encoding="utf-8")
-        self.assertIn('drag.getDataAsString("application/x-hr-toolkit-workspace")', target)
-        self.assertIn("drag.urls, workspaceToken", target)
+        # 同一个帮助函数要同时服务 onEntered(drag) 与 onDropped(drop)，
+        # 所以 workspace token 只能从传入的事件对象读取，不能再写死 drag。
+        self.assertIn('event.formats.indexOf("application/x-hr-toolkit-workspace")', target)
+        self.assertIn('event.getDataAsString("application/x-hr-toolkit-workspace")', target)
+        self.assertIn("backend.resolveDropUrls(event.urls, uri", target)
+        self.assertIn("dropTarget.urlsFor(drag), dropTarget.workspaceTokenFor(drag)", target)
+        # 快速松手时 hover 阶段可能还没建预览，drop 阶段必须补建并重新读取 token。
+        self.assertIn("if (!dropTarget.feedback.token", target)
+        self.assertIn("dropTarget.workspaceTokenFor(drop)", target)
 
     def test_update_waves_pause_during_native_window_movement(self) -> None:
         qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml"
