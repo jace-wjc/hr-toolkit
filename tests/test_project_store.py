@@ -31,6 +31,43 @@ from hr_toolkit.project_store import (
 
 
 class ProjectStoreTests(unittest.TestCase):
+    def test_deferred_run_reserves_unique_paths_without_creating_directories(self) -> None:
+        drafts = [self.store.create_draft(group_name="测试", tool_id="probe", tool_name="测试",
+                                         defer_directories=True) for _ in range(2)]
+        when = datetime(2026, 9, 18, 7, 0, tzinfo=timezone.utc)
+        results = [self.store.start_batch(draft.summary.id, now=when) for draft in drafts]
+        self.assertNotEqual(results[0].directories[CATEGORY_RESULTS], results[1].directories[CATEGORY_RESULTS])
+        for result in results:
+            self.assertFalse(result.directories[CATEGORY_RESULTS].parent.exists())
+            self.assertTrue(self.store.discard_unmaterialized_batch(result.summary.id))
+            self.assertIsNone(self.store.get_batch(result.summary.id))
+        self.assertFalse((self.project_root / "测试").exists())
+
+    def test_discard_reserved_run_never_deletes_created_results_or_legacy_batch(self) -> None:
+        draft = self.store.create_draft(group_name="测试", tool_id="probe", tool_name="测试",
+                                        defer_directories=True)
+        batch_id = draft.summary.id
+        self.store.start_batch(batch_id)
+        result_dir = self.store.result_directory(batch_id)
+        result_dir.mkdir(parents=True)
+        output = result_dir / "结果.txt"
+        output.write_text("result", encoding="utf-8")
+        self.assertFalse(self.store.discard_unmaterialized_batch(batch_id))
+        self.assertEqual(output.read_text(encoding="utf-8"), "result")
+        self.store.register_results(batch_id, result_dir)
+        self.store.mark_success(batch_id)
+        legacy = self._draft()
+        self.assertFalse(self.store.discard_unmaterialized_batch(legacy.summary.id))
+
+    def test_reopen_discards_interrupted_reservation_without_creating_output(self) -> None:
+        draft = self.store.create_draft(group_name="测试", tool_id="probe", tool_name="测试",
+                                        defer_directories=True)
+        self.store.start_batch(draft.summary.id)
+        self.store.close()
+        self.store = ProjectStore.open(self.project_root)
+        self.assertEqual(self.store.list_batches(), ())
+        self.assertFalse((self.project_root / "测试").exists())
+
     def test_reference_batch_keeps_results_without_upload_directory(self) -> None:
         from hr_toolkit.history_store import SourceSpec
         source = self.sources / "名单.txt"

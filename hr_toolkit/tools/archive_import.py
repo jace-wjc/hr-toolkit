@@ -284,7 +284,6 @@ def import_archive_transfers(
             result.inserted_count = len(records)
             return result
 
-        output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / OUTPUT_FILENAME
         target_for_write = (
             ensure_xlsx_workbook(
@@ -382,7 +381,6 @@ def export_company_archive_tables(
             force=True,
         )
         _check_archive_cancelled(cancelled)
-        output_dir.mkdir(parents=True, exist_ok=True)
         output_files: list[Path] = []
         completed_records = 0
         for company, company_records in _group_by_company(records).items():
@@ -637,6 +635,7 @@ def _write_archive_summary(
                 inserted_count += len(new_records)
         if remove_template_sheet:
             _remove_unused_template_sheet(workbook)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         workbook.save(output_file)
         _try_finalize_xlsx_after_save(output_file, compatibility_snapshot, warnings)
     finally:
@@ -1593,6 +1592,7 @@ def _write_company_archive_file(
             force=True,
         )
         _check_archive_cancelled(cancelled)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         workbook.save(output_file)
         _try_finalize_xlsx_after_save(output_file, compatibility_snapshot, warnings)
         _check_archive_cancelled(cancelled)

@@ -29,6 +29,7 @@ def _copy_probe(
 ):
     if cancelled is not None and cancelled():
         raise RuntimeError("cancelled")
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     output = Path(output_dir) / "same.txt"
     output.write_bytes(Path(input_path).read_bytes())
     if progress_callback is not None:
@@ -43,6 +44,110 @@ def _fake_folder_rename(root_dir, *, mode, cancelled=None, progress_callback=Non
 
 
 class ProjectRunCoordinatorTests(unittest.TestCase):
+    def test_social_roster_mapping_prompt_does_not_create_output(self) -> None:
+        from openpyxl import Workbook
+        from hr_toolkit.common.template_mapping import TemplateSelectionRequired
+        from hr_toolkit.tools.social_security import generate_social_security_reports
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roster, payment = root / "花名册.xlsx", root / "社保.xlsx"
+            for path in (roster, payment):
+                workbook = Workbook()
+                workbook.active.append(["无法识别的列"])
+                workbook.save(path)
+                workbook.close()
+            store = ProjectStore.create(root / "project", "测试项目")
+            errors = []
+            request = RunRequest("social_security", "社保", "测试", "社保", generate_social_security_reports,
+                                 (payment, roster, root), {"template_rules": {}})
+            try:
+                ProjectRunCoordinator()._run(store, request, RunCallbacks(error=errors.append), threading.Event())
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], TemplateSelectionRequired)
+                self.assertEqual(store.list_batches(), ())
+                self.assertFalse((store.root / "测试").exists())
+                self.assertEqual(list(store.staging_dir.iterdir()), [])
+            finally:
+                store.close()
+
+    def test_prevalidation_retry_never_creates_output_or_failed_batch(self) -> None:
+        from hr_toolkit.common.run_temp import temporary_directory
+        from hr_toolkit.common.template_mapping import TemplateSelectionRequired
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.txt"
+            source.write_text("source", encoding="utf-8")
+            store = ProjectStore.create(root / "project", "测试项目")
+            errors, outputs = [], []
+
+            def invalid_template(input_path, output_dir):
+                self.assertEqual(Path(input_path), source)
+                outputs.append(Path(output_dir))
+                self.assertFalse(Path(output_dir).parent.exists())
+                with temporary_directory() as temp:
+                    (Path(temp) / "解析资料.txt").write_text("temporary", encoding="utf-8")
+                    raise TemplateSelectionRequired({"tool": "social_security", "message": "请确认对应列：姓名、身份证号码"})
+
+            request = RunRequest("social_security", "社保明细与汇总", "测试", "社保", invalid_template,
+                                 (source, root), {})
+            try:
+                for _ in range(2):
+                    ProjectRunCoordinator()._run(store, request, RunCallbacks(error=errors.append), threading.Event())
+                    self.assertEqual(store.list_batches(), ())
+                    self.assertEqual(store.list_trash(), ())
+                    self.assertEqual(list(store.staging_dir.iterdir()), [])
+                    self.assertFalse((store.root / "测试").exists())
+                self.assertEqual(len(errors), 2)
+                self.assertTrue(all(isinstance(error, TemplateSelectionRequired) for error in errors))
+                self.assertTrue(all(not path.exists() for path in outputs))
+                self.assertEqual(source.read_text(encoding="utf-8"), "source")
+            finally:
+                store.close()
+
+    def test_worker_template_error_discards_only_reserved_batch(self) -> None:
+        from hr_toolkit.common.template_mapping import TemplateSelectionRequired
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.txt"
+            source.write_text("source", encoding="utf-8")
+            store = ProjectStore.create(root / "project", "测试项目")
+            errors = []
+            request = RunRequest("social_security", "社保", "测试", "社保", _copy_probe, (source, root), {})
+            remote_error = BusinessProcessError(str(TemplateSelectionRequired({"tool": "social_security"})))
+            try:
+                with patch("hr_toolkit.run_coordinator.should_use_process", return_value=True), patch(
+                    "hr_toolkit.run_coordinator.run_business_process", side_effect=remote_error,
+                ):
+                    ProjectRunCoordinator()._run(store, request, RunCallbacks(error=errors.append), threading.Event())
+                self.assertEqual(errors, [remote_error])
+                self.assertEqual(store.list_batches(), ())
+                self.assertFalse((store.root / "测试").exists())
+            finally:
+                store.close()
+
+    def test_invalid_folder_configuration_does_not_create_result_copy(self) -> None:
+        from hr_toolkit.tools.folder_rename import rename_person_folders
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            (source / "说明.txt").write_text("original", encoding="utf-8")
+            store = ProjectStore.create(root / "project", "测试项目")
+            errors = []
+            request = RunRequest("folder_rename", "改名", "测试", "改名", rename_person_folders,
+                                 (source,), {"mode": "invalid"})
+            try:
+                ProjectRunCoordinator()._run(store, request, RunCallbacks(error=errors.append), threading.Event())
+                self.assertEqual(len(errors), 1)
+                self.assertIn("不支持的改名模式", str(errors[0]))
+                self.assertEqual(store.list_batches(), ())
+                self.assertFalse((store.root / "测试").exists())
+                self.assertEqual((source / "说明.txt").read_text(encoding="utf-8"), "original")
+            finally:
+                store.close()
+
     def test_business_progress_is_coalesced_without_losing_completion(self) -> None:
         def noisy_probe(*, progress_callback=None):
             for current in range(1, 1001):

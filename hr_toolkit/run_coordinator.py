@@ -253,6 +253,7 @@ class ProjectRunCoordinator:
                 business_description=request.description,
                 business_period=time.strftime("%Y-%m-%d"),
                 retain_sources=False,
+                defer_directories=True,
             )
             batch_id = draft.summary.id
             with self._lock:
@@ -300,6 +301,16 @@ class ProjectRunCoordinator:
                 raise BusinessProcessCancelled("本次处理已停止。")
             if current_version_roles and replacements.get("template_path"):
                 callbacks.log("已使用当前选择的汇总表，原文件由用户自行保存。")
+            # Renaming needs a result copy before execution. Reuse its existing
+            # read-only preview to validate configuration before making that copy.
+            if getattr(request.function, "__module__", "") == "hr_toolkit.tools.folder_rename":
+                preview = inspect.signature(request.function).bind(*request.args, **request.kwargs)
+                preview.arguments["dry_run"] = True
+                preview.arguments["cancelled"] = cancel_event.is_set
+                with store.run_temporary_directory():
+                    request.function(*preview.args, **preview.kwargs)
+                if cancel_event.is_set():
+                    raise BusinessProcessCancelled("本次处理已停止。")
             store.start_batch(batch_id)
             started = True
             result_dir = store.result_directory(batch_id)
@@ -341,14 +352,18 @@ class ProjectRunCoordinator:
             finalization_error: BaseException | None = None
             if batch_id is not None:
                 try:
-                    if started:
+                    if store.discard_unmaterialized_batch(batch_id):
+                        # Template/configuration checks stopped before the tool
+                        # created output. There is no failed result batch to keep.
+                        batch_id = None
+                    elif started:
                         if stopped:
                             store.mark_stopped(batch_id)
                         else:
                             store.mark_failed(batch_id, str(exc))
                     elif draft is not None:
                         store.move_to_trash(batch_id)
-                    if not project_batch_is_closed(store, batch_id):
+                    if batch_id is not None and not project_batch_is_closed(store, batch_id):
                         raise RuntimeError("项目批次仍未进入安全结束状态。")
                 except BaseException as project_exc:
                     finalization_error = project_exc

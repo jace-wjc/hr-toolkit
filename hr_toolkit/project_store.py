@@ -491,8 +491,11 @@ class ProjectStore:
         business_description: str = "",
         business_period: str = "",
         retain_sources: bool = False,
+        defer_directories: bool = False,
     ) -> BatchDetail:
         self._require_writable()
+        if defer_directories and retain_sources:
+            raise ProjectStoreError("留存源文件的批次不能延迟创建资料目录。")
         group = str(group_name).strip() or "默认分组"
         clean_tool_id = str(tool_id).strip()
         clean_tool_name = str(tool_name).strip()
@@ -516,13 +519,14 @@ class ProjectStore:
                 "started_at": None,
                 "finished_at": None,
                 "error_message": None,
-                "writer_session": None,
+                "writer_session": self._session_id if defer_directories else None,
                 "deleted_at": None,
             },
             "directories": directories,
             "files": [],
             "source_directories": [],
             "source_retention": "archive" if retain_sources else "references",
+            "deferred_directories": bool(defer_directories),
             "pending_import": None,
             "pending_rename": None,
             "pending_trash": None,
@@ -535,12 +539,13 @@ class ProjectStore:
             _write_json(manifest_path, payload)
             batch_root = _project_join(self.root, directories[CATEGORY_UPLOADS]).parent
             try:
-                batch_root.mkdir(parents=True, exist_ok=False)
-                _make_private(batch_root, directory=True)
-                for category in ((CATEGORY_UPLOADS, CATEGORY_RESULTS) if retain_sources else (CATEGORY_RESULTS,)):
-                    path = _project_join(self.root, directories[category])
-                    path.mkdir(mode=0o700, exist_ok=False)
-                    _make_private(path, directory=True)
+                if not defer_directories:
+                    batch_root.mkdir(parents=True, exist_ok=False)
+                    _make_private(batch_root, directory=True)
+                    for category in ((CATEGORY_UPLOADS, CATEGORY_RESULTS) if retain_sources else (CATEGORY_RESULTS,)):
+                        path = _project_join(self.root, directories[category])
+                        path.mkdir(mode=0o700, exist_ok=False)
+                        _make_private(path, directory=True)
             except Exception:
                 shutil.rmtree(batch_root, ignore_errors=True)
                 manifest_path.unlink(missing_ok=True)
@@ -558,6 +563,7 @@ class ProjectStore:
         business_description: str = "",
         business_period: str = "",
         retain_sources: bool = False,
+        defer_directories: bool = False,
     ) -> BatchDetail:
         return self.create_draft_batch(
             group_name=group_name,
@@ -566,7 +572,27 @@ class ProjectStore:
             business_description=business_description,
             business_period=business_period,
             retain_sources=retain_sources,
+            defer_directories=defer_directories,
         )
+
+    def discard_unmaterialized_batch(self, batch_id: str) -> bool:
+        """Forget a reserved run that never created any output; never delete files."""
+        self._require_writable()
+        with self._mutex:
+            manifest = self._load_active_manifest(batch_id)
+            if (not manifest.get("deferred_directories")
+                    or manifest.get("source_retention") != "references"
+                    or _batch_object(manifest)["status"] not in {"draft", "running"}
+                    or _file_objects(manifest) or _source_directory_objects(manifest)
+                    or any(manifest.get(key) for key in ("pending_import", "pending_rename", "pending_trash"))):
+                return False
+            batch_root = _project_join(self.root, _directory_map(manifest)[CATEGORY_RESULTS]).parent
+            _assert_no_link_components(self.root, batch_root.relative_to(self.root))
+            if batch_root.exists() or _is_link_like(batch_root):
+                return False
+            self._manifest_path(batch_id).unlink()
+            self._run_input_sessions.pop(batch_id, None)
+            return True
 
     def start_processing(
         self,
@@ -1196,7 +1222,7 @@ class ProjectStore:
         destination = self.result_directory(batch_id) / _visible_component(source.name)
         expected = {path: metadata for path, metadata in session["checks"].items() if _is_inside(path, source)}
         self._ensure_free_space(sum(item["size_bytes"] for item in expected.values()))
-        destination.mkdir(mode=0o700, exist_ok=False)
+        destination.mkdir(mode=0o700, parents=True, exist_ok=False)
         try:
             for parts in directory_parts:
                 _raise_if_cancelled(session["cancelled"])
@@ -1877,6 +1903,11 @@ class ProjectStore:
         tool_name: str,
         desired_name: str,
     ) -> tuple[str, dict[str, str]]:
+        # A running task may have reserved its name without creating a folder.
+        reserved_roots = {
+            Path(_directory_map(self._load_active_manifest(path.stem))[CATEGORY_RESULTS]).parent
+            for path in self.manifest_dir.glob("*.json")
+        }
         for index in range(1, 10_000):
             name = desired_name if index == 1 else f"{desired_name}_{index}"
             directories = self._batch_relative_directories(group, tool_name, name)
@@ -1885,7 +1916,8 @@ class ProjectStore:
                 Path(directories[CATEGORY_UPLOADS]).parent,
             )
             batch_root = _project_join(self.root, directories[CATEGORY_UPLOADS]).parent
-            if not batch_root.exists() and not _is_link_like(batch_root):
+            if (not batch_root.exists() and not _is_link_like(batch_root)
+                    and batch_root.relative_to(self.root) not in reserved_roots):
                 return name, directories
         raise ProjectStoreError("同名批次过多，请调整业务说明或期间。")
 
@@ -2475,6 +2507,11 @@ class ProjectStore:
                 self._recover_pending_trash(batch_id, manifest)
                 continue
             batch = _batch_object(manifest)
+            if (batch["status"] in {"draft", "running"}
+                    and batch_id not in self._run_input_sessions
+                    and batch.get("writer_session") != self._session_id
+                    and self.discard_unmaterialized_batch(batch_id)):
+                continue
             if batch["status"] == "running" and batch_id not in self._run_input_sessions:
                 self._quarantine_unregistered_results(manifest, reason="startup_recovery")
                 batch["status"] = "stopped"
@@ -2724,7 +2761,14 @@ class ProjectStore:
             new_batch_root.parent.mkdir(parents=True, exist_ok=True)
             old_batch_root.rename(new_batch_root)
         elif not new_exists:
-            raise ProjectStoreError("批次改名恢复找不到原资料目录。")
+            # New reference-only runs reserve their final path. The tool creates
+            # it only after its existing input/template checks have succeeded.
+            if (manifest.get("deferred_directories") is not True
+                    or manifest.get("source_retention") != "references"
+                    or _file_objects(manifest) or _source_directory_objects(manifest)):
+                raise ProjectStoreError("批次改名恢复找不到原资料目录。")
+            _assert_no_link_components(self.root, old_batch_root.relative_to(self.root))
+            _assert_no_link_components(self.root, new_batch_root.relative_to(self.root))
         for item in _file_objects(manifest):
             category = str(item["category"])
             old_prefix = old_directories[category]

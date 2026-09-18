@@ -172,6 +172,7 @@ class PersonnelChangeMergeTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "异动汇总表缺少工作表：调动"):
                 merge_personnel_changes(input_dir, output_dir, template_path=template_path)
+            self.assertFalse(output_dir.exists())
 
     def test_existing_summary_is_appended_without_clearing_original_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

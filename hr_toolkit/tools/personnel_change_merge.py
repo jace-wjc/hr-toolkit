@@ -293,7 +293,6 @@ def merge_personnel_changes(
         if dry_run:
             return result
 
-        output_dir.mkdir(parents=True, exist_ok=True)
         inserted_count = 0
         updated_count = 0
         skipped_count = 0
@@ -326,6 +325,9 @@ def merge_personnel_changes(
             result.roster_output_file = roster_output_file
             result.roster_added_count = roster_result["added_count"]
             result.roster_marked_count = roster_result["marked_count"]
+        # Preserve the existing successful empty-result behavior, but only
+        # after all requested templates have been processed successfully.
+        output_dir.mkdir(parents=True, exist_ok=True)
         return result
 
 
@@ -390,7 +392,6 @@ def update_roster_from_change_summaries(
         if dry_run:
             return result
 
-        output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / _analysis_output_filename(period)
         roster_result = _write_updated_roster(
             working_analysis_template,
@@ -701,6 +702,7 @@ def _write_summary_workbook(
             inserted_count += sheet_result["inserted_count"]
             updated_count += sheet_result["updated_count"]
             skipped_count += sheet_result["skipped_count"]
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         workbook.save(output_file)
     finally:
         workbook.close()
@@ -1252,6 +1254,7 @@ def _write_updated_roster(
             marked_count += 1
         _renumber_roster(ws, layout)
         _check_cancelled(cancelled)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         workbook.save(output_file)
     finally:
         workbook.close()
