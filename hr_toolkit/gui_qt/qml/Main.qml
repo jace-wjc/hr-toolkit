@@ -626,12 +626,19 @@ ApplicationWindow {
                     Layout.maximumWidth: root.contentMaxWidth
                     Layout.alignment: Qt.AlignHCenter
                     spacing: 10
-                    ColumnLayout {
+                    // A plain Column keeps the header a one-way size flow: the
+                    // row assigns this width, the wrapped texts report their
+                    // natural heights back. As a nested ColumnLayout it also
+                    // wrote Layout.* hints while mainLayout was assigning
+                    // sizes, so a header button whose visibility follows the
+                    // selected tool re-entered the polish pass until Qt
+                    // aborted it (Layout polish loop detected).
+                    Column {
                         Layout.fillWidth: true
                         spacing: 14
-                        Text { text: controller.toolGroup; color: root.primary; font.pixelSize: 12; font.weight: Font.DemiBold }
+                        Text { width: parent.width; text: controller.toolGroup; color: root.primary; font.pixelSize: 12; font.weight: Font.DemiBold }
                         Text {
-                            Layout.fillWidth: true
+                            width: parent.width
                             text: controller.toolTitle
                             color: root.textMain
                             font.pixelSize: 24
@@ -639,7 +646,7 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                         }
                         Text {
-                            Layout.fillWidth: true
+                            width: parent.width
                             text: controller.toolDescription
                             color: root.textMuted
                             font.pixelSize: 13

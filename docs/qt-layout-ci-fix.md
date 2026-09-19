@@ -54,3 +54,31 @@
 - 修改的 Python 探针通过语法编译；`git diff --check` 通过。
 - 结果日志：`/tmp/hr-log-fix-entry-qt515.log`、`/tmp/hr-log-fix-entry-qt66.log`、`/tmp/hr-log-fix-entry-qt611.log`；几何对照：`/tmp/hr-log-row-before.json`、`/tmp/hr-log-row-after-rounded.json`。
 - 原始循环的直接证据来自 Windows 发布日志；本机短样本未复现该警告。以上验证均在 macOS 完成，不能据此声称 Windows 原生或 Win7 安装包已通过。未运行全仓测试、全量构建、打包或远程重跑；发布任务仍需在包含本修复的提交上复验。
+
+## 0.9.10 发布中的头部行布局循环
+
+失败运行：[CI 35338983577](https://github.com/jace-wjc/hr-toolkit/actions/runs/35338983577)、[Release 35338983656](https://github.com/jace-wjc/hr-toolkit/actions/runs/35338983656)，提交 `a2253ed`（发布 0.9.10）。两个运行的 Windows 车道都只失败在 `test_workspace_panel_allocates_width_and_restores_after_narrow_resize`：探针在 `material_collector`、1400×820 报 `Main.qml:614` 的 `ColumnLayout`（`id="mainLayout"`，几何 484×758）布局 polish 循环。Win7（Qt 5.15.2）车道当次未报。
+
+### 原因
+
+- 前一轮 CI 绿灯没有覆盖这次运行：`476c59c`、`8e68150` 只改了 `tests/test_qt_controller.py`、`tests/test_qt_entrypoint.py`，`ci_scope` 没有选中 `test_qt_entrypoint`。发布提交改动版本号与发布说明后范围扩大，探针才执行。
+- 触发点在 `03bb229` 新增的「地区编号维护」按钮：它的 `visible` 跟随当前工具（`archive_import`、`personnel_change_merge`），切到其它工具时该按钮进出头部 RowLayout。
+- 头部标题块当时是嵌套 `ColumnLayout`。按钮进出改变了分配给标题块的宽度，标题与说明文字随之换行（2 行 ↔ 1 行）；嵌套布局在外层 `mainLayout` 正在分配尺寸时又写回 `Layout.*` 提示，Qt 的「最多两次迭代」保护（`QQuickLayout::invalidate()` 的 `m_polishInsideUpdatePolish`）被第三次重入打断并告警。
+- 本机对照：移除按钮、把按钮固定为常显、或把按钮换成固定尺寸的普通 Item 后现象有变化，说明是「跟随工具的可见性切换」与「嵌套布局在 polish 期间回写尺寸提示」共同作用，而不是按钮宽度本身。
+
+### 修复范围
+
+- 头部标题块由嵌套 `ColumnLayout` 改为普通 `Column`：宽度由 RowLayout 自上而下分配，三个文字项用 `width: parent.width` 取用，换行高度自然向上汇总，不再有布局容器在外层布局分配尺寸期间回写提示。
+- 未改动按钮的可见性条件、文案、间距、字号与行内顺序；其余布局结构保持原样。
+
+### 验证结果（macOS 本机）
+
+- 环境：PySide6 6.6.3.1（Qt 6.6.3），与失败车道安装的 `requirements-gui.txt` 版本一致。
+- 工作区探针（告警一律判失败的原始断言）：修复前 3 次运行中 2 次报该循环；修复后 7 次运行 0 次。
+- 逐像素对照：修复前、修复后各跑一次完整探针并对比全部截图，确定性页面 25/28 完全一致；`salary_split` 三张的差异只有 26〜72 个像素，且同一份代码连跑 9 次该文件哈希每次不同，属该页面的固有渲染抖动，与本改动无关。`geometry.json` 中窗口宽度、中间面板与右侧面板宽度在静止场景一致，差异只出现在面板动画帧。
+- `tests.test_qt_entrypoint` 37 项在修复后通过（单次运行耗时约 84〜91 秒）。
+
+### 未处理与验证边界
+
+- 本机为 macOS，未验证 Windows 原生与 Qt 5.15.2（Win7 车道），验收仍依赖重跑发布工作流。
+- 本机偶发另一个告警：`formScroll.contentWidth` 绑定循环（`minimumFormWidth` 读 `attendanceOptions.implicitWidth`，经 `formColumn.width` 回到 `contentWidth`）。该路径来自 `9030cfc`，随 0.9.9 发布，本次未改动；4 次本机运行中 1 次出现，且目前所有 Windows 车道日志中都没有出现过，故未纳入本次修复。
