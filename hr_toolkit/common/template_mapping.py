@@ -15,9 +15,10 @@ from typing import Any
 from .header_aliases import normalize_alias, validate_alias_rules, protected_aliases, has_custom_aliases
 
 ERROR_PREFIX = "HR_TEMPLATE_SELECTION:"
-SUPPORTED_TOOLS = ("salary_split", "personnel_change_merge", "archive_import",
+SUPPORTED_TOOLS = ("salary_split", "personnel_change_merge", "roster_update", "archive_import", "archive_export",
                    "insurance_ledger", "data_statistics", "social_security")
 _current = ContextVar("hr_input_template_mapping", default=None)
+_sheet_notices = ContextVar("hr_input_sheet_notices", default=None)
 
 
 class TemplateSelectionRequired(Exception):
@@ -34,6 +35,10 @@ def _role(label, required, fields, sheets=()):
 
 def catalog(tool):
     """各处理项分别声明实际读取的字段；可选字段未配置时不额外变成必填。"""
+    if tool == "roster_update":
+        return {**catalog("personnel_change_merge"), "roster": _role("人力资源花名册", (), {}, ("花名册",))}
+    if tool == "archive_export":
+        return {"archive": _role("公司档案数据页", ("姓名", "身份证"), {"姓名": ("姓名",), "身份证": ("身份证",)})}
     if tool == "salary_split":
         from hr_toolkit.tools import salary_split as m
         fields = {"入职公司": m.HEADER_COMPANY_SYNONYMS, "姓名": m.HEADER_NAME_SYNONYMS,
@@ -43,9 +48,10 @@ def catalog(tool):
                 "summary": _role("工资汇总", (), {})}
     if tool == "personnel_change_merge":
         from hr_toolkit.tools import personnel_change_merge as m
-        return {role: _role(role, ("序号", "姓名", m.PERIOD_FIELD_BY_SHEET[role][0]),
+        changes = {role: _role(role, ("序号", "姓名", m.PERIOD_FIELD_BY_SHEET[role][0]),
                             {name: m.FIELD_ALIASES.get(name, (name,)) for name in m.DEFAULT_HEADERS_BY_SHEET[role]},
                             m.SOURCE_SHEET_ALIASES[role]) for role in m.TARGET_SHEETS}
+        return {**changes, "roster": _role("人力资源花名册", (), {}, ("花名册",))}
     if tool == "archive_import":
         from hr_toolkit.tools import archive_import as m
         fields = {name: (name,) for name in dict.fromkeys(["公司", *m.DIRECT_FIELD_MAP, "其他", "离职时间"])}
@@ -103,7 +109,7 @@ def catalog(tool):
 
 
 def clean_rules(tool, payload):
-    if not isinstance(payload, dict) or set(payload) - {"fields", "sheets", "profiles"}:
+    if not isinstance(payload, dict) or set(payload) - {"fields", "sheets", "profiles", "sheet_choices"}:
         raise ValueError("模板对应设置格式无效")
     specs = catalog(tool)
     fields = {role + "|" + name: spec["label"] + " · " + name for role, spec in specs.items() for name in spec["fields"]}
@@ -148,6 +154,17 @@ def clean_rules(tool, payload):
         if not isinstance(profile.get("columns"), dict) or set(profile["columns"]) - set(allowed_fields):
             raise ValueError("已保存的对应列无效")
         result["profiles"].append(profile)
+    # 文件级选择仅在当前连续处理期间传递，不作为长期配置保存。
+    choices = payload.get("sheet_choices", {})
+    if not isinstance(choices, dict):
+        raise ValueError("本次工作表选择无效")
+    for key, values in choices.items():
+        if not isinstance(key, str) or not isinstance(values, dict) or set(values) - set(specs):
+            raise ValueError("本次工作表选择无效")
+        if any(value is not None and not isinstance(value, str) for value in values.values()):
+            raise ValueError("本次工作表名称无效")
+    if choices:
+        result["sheet_choices"] = choices
     return result
 
 
@@ -158,9 +175,16 @@ def template_tool(tool):
             if template_rules is None:
                 return function(*args, **kwargs)
             token = _current.set((tool, clean_rules(tool, template_rules)))
+            notice_token = _sheet_notices.set([])
             try:
-                return function(*args, **kwargs)
+                result = function(*args, **kwargs)
+                notices = _sheet_notices.get()
+                warnings = getattr(result, "warnings", None)
+                if warnings is not None:
+                    warnings.extend(n for n in notices if n not in warnings)
+                return result
             finally:
+                _sheet_notices.reset(notice_token)
                 _current.reset(token)
         signature = inspect.signature(function)
         wrapped.__signature__ = signature.replace(parameters=[*signature.parameters.values(),
@@ -169,8 +193,9 @@ def template_tool(tool):
     return decorate
 
 
-def active():
-    return _current.get() is not None
+def active(tool=None):
+    context = _current.get()
+    return context is not None and (tool is None or context[0] == tool)
 
 
 def _title(sheet):
@@ -253,7 +278,7 @@ def ignored_sheet(sheet, file):
     return bool(profiles) and any(p["key"] == _ignore_key(file, _title(sheet), preview(sheet)) for p in profiles)
 
 
-def assigned_role(sheet, roles, *, confirmed_only=False):
+def assigned_role(sheet, roles, *, confirmed_only=False, file="", source_sheets=None):
     if not active():
         return None
     tool, rules = _current.get()
@@ -272,37 +297,189 @@ def assigned_role(sheet, roles, *, confirmed_only=False):
         candidates = confirmed
     candidates = list(dict.fromkeys(candidates))
     if len(candidates) > 1:
-        request_selection([sheet], roles, message="同一工作表匹配了多个用途，请确认")
+        request_sheet_selection(source_sheets or [sheet], candidates, file=file, alternatives=True)
     return candidates[0] if candidates else None
+
+
+def sheet_choice_key(sheets, file):
+    return hashlib.sha256(json.dumps([str(file), [_title(ws) for ws in sheets]], ensure_ascii=False).encode()).hexdigest()
+
+
+def current_sheet_choices(sheets, file):
+    if not active():
+        return {}
+    return _current.get()[1].get("sheet_choices", {}).get(sheet_choice_key(sheets, file), {})
+
+
+def unused_sheet_notices(sheets, used, file):
+    notices = [f"未处理工作表：文件《{file}》中的「{_title(ws)}」页未参与本次处理，已跳过。"
+               for ws in sheets if _title(ws) not in used]
+    collected = _sheet_notices.get()
+    if collected is not None:
+        collected.extend(note for note in notices if note not in collected)
+    return notices
+
+
+def request_sheet_selection(sheets, roles, *, file="", optional=(), resolved=None, alternatives=False):
+    if not active():
+        raise ValueError("未找到需要的工作表")
+    specs = catalog(_current.get()[0])
+    raise TemplateSelectionRequired({
+        "tool": _current.get()[0], "kind": "worksheets", "file": str(file),
+        "message": "未找到或不能唯一确定需要的工作表。页名有变化请选择实际工作表；本次没有的可明确标记。",
+        "roles": [{"key": r, "label": specs[r]["label"], "fields": {}, "required": []} for r in roles],
+        "sheets": [{"name": _title(ws), "rows": preview(ws)} for ws in sheets],
+        "sheet_requests": [{"key": r, "label": specs[r]["label"], "optional": r in optional} for r in roles],
+        "alternatives": alternatives, "resolved_sheets": resolved or {},
+        "choice_key": sheet_choice_key(sheets, file),
+    })
+
+
+def _sheet_candidates(sheets, role):
+    confirmed = [ws for ws in sheets if assigned_role(ws, [role], confirmed_only=True) == role]
+    if confirmed:
+        return confirmed
+    return [ws for ws in sheets if assigned_role(ws, [role]) == role]
+
+
+def resolve_sheet_roles(sheets, defaults, *, file="", optional=()):
+    """Resolve a named set before reading any data; missing optional roles need explicit acknowledgement."""
+    if not active():
+        return defaults
+    choices = current_sheet_choices(sheets, file)
+    resolved, pending = {}, []
+    for role, default in defaults.items():
+        if role in choices:
+            selected = next((ws for ws in sheets if _title(ws) == choices[role]), None)
+            if selected is None and choices[role] is not None:
+                pending.append(role)
+            elif selected is None and role not in optional:
+                pending.append(role)
+            else:
+                resolved[role] = selected
+            continue
+        candidates = _sheet_candidates(sheets, role)
+        if len(candidates) == 1:
+            resolved[role] = candidates[0]
+        elif not candidates and default is not None and assigned_role(default, list(defaults), file=file, source_sheets=sheets) in (None, role):
+            resolved[role] = default
+        else:
+            pending.append(role)
+    # Do not allow two purposes to consume the same sheet accidentally.
+    owners = {}
+    for role, ws in list(resolved.items()):
+        if ws is None:
+            continue
+        name = _title(ws)
+        if name in owners:
+            pending.extend([owners[name], role])
+        owners[name] = role
+    pending = list(dict.fromkeys(pending))
+    if pending:
+        request_sheet_selection(sheets, pending, file=file, optional=optional,
+                                resolved={r: _title(ws) if ws is not None else None for r, ws in resolved.items() if r not in pending})
+    notes = _sheet_notices.get()
+    if notes is not None:
+        for role, ws in resolved.items():
+            if ws is None:
+                note = f"用户已确认：文件《{file}》本次不包含“{catalog(_current.get()[0])[role]['label']}”工作表。"
+                if note not in notes:
+                    notes.append(note)
+    return resolved
+
+
+def save_sheet_choice(tool, rules, issue, payload):
+    selections = payload.get("sheet_selections", {})
+    if not isinstance(selections, dict):
+        raise ValueError("请选择对应工作表")
+    requests = issue["sheet_requests"]
+    if issue.get("alternatives"):
+        requests = [r for r in requests if r["key"] == payload.get("role")]
+        if len(requests) != 1:
+            raise ValueError("请选择需要读取的资料类型")
+    names = {s["name"] for s in issue["sheets"]}
+    chosen = dict(issue.get("resolved_sheets", {}))
+    for item in requests:
+        role = item["key"]
+        if role not in selections:
+            raise ValueError(f"请选择“{item['label']}”对应的工作表")
+        name = selections[role]
+        if not (isinstance(name, str) and name in names or name is None and item["optional"]):
+            raise ValueError(f"请选择“{item['label']}”对应的工作表")
+        chosen[role] = name
+    selected_names = [n for n in chosen.values() if n is not None]
+    if len(selected_names) != len(set(selected_names)):
+        raise ValueError("不同资料不能选择同一工作表")
+    choices = dict(rules.get("sheet_choices", {}))
+    choices[issue["choice_key"]] = {**choices.get(issue["choice_key"], {}), **chosen}
+    if issue.get("alternatives"):
+        # 一张表改作另一用途时撤销本次旧归属，避免同页被两个用途读取。
+        for role, name in list(choices[issue["choice_key"]].items()):
+            if role not in chosen and name in selected_names:
+                del choices[issue["choice_key"]][role]
+    rules["sheet_choices"] = choices
+    if payload.get("remember") is True:
+        for item in requests:
+            role, name = item["key"], chosen[item["key"]]
+            if name is None:  # 缺少是本次资料的事实，不成为永久跳过规则。
+                continue
+            rules["sheets"][role] = list(dict.fromkeys([*rules["sheets"].get(role, []), name]))
+            peers = {r["key"] for r in issue["roles"]} if issue.get("alternatives") else {role}
+            rules["profiles"] = [p for p in rules["profiles"] if p["role"] != role
+                                  and not (p.get("sheet") == name and p["role"] in peers | {"_ignore"})]
+    return clean_rules(tool, rules)
 
 
 def choose_sheet(sheets, role, default=None, *, required=True, file="", allow_absent=False):
     if not active():
         return default
+    choices = current_sheet_choices(sheets, file)
+    if role in choices:
+        selected = next((ws for ws in sheets if _title(ws) == choices[role]), None)
+        if selected is not None or choices[role] is None and not required:
+            return selected
+        request_sheet_selection(sheets, [role], file=file)
     rules = _current.get()[1]
     configured = rules["sheets"].get(role, [])
     confirmed = [ws for ws in sheets if assigned_role(ws, [role], confirmed_only=True) == role]
     if len(confirmed) == 1:
         return confirmed[0]
     if len(confirmed) > 1:
-        request_selection(sheets, [role], file=file, message="多张工作表匹配手动对应关系，请确认本次工作表")
+        request_sheet_selection(sheets, [role], file=file)
     candidates = [ws for ws in sheets if assigned_role(ws, [role]) == role]
     if len(candidates) == 1:
         return candidates[0]
     if configured and not candidates and (allow_absent or default is not None or not required):
         configured = []  # 未命中自定义名称时，仍允许原有的内置查找。
     if candidates or configured:
-        request_selection(sheets, [role], file=file, message="工作表名称未匹配或匹配了多张，请选择本次处理的工作表")
+        request_sheet_selection(sheets, [role], file=file)
     if default is not None:
-        owner = assigned_role(default, list(catalog(_current.get()[0])))
+        owner = assigned_role(default, list(catalog(_current.get()[0])), file=file, source_sheets=sheets)
         if owner and owner != role:
             if required:
-                request_selection(sheets, [role], file=file, message="默认工作表已对应其他用途，请选择本次工作表")
+                request_sheet_selection(sheets, [role], file=file)
             return None
         return default
     if required:
-        request_selection(sheets, [role], file=file, message="未找到工作表，请选择它对应的处理项")
+        request_sheet_selection(sheets, [role], file=file)
     return None
+
+
+def choose_content_sheet(sheets, role, default=None, *, file=""):
+    """Keep the original readable default; ask for a sheet only when no unique fallback exists."""
+    selected = choose_sheet(sheets, role, required=False, file=file)
+    if selected is not None:
+        return selected
+    if not active():
+        return default
+    if default is not None and map_sheet(default, role, required=False, file=file) is not None:
+        return default
+    candidates = [ws for ws in sheets if map_sheet(ws, role, required=False, file=file) is not None]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(sheets) == 1:
+        return sheets[0]  # 单页文件直接确认缺失列，避免无意义地再选唯一的页。
+    request_sheet_selection(sheets, [role], file=file)
 
 
 class HeaderView:
@@ -433,6 +610,8 @@ def sections(tool, rules):
 
 def save_choice(tool, rules, issue, payload):
     rules = clean_rules(tool, rules)
+    if issue.get("kind") == "worksheets":
+        return save_sheet_choice(tool, rules, issue, payload)
     role = str(payload.get("role", ""))
     spec = next((r for r in issue["roles"] if r["key"] == role), None)
     sheet = next((s for s in issue["sheets"] if s["name"] == payload.get("sheet")), None)
@@ -464,6 +643,11 @@ def save_choice(tool, rules, issue, payload):
     rules["profiles"].append({"key": key, "role": role, "sheet": sheet["name"], "row": row, "columns": cleaned,
                               "file": issue.get("file", ""), "headers": list(values),
                               "required": list(spec["required"]), "one_of": list(spec.get("one_of", []))})
+    # 列确认窗口允许换页时，同步本次页选择，避免继续处理又被旧的页选择带回。
+    scope = hashlib.sha256(json.dumps([str(issue.get("file", "")), [s["name"] for s in issue["sheets"]]], ensure_ascii=False).encode()).hexdigest()
+    choices = rules.get("sheet_choices", {})
+    if role in choices.get(scope, {}):
+        rules["sheet_choices"] = {**choices, scope: {**choices[scope], role: sheet["name"]}}
     return clean_rules(tool, rules)
 
 

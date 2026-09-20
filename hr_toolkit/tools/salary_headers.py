@@ -54,6 +54,26 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def remember_sheet_names(profiles, groups):
+    """Store explicitly selected page names independently of their current column fingerprint."""
+    updated = dict(profiles)
+    rules = alias_rules(profiles)
+    previous_signature = _digest(rules) if rules["fields"] or rules["sheets"] else ""
+    for group in groups:
+        if not group.get("hinted"):
+            continue
+        role, name = group["role"], group["sheet"]
+        rules["sheets"][role] = list(dict.fromkeys([*rules["sheets"].get(role, []), name]))
+    rules = alias_rules({ALIAS_PROFILE_KEY: rules})
+    signature = _digest(rules) if rules["fields"] or rules["sheets"] else ""
+    if signature != previous_signature:
+        for key, profile in updated.items():
+            if key != ALIAS_PROFILE_KEY and profile.get("alias_signature", "") == previous_signature:
+                updated[key] = {**profile, "alias_signature": signature}
+    updated[ALIAS_PROFILE_KEY] = rules
+    return updated
+
+
 def fields_for(role: str) -> tuple[str, ...]:
     return ("name", "id_card") if role == "summary" else ("name", "id_card", "amount")
 

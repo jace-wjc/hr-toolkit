@@ -1,4 +1,4 @@
-"""六个输入适配入口及只读映射的回归用例；不依赖业务原始数据。"""
+"""输入适配入口及只读映射的回归用例；不依赖业务原始数据。"""
 from __future__ import annotations
 
 import inspect
@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from openpyxl import Workbook
 
@@ -15,6 +16,7 @@ from hr_toolkit.common.excel import SheetGrid
 from hr_toolkit.common.template_mapping import (
     SUPPORTED_TOOLS, TemplateSelectionRequired, active, catalog, choose_sheet,
     clean_rules, ignored_sheet, map_sheet, request_selection, save_choice, template_tool,
+    resolve_sheet_roles, request_sheet_selection, unused_sheet_notices, choose_content_sheet,
 )
 
 
@@ -33,6 +35,112 @@ def invoke(tool, callback, rules=None):
 
 
 class TemplateMappingTest(unittest.TestCase):
+    def test_extra_sheet_is_logged_without_interrupting_resolved_roles(self):
+        ws = sheet(["说明"], name="说明")
+        wb = ws.parent
+        self.addCleanup(wb.close)
+        defaults = {name: wb.create_sheet(name) for name in ("增员", "减员", "转正", "调动")}
+        def read():
+            selected = resolve_sheet_roles(wb.worksheets, defaults, file="异动.xlsx", optional=tuple(defaults))
+            unused_sheet_notices(wb.worksheets, {page.title for page in selected.values()}, "异动.xlsx")
+            unused_sheet_notices(wb.worksheets, {page.title for page in selected.values()}, "异动.xlsx")
+            return SimpleNamespace(warnings=[])
+        result = invoke("personnel_change_merge", read)
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("「说明」", result.warnings[0])
+
+    def test_missing_sheets_are_confirmed_together_and_absence_is_temporary(self):
+        ws = sheet(["任意列"], name="新增人员")
+        wb = ws.parent
+        self.addCleanup(wb.close)
+        defaults = {"增员": None, "减员": None, "转正": wb.create_sheet("转正"), "调动": wb.create_sheet("调动")}
+        with self.assertRaises(TemplateSelectionRequired) as caught:
+            invoke("personnel_change_merge", lambda: resolve_sheet_roles(wb.worksheets, defaults, file="异动.xlsx", optional=tuple(defaults)))
+        issue = caught.exception.payload
+        self.assertEqual(issue["kind"], "worksheets")
+        self.assertEqual([r["key"] for r in issue["sheet_requests"]], ["增员", "减员"])
+        rules = save_choice("personnel_change_merge", {}, issue,
+                            {"sheet_selections": {"增员": "新增人员", "减员": None}, "remember": True})
+        selected = invoke("personnel_change_merge", lambda: resolve_sheet_roles(wb.worksheets, defaults, file="异动.xlsx", optional=tuple(defaults)), rules)
+        self.assertIs(selected["增员"], ws)
+        self.assertIsNone(selected["减员"])
+        persistent = {k: v for k, v in rules.items() if k != "sheet_choices"}
+        self.assertIn("新增人员", persistent["sheets"]["增员"])
+        with self.assertRaises(TemplateSelectionRequired) as later:
+            invoke("personnel_change_merge", lambda: resolve_sheet_roles(wb.worksheets, defaults, file="下月.xlsx", optional=tuple(defaults)), persistent)
+        self.assertEqual([r["key"] for r in later.exception.payload["sheet_requests"]], ["减员"])
+
+    def test_sheet_selection_rejects_required_absence_and_duplicate_consumption(self):
+        ws = sheet(["列"], name="资料")
+        self.addCleanup(ws.parent.close)
+        with self.assertRaises(TemplateSelectionRequired) as caught:
+            invoke("salary_split", lambda: resolve_sheet_roles(ws.parent.worksheets, {"detail": None, "summary": None}))
+        for selection in ({"detail": "资料", "summary": None}, {"detail": "资料", "summary": "资料"}):
+            with self.subTest(selection=selection), self.assertRaises(ValueError):
+                save_choice("salary_split", {}, caught.exception.payload, {"sheet_selections": selection})
+
+    def test_single_role_tools_reuse_page_choice_without_binding_column_names(self):
+        for tool, role in (("archive_import", "transfer"), ("insurance_ledger", "policy"),
+                           ("social_security", "payment"), ("data_statistics", "staff")):
+            with self.subTest(tool=tool):
+                ws = sheet(["旧列"], name="1")
+                self.addCleanup(ws.parent.close)
+                ws.parent.create_sheet("说明")
+                with self.assertRaises(TemplateSelectionRequired) as caught:
+                    invoke(tool, lambda: request_sheet_selection(ws.parent.worksheets, [role], file="来源.xlsx"))
+                rules = save_choice(tool, {}, caught.exception.payload,
+                                    {"sheet_selections": {role: "1"}, "remember": True})
+                rules.pop("sheet_choices")
+                ws.cell(1, 1).value = "另一套列名"
+                self.assertIs(invoke(tool, lambda: choose_sheet(ws.parent.worksheets, role, file="下月.xlsx"), rules), ws)
+                self.assertEqual(rules["profiles"], [])
+
+    def test_content_reader_keeps_usable_original_default(self):
+        ws = sheet(["姓名", "证件号码"], name="原表")
+        self.addCleanup(ws.parent.close)
+        other = ws.parent.create_sheet("另一个有效页")
+        other.append(["姓名", "证件号码"])
+        selected = invoke("social_security", lambda: choose_content_sheet(ws.parent.worksheets, "payment", ws))
+        self.assertIs(selected, ws)
+
+    def test_statistics_extra_instruction_sheet_does_not_change_business_rows(self):
+        from hr_toolkit.tools.data_statistics import _read_statistics_file
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "考勤202608.xlsx"
+            ws = sheet(["姓名", "应出勤天数", "实际出勤天数"], ["测试人员", 20, 19], name="考勤表")
+            self.addCleanup(ws.parent.close)
+            ws.parent.save(path)
+            baseline = invoke("data_statistics", lambda: _read_statistics_file(path, []))
+            extra = ws.parent.create_sheet("说明", 0)
+            extra.append(["姓名", "备注"])
+            extra.append(["示例", "这里只是填写说明"])
+            ws.parent.save(path)
+            original = path.read_bytes()
+            result = invoke("data_statistics", lambda: SimpleNamespace(value=_read_statistics_file(path, []), warnings=[]))
+            self.assertEqual(result.value, baseline)
+            self.assertEqual(len(result.warnings), 1)
+            self.assertIn("「说明」", result.warnings[0])
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_archive_export_preserves_multiple_company_pages_and_logs_extra(self):
+        from hr_toolkit.tools.archive_import import _read_archive_summary_records
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "档案汇总.xlsx"
+            ws = sheet(["姓名", "身份证"], ["甲", "TEST-001"], name="甲公司")
+            self.addCleanup(ws.parent.close)
+            other = ws.parent.create_sheet("乙公司")
+            other.append(["姓名", "身份证"])
+            other.append(["乙", "TEST-002"])
+            ws.parent.save(path)
+            baseline, _ = _read_archive_summary_records([path], [])
+            ws.parent.create_sheet("说明", 0).append(["填写说明"])
+            ws.parent.save(path)
+            result = invoke("archive_export", lambda: SimpleNamespace(value=_read_archive_summary_records([path], []), warnings=[]))
+            self.assertEqual(result.value[0], baseline)
+            self.assertEqual(len(result.value[0]), 2)
+            self.assertEqual(len(result.warnings), 1)
+            self.assertIn("「说明」", result.warnings[0])
+
     def test_summary_with_renamed_name_suggests_summary_without_changing_parser(self):
         from hr_toolkit.tools.data_statistics import _adapt_statistics_grid
         ws = sheet(["222", "应出勤天数", "实际出勤天数", "请假天数"], ["张三", 19, 19, 0], name="考勤表")
@@ -125,9 +233,9 @@ class TemplateMappingTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "同一列"):
             save_choice("social_security", {}, payload, {**base, "columns": {"*姓名.简体中文": 1, "*身份证": 1}})
 
-    def test_all_six_entrypoints_accept_serializable_rules(self):
+    def test_all_entrypoints_accept_serializable_rules(self):
         from hr_toolkit.tools.registry import get_tool_by_id
-        self.assertEqual(len(SUPPORTED_TOOLS), 6)
+        self.assertEqual(set(SUPPORTED_TOOLS), {"salary_split", "personnel_change_merge", "roster_update", "archive_import", "archive_export", "insurance_ledger", "data_statistics", "social_security"})
         for tool in SUPPORTED_TOOLS:
             with self.subTest(tool=tool):
                 function = get_tool_by_id(tool).entry_point
@@ -244,7 +352,13 @@ class TemplateMappingTest(unittest.TestCase):
                 ws.parent.save(path)
                 original = path.read_bytes()
                 baseline = reader(path)
-                self.assertEqual(invoke(tool, lambda: reader(path)), baseline)
+                rules = {}
+                if tool == "personnel_change_merge":
+                    with self.assertRaises(TemplateSelectionRequired) as caught:
+                        invoke(tool, lambda: reader(path))
+                    rules = save_choice(tool, {}, caught.exception.payload,
+                                        {"sheet_selections": {"减员": None, "转正": None, "调动": None}})
+                self.assertEqual(invoke(tool, lambda: reader(path), rules), baseline)
                 self.assertEqual(path.read_bytes(), original)
 
     def test_report_sheet_renaming_does_not_guess_weekly_or_monthly(self):

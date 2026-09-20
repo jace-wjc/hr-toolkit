@@ -60,6 +60,42 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_sheet_choices_persist_names_but_not_this_file_absences(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("personnel_change_merge")
+        controller._template_issue = {
+            "tool": "personnel_change_merge", "kind": "worksheets", "file": "异动.xlsx", "choice_key": "file-key",
+            "roles": [{"key": "增员"}, {"key": "减员"}],
+            "sheet_requests": [{"key": "增员", "label": "增员", "optional": True}, {"key": "减员", "label": "减员", "optional": True}],
+            "sheets": [{"name": "1", "rows": [["姓名"]]}],
+        }
+        controller._template_issue_project = str(controller._project_path)
+        controller._template_input_snapshot = controller._template_current_inputs()
+        controller._save_workspace_preferences = Mock(return_value=True)
+        with patch("hr_toolkit.gui_qt.controller.QTimer.singleShot"):
+            controller.saveTemplateChoice(json.dumps({"sheet_selections": {"增员": "1", "减员": None}, "remember": True}))
+        saved = controller._header_name_rules["personnel_change_merge"]
+        self.assertNotIn("sheet_choices", saved)
+        self.assertIn("1", saved["sheets"]["增员"])
+        self.assertIsNone(controller._template_session_rules["sheet_choices"]["file-key"]["减员"])
+
+    def test_salary_sheet_rule_deletion_invalidates_related_profiles_and_rolls_back(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._header_name_rules["salary_merge"] = {"fields": {}, "sheets": {"detail": ["明细", "1"]}}
+        controller._salary_header_profiles = {"project": {"detail-key": {"role": "detail", "sheet": "1"},
+                                                         "summary-key": {"role": "summary", "sheet": "汇总"}}}
+        before = json.loads(json.dumps(controller._salary_header_profiles))
+        controller._save_workspace_preferences = Mock(return_value=False)
+        with self.assertRaises(ValueError):
+            controller._persist_salary_name_rules({"fields": {}, "sheets": {}})
+        self.assertEqual(controller._salary_header_profiles, before)
+        self.assertIn("1", controller._header_name_rules["salary_merge"]["sheets"]["detail"])
+        controller._save_workspace_preferences.return_value = True
+        controller._persist_salary_name_rules({"fields": {}, "sheets": {}})
+        self.assertEqual(set(controller._salary_header_profiles["project"]), {"summary-key"})
+
     def test_template_choice_defaults_to_current_run_and_manual_start_clears_it(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

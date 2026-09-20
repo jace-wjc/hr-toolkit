@@ -6,6 +6,8 @@ Item {
     id: dialog
     property var sections: []
     property int sectionIndex: 0
+    property string kindFilter: "fields"
+    property var filteredSections: sections.filter(function(s) { return s.kind === dialog.kindFilter })
     property int revision: 0
     property string editingName: ""
     property string editError: ""
@@ -41,10 +43,15 @@ Item {
                 if (names.indexOf(selected[j]) < 0) names.push(selected[j])
             sections[i].options = uniqueNames(names)
         }
-        sectionIndex = 0
+        setKind("fields")
         search.text = ""
         cancelEdit()
         revision++
+    }
+    function setKind(kind) {
+        kindFilter = kind
+        for (var i = 0; i < sections.length; i++) if (sections[i].kind === kind) { sectionIndex = i; break }
+        search.text = ""; cancelEdit()
     }
     function choices() {
         var tick = revision
@@ -109,11 +116,15 @@ Item {
             text: "系统内置名称始终保留，不能取消、修改或删除。你添加的名称可以修改、删除，点击底部保存后生效；取消则不保存本次修改。同一工具的不同项目共用，不改原文件。"
             wrapMode: Text.Wrap; color: "#55534D"; font.pixelSize: 12
         }
+        RowLayout {
+            AppButton { text: "列名设置"; variant: dialog.kindFilter === "fields" ? "primary" : "secondary"; onClicked: dialog.setKind("fields") }
+            AppButton { text: "工作表设置"; variant: dialog.kindFilter === "sheets" ? "primary" : "secondary"; onClicked: dialog.setKind("sheets") }
+        }
         AppComboBox {
             Layout.fillWidth: true
-            model: dialog.sections.map(function(s) { return s.label })
-            currentIndex: dialog.sectionIndex
-            onActivated: function(index) { dialog.sectionIndex = index; search.text = ""; dialog.cancelEdit() }
+            model: dialog.filteredSections.map(function(s) { return s.label })
+            currentIndex: dialog.filteredSections.indexOf(dialog.currentSection)
+            onActivated: function(index) { dialog.sectionIndex = dialog.sections.indexOf(dialog.filteredSections[index]); search.text = ""; dialog.cancelEdit() }
         }
         Text {
             Layout.fillWidth: true
@@ -128,7 +139,7 @@ Item {
         }
         RowLayout {
             Layout.fillWidth: true
-            AppTextField { id: newName; Layout.fillWidth: true; placeholderText: dialog.editingName ? "输入修改后的名称" : "添加自定义名称，例如名字、name"; onAccepted: dialog.addName() }
+            AppTextField { id: newName; Layout.fillWidth: true; placeholderText: dialog.editingName ? "输入修改后的名称" : (dialog.kindFilter === "sheets" ? "添加页名，例如1、2、增员表" : "添加自定义名称，例如名字、name"); onAccepted: dialog.addName() }
             AppButton { text: dialog.editingName ? "确认修改" : "添加"; onClicked: dialog.addName() }
             AppButton { text: "取消修改"; visible: !!dialog.editingName; onClicked: dialog.cancelEdit() }
         }

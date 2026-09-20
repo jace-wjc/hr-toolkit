@@ -1258,7 +1258,7 @@ ApplicationWindow {
                             }
                             AppButton { text: "打开结果目录"; enabled: controller.canOpenLastResult; implicitWidth: 138; implicitHeight: 40; onClicked: controller.openLastResult() }
                             AppButton { text: "打开报表"; visible: controller.canOpenPrimaryResult; enabled: !controller.busy; onClicked: controller.openPrimaryResult() }
-                            AppButton { objectName: "templateNameSettings"; text: "列名设置" + (controller.templateSavedProfileCount ? "（已记住 " + controller.templateSavedProfileCount + " 项）" : ""); visible: controller.supportsTemplateRules; enabled: !controller.busy && !controller.workspaceBusy; onClicked: controller.reviewTemplateRules() }
+                            AppButton { objectName: "templateNameSettings"; text: "模板设置" + (controller.templateSavedProfileCount ? "（已记住 " + controller.templateSavedProfileCount + " 项）" : ""); visible: controller.supportsTemplateRules; enabled: !controller.busy && !controller.workspaceBusy; onClicked: controller.reviewTemplateRules() }
                             Text { visible: !!controller.lastRunText; text: controller.lastRunText; color: root.textMuted; font.pixelSize: 12 }
                             Item { Layout.fillWidth: true }
                         }

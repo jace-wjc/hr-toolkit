@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import Workbook, load_workbook
-from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection
+from hr_toolkit.common.template_mapping import (
+    template_tool, choose_sheet, map_sheet, active, request_sheet_selection,
+    unused_sheet_notices, current_sheet_choices, assigned_role,
+)
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -309,6 +312,7 @@ def import_archive_transfers(
         return result
 
 
+@template_tool("archive_export")
 def export_company_archive_tables(
     summary_path: str | Path | list[str | Path],
     output_dir: str | Path,
@@ -522,7 +526,8 @@ def _read_transfer_file(file_path: Path) -> tuple[list[ArchiveTransferRecord], l
     workbook = load_workbook(file_path, data_only=False)
     warnings: list[str] = []
     try:
-        ws = _find_transfer_sheet(workbook)
+        ws = _find_transfer_sheet(workbook, file=file_path.name)
+        unused_sheet_notices(workbook.worksheets, {ws.title}, file_path.name)
         ws = map_sheet(ws, "transfer", file=file_path.name)
         header_row = getattr(ws, "header_row", None) or _find_header_row(ws, (HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD))
         headers = _read_headers(ws, header_row)
@@ -564,8 +569,8 @@ def _read_transfer_file(file_path: Path) -> tuple[list[ArchiveTransferRecord], l
         workbook.close()
 
 
-def _find_transfer_sheet(workbook) -> Worksheet:
-    selected = choose_sheet(workbook.worksheets, "transfer", required=False)
+def _find_transfer_sheet(workbook, *, file="") -> Worksheet:
+    selected = choose_sheet(workbook.worksheets, "transfer", required=False, file=file)
     if selected is not None:
         return selected
     for ws in workbook.worksheets:
@@ -580,7 +585,7 @@ def _find_transfer_sheet(workbook) -> Worksheet:
         except ValueError:
             continue
     if active():
-        request_selection(workbook.worksheets, ["transfer"], message="请选择档案移交工作表及公司、姓名、身份证对应列")
+        request_sheet_selection(workbook.worksheets, ["transfer"], file=file)
     raise ValueError("未找到包含“公司、姓名、身份证”的档案移交表。")
 
 
@@ -1391,14 +1396,23 @@ def _read_archive_summary_records(
         workbook = load_workbook(summary_file, data_only=False)
         pending_format_sheets: list[Worksheet] = []
         try:
+            choices = current_sheet_choices(workbook.worksheets, summary_file.name)
+            used_sheets = set()
             for ws in workbook.worksheets:
-                if _is_placeholder_sheet_title(ws.title):
+                selected = choices.get("archive") == ws.title or assigned_role(ws, ["archive"]) == "archive"
+                if _is_placeholder_sheet_title(ws.title) and not selected:
                     continue
+                if active():
+                    mapped = map_sheet(ws, "archive", required=selected, file=summary_file.name)
+                    if mapped is None:
+                        continue
+                    ws = mapped
                 try:
                     layout = _detect_archive_layout(ws)
                 except ValueError:
                     warnings.append(f"{summary_file.name} 的 {ws.title} 未识别到档案表表头，已跳过。")
                     continue
+                used_sheets.add(ws.title)
                 sheet_record_start = len(records)
                 for row_index in range(layout.data_start_row, layout.footer_start_row):
                     if row_index == layout.data_start_row or row_index % ARCHIVE_PROGRESS_INTERVAL == 0:
@@ -1440,7 +1454,10 @@ def _read_archive_summary_records(
                     and len(records) > sheet_record_start
                     and ws.title not in format_templates
                 ):
-                    pending_format_sheets.append(ws)
+                    pending_format_sheets.append(getattr(ws, "source", ws))
+            if active() and not used_sheets:
+                request_sheet_selection(workbook.worksheets, ["archive"], file=summary_file.name)
+            unused_sheet_notices(workbook.worksheets, used_sheets, summary_file.name)
             if pending_format_sheets and format_template_dir is not None:
                 _register_archive_format_templates(
                     summary_file,

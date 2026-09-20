@@ -3518,7 +3518,12 @@ class AppController(QObject):
         if self._template_settings_tool == "salary_merge":
             return self.salaryAliasSections
         from hr_toolkit.common.template_mapping import sections
-        return sections(self._template_settings_tool, self._header_name_rules.get(self._template_settings_tool, {}))
+        result = sections(self._template_settings_tool, self._header_name_rules.get(self._template_settings_tool, {}))
+        names = [page["name"] for page in self._template_issue.get("sheets", [])] if self._template_issue.get("tool") == self._template_settings_tool else []
+        for item in result:
+            if item["kind"] == "sheets":
+                item["options"] = list(dict.fromkeys([*item["options"], *names]))
+        return result
 
     @Property("QVariantMap", notify=templateSelectionRequested)
     def templateSelectionData(self):
@@ -3584,6 +3589,23 @@ class AppController(QObject):
         self._template_settings_tool = self._spec.tool_id
         self.templateRulesRequested.emit()
 
+    def _persist_salary_name_rules(self, rules):
+        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, alias_rules
+        previous = dict(self._header_name_rules)
+        previous_profiles = self._salary_header_profiles
+        old = alias_rules({ALIAS_PROFILE_KEY: previous.get("salary_merge", {})})
+        changed = {role for role in ("detail", "summary") if old["sheets"].get(role) != rules["sheets"].get(role)}
+        self._salary_header_profiles = {
+            project: {key: profile for key, profile in profiles.items() if profile.get("role") not in changed}
+            for project, profiles in previous_profiles.items()
+        }
+        self._header_name_rules["salary_merge"] = rules
+        if not self._save_workspace_preferences():
+            self._header_name_rules = previous
+            self._salary_header_profiles = previous_profiles
+            raise ValueError("名称规则未能保存，请重试")
+        return changed
+
     @Slot(str, result=bool)
     def saveTemplateRules(self, payload):
         if self._busy or self._template_settings_tool != self._spec.tool_id:
@@ -3594,11 +3616,7 @@ class AppController(QObject):
             from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, alias_rules
             try:
                 rules = alias_rules({ALIAS_PROFILE_KEY: json.loads(payload)})
-                previous = dict(self._header_name_rules)
-                self._header_name_rules["salary_merge"] = rules
-                if not self._save_workspace_preferences():
-                    self._header_name_rules = previous
-                    raise ValueError("保存失败，请重试")
+                self._persist_salary_name_rules(rules)
                 self.notificationRequested.emit("名称已保存", "下次处理工资表时会使用这些名称。", "success")
                 return True
             except (ValueError, TypeError, KeyError) as exc:
@@ -3616,8 +3634,13 @@ class AppController(QObject):
             rules = clean_rules(self._template_settings_tool, values)
             previous = dict(self._header_name_rules)
             old = clean_rules(self._template_settings_tool, previous.get(self._template_settings_tool, {}))
-            if rules["fields"] == old["fields"] and rules["sheets"] == old["sheets"]:
-                rules["profiles"] = old["profiles"]
+            changed_roles = {role for role in specs if rules["sheets"].get(role) != old["sheets"].get(role)}
+            changed_roles.update(key.split("|", 1)[0] for key in set(rules["fields"]) | set(old["fields"])
+                                 if rules["fields"].get(key) != old["fields"].get(key))
+            # 仅失效相关用途的旧记忆，避免改一个页名清空其他模板的列设置。
+            changed_names = {name for role in changed_roles for name in [*old["sheets"].get(role, []), *rules["sheets"].get(role, [])]}
+            rules["profiles"] = [p for p in old["profiles"] if p["role"] not in changed_roles
+                                  and not (p["role"] == "_ignore" and p.get("sheet") in changed_names)]
             self._header_name_rules[self._template_settings_tool] = rules
             if not self._save_workspace_preferences():
                 self._header_name_rules = previous
@@ -3653,6 +3676,7 @@ class AppController(QObject):
                         raise ValueError("这条选择已删除，请返回重新选择")
                     persistent["profiles"] = [p for p in persistent["profiles"] if p["key"] != editing]
                 saved = save_choice(tool, persistent, self._template_issue, selection)
+                saved.pop("sheet_choices", None)
                 previous = dict(self._header_name_rules)
                 self._header_name_rules[tool] = saved
                 if not self._save_workspace_preferences():
@@ -3666,7 +3690,7 @@ class AppController(QObject):
                 return
             self._template_session_rules = rules
             self._template_session_snapshot = self._template_input_snapshot
-            self._append_log("已确认列名，继续处理。" + ("已记住，可在“已记住的选择”中修改或删除。" if selection.get("remember") is True else "本次选择不会保存到下次。"), "info")
+            self._append_log("已确认模板对应关系，继续处理。" + ("已记住，可在“模板设置”中修改或删除。" if selection.get("remember") is True else "本次选择不会保存到下次。"), "info")
             # 回到正常入口，重新检查项目状态和输入；不复用失败任务的运行目录。
             QTimer.singleShot(0, self._continue_template_run)
         except (ValueError, TypeError, KeyError) as exc:
@@ -3720,11 +3744,9 @@ class AppController(QObject):
 
         try:
             rules = alias_rules({ALIAS_PROFILE_KEY: json.loads(payload)})
-            previous = dict(self._header_name_rules)
-            self._header_name_rules["salary_merge"] = rules
-            if not self._save_workspace_preferences():
-                self._header_name_rules = previous
-                raise ValueError("名称规则未能保存，请重试")
+            changed = self._persist_salary_name_rules(rules)
+            self._salary_draft_profiles = {key: profile for key, profile in self._salary_draft_profiles.items()
+                                           if key == ALIAS_PROFILE_KEY or profile.get("role") not in changed}
             self._salary_draft_profiles[ALIAS_PROFILE_KEY] = rules
             self._salary_selection_drafts = {}
             self._salary_hints = {}
@@ -3871,7 +3893,7 @@ class AppController(QObject):
             self.notificationRequested.emit("工作项目已变化", "请在当前项目重新选择工资表。", "warning")
             self.cancelSalaryMappings()
             return
-        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, MAX_PROFILES, profile_from_selection
+        from hr_toolkit.tools.salary_headers import ALIAS_PROFILE_KEY, MAX_PROFILES, profile_from_selection, remember_sheet_names
 
         try:
             payload = json.loads(choices_json)
@@ -3904,17 +3926,24 @@ class AppController(QObject):
                 skipped.add(issue["key"])
             if start_merge and included == 0:
                 raise ValueError("至少保留一份工资明细表参与合并")
+            if remember:
+                selected_groups = [g for g in self._salary_inspection.get("groups", [])
+                                   if not choices.get(g["group_id"], {}).get("skip")]
+                profiles = remember_sheet_names(profiles, selected_groups)
             saved_profiles = {key: value for key, value in profiles.items() if key != ALIAS_PROFILE_KEY}
             if len(saved_profiles) > MAX_PROFILES:
                 raise ValueError("当前项目已达到 200 套对应设置，请先恢复不再使用模板的自动识别")
             if remember:
                 previous = self._salary_header_profiles.get(self._salary_project_key)
+                previous_rules = dict(self._header_name_rules)
+                self._header_name_rules["salary_merge"] = profiles[ALIAS_PROFILE_KEY]
                 self._salary_header_profiles[self._salary_project_key] = saved_profiles
                 if not self._save_workspace_preferences():
                     if previous is None:
                         self._salary_header_profiles.pop(self._salary_project_key, None)
                     else:
                         self._salary_header_profiles[self._salary_project_key] = previous
+                    self._header_name_rules = previous_rules
                     raise ValueError("设置未能保存；可取消勾选记住设置，仅用于本次合并")
             if start_merge:
                 self._launch_salary_with_profiles(profiles, sorted(skipped))
@@ -4232,8 +4261,9 @@ class AppController(QObject):
         if warnings:
             completion_message += f"\n另有 {len(warnings)} 条处理提醒/运行信息，可在结果提醒区查看全部。"
             self._append_log(f"共有 {len(warnings)} 条提醒。", "warning")
-            for warning in warnings[:30]:
-                self._append_log(str(warning), "warning")
+            for index, warning in enumerate(warnings):
+                if index < 30 or str(warning).startswith(("未处理工作表：", "用户已确认：")):
+                    self._append_log(str(warning), "warning")
         self._flush_logs()
         self.notificationRequested.emit("处理完成", completion_message, "success")
         self.refreshWorkspace()

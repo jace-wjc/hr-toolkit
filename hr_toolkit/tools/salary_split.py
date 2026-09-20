@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import load_workbook
-from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet
+from hr_toolkit.common.template_mapping import (
+    template_tool, choose_sheet, map_sheet, resolve_sheet_roles, unused_sheet_notices,
+)
 from openpyxl.cell.cell import MergedCell
 from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils import get_column_letter
@@ -173,6 +175,7 @@ class SalarySplitResult:
     output_dir: Path
     dry_run: bool
     outputs: list[CompanyOutput] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -181,6 +184,7 @@ class SalarySplitResult:
             "output_dir": str(self.output_dir),
             "dry_run": self.dry_run,
             "company_count": len(self.outputs),
+            "warnings": self.warnings,
             "employee_count": sum(item.employee_count for item in self.outputs),
             "outputs": [item.to_dict() for item in self.outputs],
         }
@@ -223,7 +227,7 @@ def split_salary_by_company(
         working_input_path = ensure_xlsx_workbook(input_path, Path(temp_root))
         workbook = load_workbook(working_input_path, data_only=False)
         try:
-            layout = _detect_layout(workbook)
+            layout = _detect_layout(workbook, file=input_path.name)
             detail_ws = workbook[layout.detail_sheet_name]
             hierarchy = _detect_detail_hierarchy(detail_ws, layout)
             employees = _collect_employees(
@@ -300,16 +304,17 @@ def _find_detail_max_col(ws: Worksheet, header_row: int) -> int:
     return max_col
 
 
-def _detect_layout(workbook) -> SalarySheetLayout:
+def _detect_layout(workbook, *, file="") -> SalarySheetLayout:
     detail = next((ws for ws in workbook.worksheets if DETAIL_SHEET_KEYWORD in ws.title), None)
     summary = next((ws for ws in workbook.worksheets if SUMMARY_SHEET_KEYWORD in ws.title), None)
-    detail = choose_sheet(workbook.worksheets, "detail", detail)
-    summary = choose_sheet(workbook.worksheets, "summary", summary)
+    selected = resolve_sheet_roles(workbook.worksheets, {"detail": detail, "summary": summary}, file=file)
+    detail, summary = selected["detail"], selected["summary"]
     detail_sheet_name = detail.title if detail is not None else _find_sheet_name(workbook.sheetnames, DETAIL_SHEET_KEYWORD)
     summary_sheet_name = summary.title if summary is not None else _find_sheet_name(workbook.sheetnames, SUMMARY_SHEET_KEYWORD)
     if detail_sheet_name == summary_sheet_name:
         raise ValueError("工资明细和工资汇总不能选择同一工作表")
-    detail_ws = map_sheet(workbook[detail_sheet_name], "detail")
+    unused_sheet_notices(workbook.worksheets, {detail_sheet_name, summary_sheet_name}, file)
+    detail_ws = map_sheet(workbook[detail_sheet_name], "detail", file=file)
 
     header_row = getattr(detail_ws, "header_row", None) or _find_header_row(detail_ws, HEADER_COMPANY_SYNONYMS)
     headers = _read_headers(detail_ws, header_row)

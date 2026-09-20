@@ -10,7 +10,7 @@ from openpyxl import Workbook, load_workbook
 
 from hr_toolkit.common.header_aliases import matching_columns
 from hr_toolkit.tools.salary_headers import (
-    ALIAS_PROFILE_KEY, alias_rules, inspect_workbook, profile_from_selection,
+    ALIAS_PROFILE_KEY, alias_rules, inspect_workbook, profile_from_selection, remember_sheet_names,
 )
 from hr_toolkit.tools.salary_merge import _detect_source_layout, inspect_salary_templates, merge_monthly_salary
 
@@ -30,6 +30,21 @@ def workbook(name="姓名", sheet="工资明细", amount="应发小计"):
 
 
 class HeaderAliasTest(unittest.TestCase):
+    def test_remembered_sheet_name_survives_column_layout_changes(self):
+        wb = workbook(sheet="1")
+        self.addCleanup(wb.close)
+        wb.create_sheet("说明", 0).append(["这是说明页"])
+        group = inspect_workbook(wb, hint={"sheet": "1"})
+        profile = profile_from_selection(group, group["selections"])
+        saved = remember_sheet_names({group["key"]: profile}, [group])
+        self.assertIn("1", saved[ALIAS_PROFILE_KEY]["sheets"]["detail"])
+        self.assertTrue(inspect_workbook(wb, profiles=saved)["saved"])
+        wb["1"].insert_cols(1)
+        changed = inspect_workbook(wb, profiles=saved)
+        self.assertEqual(changed["sheet"], "1")
+        self.assertTrue(changed["ready"])
+        self.assertEqual(changed["selections"]["name"], 3)
+
     def test_shared_dialog_preview_keeps_salary_field_locations(self):
         wb = workbook()
         group = inspect_workbook(wb)

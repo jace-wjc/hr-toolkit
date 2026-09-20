@@ -29,6 +29,7 @@ from hr_toolkit.common.inputs import (
     is_supported_archive_file,
     normalize_input_paths,
 )
+from hr_toolkit.common.template_mapping import unused_sheet_notices
 from .salary_headers import inspect_workbook, normalize_header
 
 
@@ -410,6 +411,7 @@ def _read_salary_file(
         value_wb = load_workbook(file_path, data_only=True, read_only=True)
         try:
             layout = _detect_source_layout(formula_wb, header_profiles=header_profiles, layout_hint=layout_hint)
+            warnings.extend(unused_sheet_notices(formula_wb.worksheets, {layout.detail_sheet_name}, file_path.name))
             formula_ws = formula_wb[layout.detail_sheet_name]
             value_ws = SheetGrid(value_wb[layout.detail_sheet_name])
         finally:
@@ -770,6 +772,7 @@ def _read_existing_summary(
             ws = workbook[group["sheet"]]
             header_row = group["header_bottom"]
             name_col, id_card_col = group["selections"]["name"], group["selections"]["id_card"]
+        warnings.extend(unused_sheet_notices(workbook.worksheets, {ws.title}, summary_path.name))
         month_columns = _read_month_columns(ws, header_row)
         if not month_columns:
             raise ValueError("已有汇总表未找到月份列，请确认表头包含 202601 这类月份")

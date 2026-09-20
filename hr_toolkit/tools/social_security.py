@@ -24,7 +24,10 @@ from typing import Any, Callable
 
 from hr_toolkit import runlog
 from openpyxl import load_workbook
-from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection
+from hr_toolkit.common.template_mapping import (
+    template_tool, choose_sheet, map_sheet, active, request_selection,
+    request_sheet_selection, choose_content_sheet, unused_sheet_notices,
+)
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.cell_range import CellRange
@@ -506,7 +509,8 @@ def _read_roster(roster_path: Path, temp_dir: Path) -> dict[str, RosterPerson]:
     workbook = load_workbook(working_path, data_only=True, read_only=True)
     try:
         # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
-        selected = choose_sheet(workbook.worksheets, "roster", workbook[workbook.sheetnames[0]], file=roster_path.name)
+        selected = choose_content_sheet(workbook.worksheets, "roster", workbook[workbook.sheetnames[0]], file=roster_path.name)
+        unused_sheet_notices(workbook.worksheets, {selected.title}, roster_path.name)
         ws = map_sheet(SheetGrid(selected), "roster", file=roster_path.name, source_sheets=workbook.worksheets)
         header_row = getattr(ws, "header_row", None) or _find_header_row(ws, (ROSTER_NAME, ROSTER_ID))
         headers = _read_headers(ws, header_row)
@@ -589,9 +593,10 @@ def _read_xls_roster(roster_path: Path) -> dict[str, RosterPerson]:
                 management_fee=_to_number(values.get(ROSTER_MANAGEMENT_FEE)),
             )
         if people:
+            unused_sheet_notices(book.sheets(), {sheet.name}, roster_path.name)
             return people
     if active():
-        request_selection(book.sheets(), ["roster"], file=roster_path.name, message="请选择参保人员花名册及对应列")
+        request_sheet_selection(book.sheets(), ["roster"], file=roster_path.name)
     raise ValueError("参保人员花名册中未识别到人员数据。")
 
 
@@ -611,7 +616,8 @@ def _read_payment_file(file_path: Path) -> list[SocialPaymentLine]:
     workbook = load_workbook(file_path, data_only=True, read_only=True)
     try:
         # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
-        selected = choose_sheet(workbook.worksheets, "payment", workbook[workbook.sheetnames[0]], file=file_path.name)
+        selected = choose_content_sheet(workbook.worksheets, "payment", workbook[workbook.sheetnames[0]], file=file_path.name)
+        unused_sheet_notices(workbook.worksheets, {selected.title}, file_path.name)
         ws = map_sheet(SheetGrid(selected), "payment", file=file_path.name, source_sheets=workbook.worksheets)
         header_row = getattr(ws, "header_row", None) or _find_payment_header_row(ws)
         context = _with_sheet_fee_period(context, [
@@ -651,6 +657,7 @@ def _read_xls_payment_file(file_path: Path, context: SourceContext) -> list[Soci
         header_row = sheet.header_row - 1 if hasattr(sheet, "header_row") else _find_xls_header_row(sheet)
         if header_row is None:
             continue
+        unused_sheet_notices(book.sheets(), {sheet.name}, file_path.name)
         context = _with_sheet_fee_period(context, [sheet.row_values(row) for row in range(header_row)])
         headers = _read_payment_headers(
             sheet.row_values(header_row),
@@ -666,7 +673,7 @@ def _read_xls_payment_file(file_path: Path, context: SourceContext) -> list[Soci
             return _read_xls_wide_sheet(sheet, headers, header_row, context)
         return _read_xls_single_kind_sheet(sheet, headers, header_row, context)
     if active():
-        request_selection(book.sheets(), ["payment"], file=file_path.name, message="请选择社保缴费工作表及对应列")
+        request_sheet_selection(book.sheets(), ["payment"], file=file_path.name)
     raise ValueError("未找到包含姓名和身份证的表头。")
 
 

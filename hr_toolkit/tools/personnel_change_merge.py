@@ -17,7 +17,10 @@ from typing import Any, Callable
 
 from hr_toolkit import runlog
 from openpyxl import Workbook, load_workbook
-from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection, ignored_sheet, preview, assigned_role
+from hr_toolkit.common.template_mapping import (
+    template_tool, choose_sheet, map_sheet, active, resolve_sheet_roles,
+    unused_sheet_notices,
+)
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
@@ -331,6 +334,7 @@ def merge_personnel_changes(
         return result
 
 
+@template_tool("roster_update")
 def update_roster_from_change_summaries(
     summary_input: str | Path | list[str | Path],
     analysis_template_path: str | Path,
@@ -478,7 +482,7 @@ def _find_summary_files(input_paths: list[Path], warnings: list[str], temp_dir: 
             if resolved in seen:
                 continue
             seen.add(resolved)
-            if _looks_like_summary_file(working_candidate):
+            if active("roster_update") or _looks_like_summary_file(working_candidate):
                 files.append(working_candidate)
     return sorted(files)
 
@@ -520,11 +524,11 @@ def _read_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow]], list
         file_period = _detect_period([file_path])
         recognized = False
         used_sheets = set()
+        selected = resolve_sheet_roles(workbook.worksheets,
+            {name: _find_source_sheet(workbook, name) for name in TARGET_SHEETS},
+            file=file_path.name, optional=TARGET_SHEETS)
         for sheet_name in TARGET_SHEETS:
-            ws = _find_source_sheet(workbook, sheet_name)
-            ws = choose_sheet(workbook.worksheets, sheet_name, ws, required=False, file=file_path.name, allow_absent=True)
-            if ws is not None and assigned_role(ws, TARGET_SHEETS) not in (None, sheet_name):
-                ws = None
+            ws = selected[sheet_name]
             if ws is None:
                 if _looks_like_change_workbook(workbook):
                     warnings.append(f"{file_path.name} 缺少工作表：{sheet_name}")
@@ -536,15 +540,7 @@ def _read_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow]], list
             rows_by_sheet[sheet_name].extend(
                 _read_data_rows(ws, layout, file_path.name, target_sheet=sheet_name, file_period=file_period, warnings=warnings)
             )
-        if active():
-            for candidate in workbook.worksheets:
-                if candidate.title in used_sheets or ignored_sheet(candidate, file_path.name):
-                    continue
-                if any(any(value for value in row) for row in preview(candidate)):
-                    request_selection([candidate], TARGET_SHEETS, file=file_path.name,
-                                      message="该工作表未对应异动类型，请选择用途；说明页等非业务表可选择不参与处理", allow_ignore=True)
-        if active() and not recognized:
-            request_selection(workbook.worksheets, TARGET_SHEETS, file=file_path.name, message="未识别到异动工作表，请选择它对应增员、减员、转正还是调动")
+        unused_sheet_notices(workbook.worksheets, used_sheets, file_path.name)
     finally:
         workbook.close()
     return rows_by_sheet, warnings
@@ -556,11 +552,17 @@ def _read_summary_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow
     workbook = load_workbook(file_path, data_only=True)
     try:
         file_period = _detect_summary_period(file_path)
+        selected = resolve_sheet_roles(workbook.worksheets,
+            {name: workbook[name] if name in workbook.sheetnames else None for name in TARGET_SHEETS},
+            file=file_path.name, optional=TARGET_SHEETS)
+        used_sheets = set()
         for sheet_name in TARGET_SHEETS:
-            if sheet_name not in workbook.sheetnames:
+            if selected[sheet_name] is None:
                 warnings.append(f"{file_path.name} 缺少工作表：{sheet_name}")
                 continue
-            ws = workbook[sheet_name]
+            ws = selected[sheet_name]
+            used_sheets.add(ws.title)
+            ws = map_sheet(ws, sheet_name, file=file_path.name)
             layout = _detect_sheet_layout(ws)
             for row_index in range(layout.data_start_row, layout.footer_start_row):
                 if not _is_existing_summary_data_row(ws, layout, row_index):
@@ -576,6 +578,7 @@ def _read_summary_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow
                         source_row=row_index,
                     )
                 )
+        unused_sheet_notices(workbook.worksheets, used_sheets, file_path.name)
     finally:
         workbook.close()
     return rows_by_sheet, warnings
@@ -1212,9 +1215,12 @@ def _write_updated_roster(
     added_count = 0
     marked_count = 0
     try:
-        if "花名册" not in workbook.sheetnames:
+        default = workbook["花名册"] if "花名册" in workbook.sheetnames else None
+        # 此处只选写入页，仍使用原有花名册布局与写入规则。
+        ws = choose_sheet(workbook.worksheets, "roster", default, file=analysis_template.name) if active() else default
+        if ws is None:
             raise ValueError("人力资源分析表缺少“花名册”工作表。")
-        ws = workbook["花名册"]
+        unused_sheet_notices(workbook.worksheets, {ws.title}, analysis_template.name)
         layout = _detect_roster_layout(ws)
         placement_index = _RosterPlacementIndex(ws, layout)
         existing_ids = set(_roster_existing_records(ws, layout))

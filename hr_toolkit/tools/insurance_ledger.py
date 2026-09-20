@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import load_workbook
-from hr_toolkit.common.template_mapping import template_tool, choose_sheet, map_sheet, active, request_selection
+from hr_toolkit.common.template_mapping import (
+    template_tool, choose_sheet, map_sheet, active, request_selection,
+    request_sheet_selection, unused_sheet_notices,
+)
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -298,6 +301,7 @@ def _read_roster(
         if selected is not None:
             worksheets = [selected]
         found_sheet = False
+        used_sheets = set()
         for ws in worksheets:
             if active():
                 ws = map_sheet(ws, "roster", required=selected is not None or len(worksheets) == 1, file=source_name)
@@ -307,6 +311,7 @@ def _read_roster(
             if header_row is None:
                 continue
             found_sheet = True
+            used_sheets.add(ws.title)
             footer_start = _find_roster_footer_start(ws, header_row + 1)
             headers = _read_headers_first(ws, header_row)
             for row_index in range(header_row + 1, footer_start):
@@ -358,7 +363,8 @@ def _read_roster(
                     continue
                 people[id_card] = person
         if active() and not found_sheet:
-            request_selection(workbook.worksheets, ["roster"], file=source_name, message="请选择花名册工作表及姓名、身份证对应列")
+            request_sheet_selection(workbook.worksheets, ["roster"], file=source_name)
+        unused_sheet_notices(workbook.worksheets, used_sheets, source_name)
     finally:
         workbook.close()
     if not people:
@@ -423,6 +429,7 @@ def _read_policy_file(
         selected = choose_sheet(workbook.worksheets, "policy", required=False, file=file_path.name)
         candidates = [selected] if selected is not None else workbook.worksheets
         found_sheet = False
+        used_sheets = set()
         for worksheet in candidates:
             # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
             ws = SheetGrid(worksheet)
@@ -434,6 +441,7 @@ def _read_policy_file(
             if header_row is None:
                 continue
             found_sheet = True
+            used_sheets.add(ws.title)
             policy_no = _find_policy_no(ws, file_path)
             headers = _read_headers_first(ws, header_row)
             name_col = _first_header_col(headers, ("雇员姓名", "姓名", "被保险人姓名"))
@@ -470,7 +478,8 @@ def _read_policy_file(
                     )
                 )
         if active() and not found_sheet:
-            request_selection(workbook.worksheets, ["policy"], file=file_path.name, message="请选择保单人员工作表及对应列")
+            request_sheet_selection(workbook.worksheets, ["policy"], file=file_path.name)
+        unused_sheet_notices(workbook.worksheets, used_sheets, file_path.name)
     finally:
         workbook.close()
     return entries
