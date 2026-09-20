@@ -23,6 +23,7 @@ from hr_toolkit.app_update import (
     UpdateCancelledError,
     UpdateInfo,
     check_for_update,
+    latest_installer_download,
     cleanup_stale_update_files,
     cleanup_cached_updates,
     download_cached_update,
@@ -131,6 +132,7 @@ class AppController(QObject):
     trashChanged = Signal()
     materialChanged = Signal()
     updateChanged = Signal()
+    downloadLinkChanged = Signal()
     updateProgressChanged = Signal()
     updatePromptRequested = Signal("QVariantMap", arguments=["prompt"])
     releaseNotesRequested = Signal("QVariantMap", arguments=["details"])
@@ -167,6 +169,7 @@ class AppController(QObject):
     _trashReady = Signal(int, object, str)
     _trashActionFinished = Signal(bool, str)
     _updateResult = Signal(str, object)
+    _downloadLinkResult = Signal(str, object, str)
     _updateProgressIncoming = Signal(int, int)
     _inputItemsReady = Signal(int, object)
     _selectionReady = Signal(object, object, str)
@@ -308,6 +311,7 @@ class AppController(QObject):
         self._trash_selected_id = ""
         self._trash_selected_row = -1
         self._update_busy = False
+        self._download_link_busy = False
         self._update_status = ""
         self._update_progress = -1.0
         self._update_phase = ""
@@ -353,6 +357,7 @@ class AppController(QObject):
         self._trashReady.connect(self._apply_trash_list)
         self._trashActionFinished.connect(self._apply_trash_action)
         self._updateResult.connect(self._apply_update_result)
+        self._downloadLinkResult.connect(self._apply_download_link)
         self._updateProgressIncoming.connect(self._apply_update_progress)
         self._updatePhaseIncoming.connect(self._apply_update_phase)
         # Phase changes also refresh the footer; byte progress must not fan
@@ -633,6 +638,10 @@ class AppController(QObject):
     @Property(bool, notify=updateChanged)
     def updateBusy(self) -> bool:
         return self._update_busy
+
+    @Property(bool, notify=downloadLinkChanged)
+    def downloadLinkBusy(self) -> bool:
+        return self._download_link_busy
 
     @Property(bool, notify=updateChanged)
     def updateReady(self) -> bool:
@@ -3103,6 +3112,52 @@ class AppController(QObject):
             self._apply_update_result("available", self._ready_update)
             return
         self._start_update_check(True)
+
+    @Slot(str)
+    def copyLatestDownloadUrl(self, platform: str) -> None:
+        if self._closed or self._shutdown_requested or self._download_link_busy:
+            return
+        self._download_link_busy = True
+        self.downloadLinkChanged.emit()
+
+        def worker() -> None:
+            try:
+                result = latest_installer_download(platform)
+            except Exception as exc:
+                self._downloadLinkResult.emit(platform, None, str(exc))
+            else:
+                self._downloadLinkResult.emit(platform, result, "")
+
+        threading.Thread(target=worker, daemon=True, name="HRToolkit-download-link").start()
+
+    @Slot(str, object, str)
+    def _apply_download_link(self, platform: str, result, error: str) -> None:
+        if self._closed or self._shutdown_requested:
+            return
+        self._download_link_busy = False
+        self.downloadLinkChanged.emit()
+        if error:
+            self.notificationRequested.emit("未能复制下载地址", f"{error}\n请联网后重试，本次未复制任何地址。", "warning")
+            return
+        version, url = result
+        try:
+            clipboard = QGuiApplication.clipboard()
+            if clipboard is None:
+                raise RuntimeError("系统剪贴板暂不可用")
+            clipboard.setText(url)
+        except Exception as exc:
+            self.notificationRequested.emit("复制失败", str(exc), "error")
+            return
+        label = "Windows 7" if platform == "win7" else "Windows 10 / 11"
+        self.notificationRequested.emit(
+            "下载地址已复制",
+            f"最新版本 {version} · {label}（64 位）\n可直接粘贴发给同事下载。\n\n"
+            "请务必按接收方电脑的系统使用对应链接：\n"
+            "Windows 7 必须使用 Win7 安装包，切勿下载或安装 Win10/11 安装包。\n"
+            "Windows 10/11 请使用对应的 Win10/11 安装包。\n\n"
+            "此处仅提供 Windows 安装包；Mac 及其他系统的安装包，请联系管理员获取。",
+            "success",
+        )
 
     def _start_update_check(self, manual: bool) -> None:
         if self._closed or self._shutdown_requested:

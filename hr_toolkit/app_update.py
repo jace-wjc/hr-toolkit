@@ -303,8 +303,34 @@ def _bind_gitee_release_assets(
     return result
 
 
-def _fetch_json_object(url: str, *, timeout: int) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+def latest_installer_download(platform: str) -> tuple[str, str]:
+    """Find a published installer afresh, independently of the installed version."""
+    suffixes = {"win7": "win7_x64-setup.exe", "windows": "x64-setup.exe"}
+    if platform not in suffixes:
+        raise UpdateError("请选择 Windows 7 或 Windows 10 / 11。")
+    release = _fetch_json_object(GITEE_LATEST_RELEASE_API_URL, timeout=10, no_cache=True)
+    tag = str(release.get("tag_name") or "")
+    if release.get("draft") or release.get("prerelease") or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        raise UpdateError("暂时无法确认最新正式版本，请稍后重试。")
+    version = tag[1:]
+    filename = f"HRToolkit_{version}_{suffixes[platform]}"
+    expected_url = f"https://gitee.com/{GITEE_REPOSITORY}/releases/download/{tag}/{filename}"
+    assets = release.get("assets") or release.get("attach_files") or []
+    if isinstance(assets, list):
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            url = asset.get("browser_download_url") or asset.get("url")
+            if asset.get("name") == filename and url == expected_url:
+                return version, url
+    raise UpdateError(f"最新版本 {version} 的所选安装包尚未上传，请稍后重试。")
+
+
+def _fetch_json_object(url: str, *, timeout: int, no_cache: bool = False) -> dict[str, Any]:
+    headers = {"User-Agent": USER_AGENT}
+    if no_cache:
+        headers.update({"Cache-Control": "no-cache", "Pragma": "no-cache"})
+    request = urllib.request.Request(url, headers=headers)
     try:
         with _open_url(request, timeout=timeout) as response:
             content_length = _response_content_length(response)

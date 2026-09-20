@@ -673,6 +673,58 @@ ApplicationWindow {
                         enabled: !controller.updateBusy
                         onClicked: controller.showReleaseNotes()
                     }
+                    AppButton {
+                        id: downloadLinkButton
+                        objectName: "downloadLinkButton"
+                        text: controller.downloadLinkBusy ? "正在获取地址…" : "复制下载地址"
+                        variant: "link"
+                        enabled: !controller.downloadLinkBusy
+                        onClicked: downloadLinkMenu.open()
+                        ToolTip.visible: hovered
+                        ToolTip.text: "复制最新版安装包地址，发给同事下载"
+                        Popup {
+                            id: downloadLinkMenu
+                            x: downloadLinkButton.width - width
+                            y: downloadLinkButton.height + 4
+                            width: 304
+                            padding: 12
+                            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                            background: Rectangle { color: "#FFFFFF"; radius: 9; border.color: "#ECEAE4" }
+                            contentItem: ColumnLayout {
+                                spacing: 8
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "选择同事电脑的系统"
+                                    font.pixelSize: 12
+                                    color: root.textMuted
+                                }
+                                AppButton {
+                                    Layout.fillWidth: true
+                                    text: "Windows 7（64 位）"
+                                    onClicked: { downloadLinkMenu.close(); controller.copyLatestDownloadUrl("win7") }
+                                }
+                                AppButton {
+                                    Layout.fillWidth: true
+                                    text: "Windows 10 / 11（64 位）"
+                                    onClicked: { downloadLinkMenu.close(); controller.copyLatestDownloadUrl("windows") }
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "请务必按接收方电脑的系统选择链接：Windows 7 必须使用 Win7 安装包，切勿下载或安装 Win10/11 安装包；Windows 10/11 请使用对应的 Win10/11 安装包。"
+                                    wrapMode: Text.Wrap
+                                    font.pixelSize: 12
+                                    color: "#A66A12"
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "此处仅提供 Windows 安装包；Mac 及其他系统的安装包，请联系管理员获取。\n每次获取最新版地址，复制后可直接分享。"
+                                    wrapMode: Text.Wrap
+                                    font.pixelSize: 11
+                                    color: root.textMuted
+                                }
+                            }
+                        }
+                    }
                 }
 
                 RowLayout {

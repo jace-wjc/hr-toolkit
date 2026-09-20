@@ -60,6 +60,48 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_copy_download_link_ignores_installed_version_and_update_cache(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._ready_update = object()
+        controller._ready_update_package = Path("old-update.exe")
+        clipboard = Mock()
+        notices = []
+        controller.notificationRequested.connect(lambda *args: notices.append(args))
+        with patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread, \
+             patch("hr_toolkit.gui_qt.controller.latest_installer_download", return_value=("0.9.11", "https://latest.example/setup.exe")) as lookup, \
+             patch("hr_toolkit.gui_qt.controller.__version__", "0.8.1"), \
+             patch("hr_toolkit.gui_qt.controller.QGuiApplication") as gui:
+            gui.clipboard.return_value = clipboard
+            controller.copyLatestDownloadUrl("win7")
+            self.assertTrue(controller.downloadLinkBusy)
+            controller.copyLatestDownloadUrl("windows")
+            self.assertEqual(thread.call_count, 1)
+            thread.call_args.kwargs["target"]()
+            lookup.assert_called_once_with("win7")
+            clipboard.setText.assert_called_once_with("https://latest.example/setup.exe")
+            self.assertFalse(controller.downloadLinkBusy)
+            self.assertIn("Windows 7", notices[-1][1])
+            controller.copyLatestDownloadUrl("windows")
+            thread.call_args.kwargs["target"]()
+            self.assertEqual(lookup.call_count, 2)
+            lookup.assert_called_with("windows")
+            self.assertIn("Windows 10 / 11", notices[-1][1])
+
+    def test_copy_download_link_failure_or_close_preserves_clipboard(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread, \
+             patch("hr_toolkit.gui_qt.controller.latest_installer_download", side_effect=RuntimeError("网络不可用")), \
+             patch("hr_toolkit.gui_qt.controller.QGuiApplication") as gui:
+            controller.copyLatestDownloadUrl("windows")
+            thread.call_args.kwargs["target"]()
+            self.assertFalse(controller.downloadLinkBusy)
+            gui.clipboard.assert_not_called()
+            controller.close()
+            controller._apply_download_link("windows", ("0.9.11", "https://latest.example/setup.exe"), "")
+            gui.clipboard.assert_not_called()
+
     def test_sheet_choices_persist_names_but_not_this_file_absences(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

@@ -24,6 +24,7 @@ from hr_toolkit.app_update import (
     UpdateCancelledError,
     UpdateError,
     check_for_update,
+    latest_installer_download,
     cleanup_stale_update_files,
     download_update_package,
     fetch_update_manifest,
@@ -43,6 +44,49 @@ from hr_toolkit.update_runner import main as update_runner_main
 
 
 class AppUpdateTests(unittest.TestCase):
+    def test_share_link_fetches_latest_again_and_selects_recipient_platform(self) -> None:
+        def release(version):
+            prefix = f"https://gitee.com/optimistic-little-sunspot/hr-toolkit/releases/download/v{version}/"
+            return {"tag_name": f"v{version}", "assets": [
+                {"name": f"HRToolkit_{version}_{suffix}",
+                 "browser_download_url": prefix + f"HRToolkit_{version}_{suffix}"}
+                for suffix in ("win7_x64-setup.exe", "x64-setup.exe")
+            ]}
+
+        with patch("hr_toolkit.app_update._fetch_json_object", side_effect=[release("0.9.11"), release("0.9.12")]) as fetch:
+            version, win7_url = latest_installer_download("win7")
+            self.assertEqual(version, "0.9.11")
+            self.assertTrue(win7_url.endswith("/v0.9.11/HRToolkit_0.9.11_win7_x64-setup.exe"))
+            version, windows_url = latest_installer_download("windows")
+            self.assertEqual(version, "0.9.12")
+            self.assertTrue(windows_url.endswith("/v0.9.12/HRToolkit_0.9.12_x64-setup.exe"))
+        self.assertEqual(fetch.call_count, 2)
+        for call in fetch.call_args_list:
+            self.assertEqual(call.args, (GITEE_LATEST_RELEASE_API_URL,))
+            self.assertTrue(call.kwargs["no_cache"])
+
+    def test_share_link_rejects_missing_old_or_unpublished_installers(self) -> None:
+        name = "HRToolkit_0.9.11_win7_x64-setup.exe"
+        prefix = "https://gitee.com/optimistic-little-sunspot/hr-toolkit/releases/download/v0.9.11/"
+        valid = {"tag_name": "v0.9.11", "assets": [{"name": name, "browser_download_url": prefix + name}]}
+        cases = [
+            {**valid, "assets": []},
+            {**valid, "tag_name": "v0.9.12"},
+            {**valid, "draft": True},
+            {**valid, "prerelease": True},
+            {**valid, "tag_name": "v0.9.11-beta"},
+            {**valid, "assets": [{"name": name, "browser_download_url": "https://example.com/" + name}]},
+            {**valid, "assets": [{"name": name, "browser_download_url": prefix + "runtime.zip"}]},
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload), patch("hr_toolkit.app_update._fetch_json_object", return_value=payload):
+                with self.assertRaises(UpdateError):
+                    latest_installer_download("win7")
+        with patch("hr_toolkit.app_update._fetch_json_object", side_effect=UpdateError("网络不可用")) as fetch:
+            with self.assertRaisesRegex(UpdateError, "网络不可用"):
+                latest_installer_download("windows")
+            self.assertEqual(fetch.call_count, 1)
+
     def test_installer_progress_snapshot_preserves_unicode_and_rejects_partial_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "progress.txt"
