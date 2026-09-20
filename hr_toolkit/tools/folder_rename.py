@@ -588,6 +588,8 @@ def _rename_text_no_replace(source: Path, target: Path) -> None:
         # Python 在 Windows 上使用不带替换标志的 MoveFileExW，兼容 Win7。
         os.rename(source, target)
         return
+    if sys.platform != "darwin" and not sys.platform.startswith("linux"):
+        raise OSError("当前系统不支持安全的排他改名，本次未改名")
     import ctypes
 
     libc = ctypes.CDLL(None, use_errno=True)

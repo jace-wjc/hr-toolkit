@@ -233,8 +233,10 @@ class FolderRenameTest(unittest.TestCase):
             root = Path(tmp)
             (root / "old.pdf").write_bytes(b"original")
             with patch("hr_toolkit.tools.folder_rename.sys.platform", "unsupported"), \
+                 patch("ctypes.CDLL", side_effect=AssertionError("Unsupported platforms must not load libc")) as load_library, \
                  self.assertRaisesRegex(RuntimeError, "不支持安全.*已完成 0 项"):
                 rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="new", file_type="pdf")
+            load_library.assert_not_called()
             self.assertEqual((root / "old.pdf").read_bytes(), b"original")
             self.assertFalse((root / "new.pdf").exists())
 
