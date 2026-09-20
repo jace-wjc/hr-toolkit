@@ -161,10 +161,12 @@ class SocialSecurityTest(unittest.TestCase):
             expected = _read_payment_file(source)
             wb = load_workbook(source, data_only=True)
             try:
+                sheet_name = wb.active.title
                 values = list(wb.active.iter_rows(values_only=True))
             finally:
                 wb.close()
             sheet = SimpleNamespace(
+                name=sheet_name,
                 nrows=len(values), row_values=lambda row: list(values[row]),
                 cell_value=lambda row, col: values[row][col],
             )

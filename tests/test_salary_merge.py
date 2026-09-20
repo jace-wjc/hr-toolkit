@@ -24,7 +24,9 @@ class SalaryMergeTest(unittest.TestCase):
             _write_current_salary_file(source, amount=1035)
             result = merge_monthly_salary(source, root / 'output')
             self.assertEqual((result.employee_count, result.record_count), (1, 1))
-            self.assertEqual(result.warnings, [])
+            self.assertEqual(result.warnings, [
+                f'未处理工作表：文件《{source.name}》中的「汇总表」页未参与本次处理，已跳过。',
+            ])
             wb = load_workbook(result.output_file, data_only=True)
             try:
                 self.assertEqual(wb['汇总']['C5'].value, 'TEST-001')
@@ -38,7 +40,9 @@ class SalaryMergeTest(unittest.TestCase):
             source = root / '工资表_202608.xlsx'
             _write_current_salary_file(source)
             result = merge_monthly_salary(source, root / 'output')
-            self.assertEqual(result.warnings, [])
+            self.assertEqual(result.warnings, [
+                f'未处理工作表：文件《{source.name}》中的「汇总表」页未参与本次处理，已跳过。',
+            ])
             wb = load_workbook(result.output_file, data_only=True)
             try:
                 # M is income, P is a deduction; O is itself an uncached formula.
@@ -53,7 +57,9 @@ class SalaryMergeTest(unittest.TestCase):
             _write_current_salary_file(source, amount='=VLOOKUP(B6,其他表!A:C,3,0)')
             _set_formula_cache(source, 'Q6', 1234.56)
             result = merge_monthly_salary(source, root / 'output')
-            self.assertEqual(result.warnings, [])
+            self.assertEqual(result.warnings, [
+                f'未处理工作表：文件《{source.name}》中的「汇总表」页未参与本次处理，已跳过。',
+            ])
             wb = load_workbook(result.output_file, data_only=True)
             try:
                 self.assertEqual(wb['汇总']['K5'].value, 1234.56)
@@ -87,7 +93,9 @@ class SalaryMergeTest(unittest.TestCase):
             split = split_salary_by_company(source, root / 'split')
             result = merge_monthly_salary([item.file_path for item in split.outputs], root / 'merged')
             self.assertEqual((result.employee_count, result.record_count), (1, 1))
-            self.assertEqual(result.warnings, [])
+            self.assertEqual(result.warnings, [
+                '未处理工作表：文件《测试公司-工资表.xlsx》中的「汇总表」页未参与本次处理，已跳过。',
+            ])
             wb = load_workbook(result.output_file, data_only=True)
             try:
                 self.assertEqual(wb['汇总']['K5'].value, 1035)
