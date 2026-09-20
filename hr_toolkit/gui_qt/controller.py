@@ -79,6 +79,7 @@ from .form_specs import (
 from .models import HistoryModel, InputFileModel, LogModel, TrashModel, WorkspaceModel, ObjectListModel
 from .input_selection import selection_hint, selection_mode, validate_selection
 from .drop_paths import local_drop_paths, native_mime_paths, text_paths
+from .rename_review import RenameReview
 
 
 NAV_GROUPS = (
@@ -248,7 +249,10 @@ class AppController(QObject):
         self._incoming_progress = None
         self._run_coordinator = ProjectRunCoordinator()
         self._preview_cancel_event: threading.Event | None = None
-        self._pending_preview: dict[str, Any] | None = None
+        self._rename_review = RenameReview(self)
+        self._rename_review.confirmed.connect(self._execute_reviewed_rename)
+        self._rename_review_invocation = None
+        self._rename_review_context = None
         self._salary_header_profiles: dict[str, dict[str, Any]] = {}
         self._header_name_rules: dict[str, dict[str, Any]] = {}
         self._template_issue: dict[str, Any] = {}
@@ -471,6 +475,8 @@ class AppController(QObject):
 
     @Property(str, notify=specChanged)
     def supportLabel(self) -> str:
+        if self._spec.tool_id == "folder_rename" and self._form_states[self._state_key()].get("rename_mode") == "excel_map":
+            return "原文件名 → 新名称映射表"
         return self._spec.support_label
 
     @Property(str, notify=specChanged)
@@ -482,7 +488,7 @@ class AppController(QObject):
         if not self._spec.support_id:
             return False
         if self._spec.tool_id == "folder_rename":
-            return self._form_states[self._state_key()].get("rename_mode") == "excel"
+            return self._form_states[self._state_key()].get("rename_mode") in {"excel", "excel_map"}
         return True
 
     @Property(bool, notify=specChanged)
@@ -538,6 +544,10 @@ class AppController(QObject):
     def _field_visible(self, field_id: str, values: dict[str, Any]) -> bool:
         if self._spec.tool_id == "folder_rename":
             mode = values.get("rename_mode") or "append"
+            if field_id in {"source_column", "target_column"}:
+                return mode == "excel_map"
+            if field_id in {"trim_spaces", "collapse_spaces", "normalize_separators"}:
+                return mode == "normalize"
             if field_id == "target_name":
                 return mode in {"append", "remove", "replace"}
             if field_id == "rename_text":
@@ -4046,6 +4056,14 @@ class AppController(QObject):
             run_business_process,
         )
 
+        if invocation.function_module in {"hr_toolkit.tools.folder_rename", "hr_toolkit.tools.rename_plan"}:
+            self._rename_review_invocation = invocation
+            self._rename_review_context = (self._state_key(), self._project_generation)
+            arguments = dict(invocation.kwargs)
+            if invocation.function_name == "rename_files_by_excel":
+                arguments["mode"] = "excel"
+            invocation = replace(invocation, function_module="hr_toolkit.tools.rename_plan",
+                                 function_name="build_rename_plan", kwargs=arguments)
         self._set_busy(True)
         self._preview_cancel_event = threading.Event()
         self._clear_logs()
@@ -4089,27 +4107,32 @@ class AppController(QObject):
 
     @Slot(object)
     def _apply_preview(self, payload: dict[str, Any]) -> None:
+        cancelled = self._preview_cancel_event is not None and self._preview_cancel_event.is_set()
         self._preview_cancel_event = None
         self._set_busy(False)
-        operations = list(payload.get("operations", []))
-        warnings = list(payload.get("warnings", []))
-        self._append_log(f"预览完成：可改名 {len(operations)} 项。", "info")
-        for item in operations[:120]:
-            self._append_log(f"{Path(item['source']).name}  →  {Path(item['target']).name}", "muted")
-        if len(operations) > 120:
-            self._append_log(f"另有 {len(operations) - 120} 项，界面不再逐条显示。", "muted")
-        for warning in warnings[:20]:
-            self._append_log(str(warning), "warning")
-        self._flush_logs()
-        if not operations:
-            self.notificationRequested.emit("没有可改名项目", "没有找到可以安全改名的项目，请检查目录、名单、文件类型和预览提醒。", "info")
+        if self._closed or self._shutdown_requested or cancelled:
             return
-        self._pending_preview = dict(payload)
-        token = f"rename:{time.monotonic_ns()}"
-        self._pending_confirmation = token
-        self._pending_confirmation_action = ("rename", None)
-        message = f"即将改名 {len(operations)} 项。工具会再次核对预览，只有内容完全一致才执行。是否继续？"
-        self.confirmationRequested.emit("确认改名", message, token)
+        if payload.get("schema") == 1 and "rows" in payload:
+            self._append_log(f"预览已生成：共 {len(payload['rows'])} 项，请在完整预览中核对和调整。", "info")
+            self._rename_review.load(payload)
+            return
+        self.notificationRequested.emit("预览失败", "改名预览格式无效，请重新预览。", "error")
+
+    @constant_property(QObject)
+    def renameReview(self):
+        return self._rename_review
+
+    @Slot(object)
+    def _execute_reviewed_rename(self, plan) -> None:
+        if (self._busy or self._closed or self._shutdown_requested or self._rename_review_invocation is None
+                or self._rename_review_context != (self._state_key(), self._project_generation)):
+            self.notificationRequested.emit("请重新预览", "项目或工具已变化，未执行改名。", "warning")
+            return
+        invocation = replace(self._rename_review_invocation, function_module="hr_toolkit.tools.rename_plan",
+                             function_name="execute_rename_plan", preview=False,
+                             kwargs={"root_dir": Path(plan["root_dir"]), "plan": plan})
+        self._rename_review_invocation = None
+        self._start_project_run(invocation)
 
     @Slot(str)
     def _apply_preview_error(self, message: str) -> None:
@@ -4127,10 +4150,7 @@ class AppController(QObject):
         action = self._pending_confirmation_action
         self._pending_confirmation_action = None
         if not accepted:
-            if action and action[0] == "rename":
-                self._pending_preview = None
-                self._append_log("已取消执行。", "muted")
-            elif action and action[0] == "update" and isinstance(action[1], UpdateInfo) and action[1].mandatory:
+            if action and action[0] == "update" and isinstance(action[1], UpdateInfo) and action[1].mandatory:
                 QCoreApplication.quit()
             return
         if not action:
@@ -4172,10 +4192,6 @@ class AppController(QObject):
         if action_name == "close":
             self._begin_shutdown()
             return
-        if action_name != "rename":
-            return
-        self._prepare_invocation(preview=False, preview_result=self._pending_preview)
-        self._pending_preview = None
 
     def _start_project_run(self, invocation: ToolInvocation) -> None:
         if self._block_run_for_update():
@@ -4213,7 +4229,8 @@ class AppController(QObject):
         self._result_notice_counts = {}
         self._result_notice_filter = "全部"
         self._notify_last_result_changed(force=True)
-        self._run_progress_visible = invocation.tool_id == "material_collector"
+        self._run_progress_visible = (invocation.tool_id == "material_collector"
+                                      or invocation.function_module == "hr_toolkit.tools.rename_plan")
         self._run_progress_current = self._run_progress_total = 0
         self._run_progress_message = "正在准备项目资料，总量尚未确定"
         self._run_progress_started = self._run_progress_updated = time.monotonic()
@@ -4312,7 +4329,12 @@ class AppController(QObject):
         mode_text = "独立进程" if isolated else "后台线程"
         self._append_log(f"处理完成，用时 {elapsed:.1f} 秒（{mode_text}）。", "success")
         completion_message = "结果已安全保存到当前项目。"
-        if self._run_progress_visible and isinstance(payload, dict):
+        if isinstance(payload, dict) and payload.get("rename_ledger"):
+            completion_message = (f"已改名 {payload['operation_count']} 项，排除 {payload['excluded_count']} 项，"
+                                  f"名称不变 {payload['unchanged_count']} 项。原目录未修改。\n"
+                                  f"结果目录：{payload['renamed_root']}\n改名记录和清单已保存到本批次处理结果。")
+            self._append_log(completion_message, "info")
+        if self._run_progress_visible and isinstance(payload, dict) and self._spec.tool_id == "material_collector":
             copied_count = sum(bool(item.get("target_path")) for item in payload.get("matches", []))
             completion_message = f"已提取 {copied_count} 个资料文件。"
             if payload.get("review_path"):
@@ -4550,6 +4572,7 @@ class AppController(QObject):
 
     @Slot()
     def close(self) -> None:
+        self._rename_review.cancel()
         if self._closed:
             return
         self._background_update_timer.stop()

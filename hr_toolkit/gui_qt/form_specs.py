@@ -253,11 +253,18 @@ SPECS: tuple[ToolUiSpec, ...] = (
                 {"label": "删除结尾文字", "value": "remove"},
                 {"label": "修改单人名称", "value": "replace"},
                 {"label": "替换指定文字", "value": "replace_text"},
-                {"label": "按 Excel 人名顺序批量重命名", "value": "excel"}
+                {"label": "按 Excel 人名顺序批量重命名", "value": "excel"},
+                {"label": "按 Excel 原文件名匹配", "value": "excel_map"},
+                {"label": "规范名称格式", "value": "normalize"}
             ]},
             {"id": "target_name", "kind": "text", "label": "姓名/原名称", "default": ""},
             {"id": "rename_text", "kind": "text", "label": "追加/删除文字", "default": ""},
             {"id": "replacement_name", "kind": "text", "label": "新名称", "default": ""},
+            {"id": "source_column", "kind": "text", "label": "原文件名列", "default": "原文件名"},
+            {"id": "target_column", "kind": "text", "label": "新名称列", "default": "新名称"},
+            {"id": "trim_spaces", "kind": "check", "label": "去除名称首尾空格", "default": True},
+            {"id": "collapse_spaces", "kind": "check", "label": "合并连续空格和全角空格", "default": True},
+            {"id": "normalize_separators", "kind": "check", "label": "将连续横线和下划线统一为 _", "default": False},
             {"id": "file_type", "kind": "choice", "label": "文件类型", "default": "folder", "options": [
                 {"label": "文件夹", "value": "folder"}, {"label": "PDF", "value": "pdf"},
                 {"label": "图片（jpg/png/gif等）", "value": "image"},
@@ -383,7 +390,7 @@ def build_invocation(
         and bool(str(values.get("target_input") or "").strip())
     ) or (
         spec.tool_id == "folder_rename"
-        and str(values.get("rename_mode") or "append") != "excel"
+        and str(values.get("rename_mode") or "append") not in {"excel", "excel_map"}
     )
     try:
         support = None if ignore_support else _validated_support(spec, support_text)
@@ -399,6 +406,8 @@ def build_invocation(
             "replace": "修改单人名称",
             "replace_text": "替换指定文字",
             "excel": "按 Excel 人名顺序批量重命名",
+            "excel_map": "按 Excel 原文件名匹配",
+            "normalize": "规范名称格式",
         }
         description = f"{project_tool_name}-{rename_labels.get(str(values.get('rename_mode') or 'append'), '追加文字')}"
     base = dict(
@@ -481,6 +490,18 @@ def build_invocation(
     if spec.tool_id == "folder_rename":
         mode = str(values.get("rename_mode") or "append")
         file_type = str(values.get("file_type") or "folder")
+        if mode in {"excel_map", "normalize"}:
+            if mode == "excel_map" and support is None:
+                raise FormValidationError("缺少映射表", "请选择含原文件名和新名称两列的 Excel。", "support")
+            return ToolInvocation(**base, function_module="hr_toolkit.tools.rename_plan", function_name="build_rename_plan",
+                args=(), kwargs={"root_dir": inputs[0], "mode": mode, "file_type": file_type,
+                                "excel_path": support if mode == "excel_map" else None,
+                                "source_column": str(values.get("source_column") or "原文件名"),
+                                "target_column": str(values.get("target_column") or "新名称"),
+                                "trim_spaces": bool(values.get("trim_spaces", True)),
+                                "collapse_spaces": bool(values.get("collapse_spaces", True)),
+                                "normalize_separators": bool(values.get("normalize_separators", False)),
+                                "dry_run": True}, preview=True)
         if mode == "excel":
             if support is None:
                 raise FormValidationError("缺少人员名单", "请先选择包含姓名列的 Excel 名单。", "support")

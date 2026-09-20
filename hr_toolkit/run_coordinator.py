@@ -303,7 +303,7 @@ class ProjectRunCoordinator:
                 callbacks.log("已使用当前选择的汇总表，原文件由用户自行保存。")
             # Renaming needs a result copy before execution. Reuse its existing
             # read-only preview to validate configuration before making that copy.
-            if getattr(request.function, "__module__", "") == "hr_toolkit.tools.folder_rename":
+            if getattr(request.function, "__module__", "") in {"hr_toolkit.tools.folder_rename", "hr_toolkit.tools.rename_plan"}:
                 preview = inspect.signature(request.function).bind(*request.args, **request.kwargs)
                 preview.arguments["dry_run"] = True
                 preview.arguments["cancelled"] = cancel_event.is_set
@@ -350,6 +350,7 @@ class ProjectRunCoordinator:
         except BaseException as exc:
             stopped = cancel_event.is_set() or isinstance(exc, BusinessProcessCancelled)
             finalization_error: BaseException | None = None
+            rename_recovery_hint = ""
             if batch_id is not None:
                 try:
                     if store.discard_unmaterialized_batch(batch_id):
@@ -361,6 +362,11 @@ class ProjectRunCoordinator:
                             store.mark_stopped(batch_id)
                         else:
                             store.mark_failed(batch_id, str(exc))
+                        if getattr(request.function, "__module__", "") == "hr_toolkit.tools.rename_plan":
+                            recovery_dir = store.quarantine_dir / batch_id
+                            if recovery_dir.is_dir():
+                                rename_recovery_hint = f"未完成的改名结果和记录已转存至项目隔离目录，请保留：{recovery_dir}"
+                                callbacks.log(rename_recovery_hint)
                     elif draft is not None:
                         store.move_to_trash(batch_id)
                     if batch_id is not None and not project_batch_is_closed(store, batch_id):
@@ -380,7 +386,7 @@ class ProjectRunCoordinator:
                 if isinstance(exc, BusinessProcessError) and exc.remote_traceback:
                     runlog.log_line(exc.remote_traceback)
                 runlog.log_exception(f"{request.tool_name} 失败", exc)
-                callbacks.error(exc)
+                callbacks.error(RuntimeError(f"{exc}\n{rename_recovery_hint}") if rename_recovery_hint else exc)
         finally:
             if batch_id is not None:
                 store.release_run_sources(batch_id)

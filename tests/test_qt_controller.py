@@ -30,10 +30,8 @@ except ImportError:
 def _preview_probe(*, cancelled=None):
     if cancelled is not None and cancelled():
         raise RuntimeError("cancelled")
-    return {
-        "operations": [{"source": "旧名称", "target": "新名称"}],
-        "warnings": [],
-    }
+    from tests.test_rename_review import sample_plan
+    return sample_plan()
 
 
 def _prepare_template_choice(controller):
@@ -86,6 +84,39 @@ class QtControllerTests(unittest.TestCase):
                 self.assertEqual(legacy["rename_text"]["visible"], mode in ("append", "remove"))
                 self.assertEqual(legacy["replacement_name"]["visible"], mode == "replace")
                 self.assertEqual(controller.hasSupportField, mode == "excel")
+
+    def test_confirmed_rename_uses_review_plan_not_current_form_or_excel(self) -> None:
+        from tests.test_rename_review import sample_plan
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("folder_rename")
+        invocation = ToolInvocation(nav_id="folder_rename", variant="default", tool_id="folder_rename",
+            tool_name="资料文件夹改名", group_name="人员与档案", description="Excel改名",
+            function_module="hr_toolkit.tools.folder_rename", function_name="rename_files_by_excel",
+            args=(), kwargs={"root_dir": "/old", "excel_path": "/missing.xlsx"}, preview=True)
+        controller._rename_review_invocation = invocation
+        controller._rename_review_context = (controller._state_key(), controller._project_generation)
+        controller.setFieldValue("rename_mode", "append")
+        plan = sample_plan()
+        plan["rows"][0]["target_name"] = "韩信.PDF"
+        with patch.object(controller, "_start_project_run") as start, patch.object(controller, "_prepare_invocation") as regenerate:
+            controller._execute_reviewed_rename(plan)
+        regenerate.assert_not_called()
+        call = start.call_args.args[0]
+        self.assertEqual(call.function_name, "execute_rename_plan")
+        self.assertEqual(call.kwargs["plan"]["rows"][0]["target_name"], "韩信.PDF")
+        self.assertNotIn("excel_path", call.kwargs)
+        self.assertFalse(call.preview)
+
+    def test_confirmed_rename_rejects_a_different_project(self) -> None:
+        from tests.test_rename_review import sample_plan
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._rename_review_invocation = object()
+        controller._rename_review_context = (controller._state_key(), controller._project_generation - 1)
+        with patch.object(controller, "_start_project_run") as start:
+            controller._execute_reviewed_rename(sample_plan())
+        start.assert_not_called()
 
     def test_copy_download_link_ignores_installed_version_and_update_cache(self) -> None:
         controller = self.controller()
@@ -856,13 +887,8 @@ class QtControllerTests(unittest.TestCase):
             worker()
 
         self.assertFalse(controller.busy)
-        self.assertEqual(
-            controller._pending_preview,
-            {
-                "operations": [{"source": "旧名称", "target": "新名称"}],
-                "warnings": [],
-            },
-        )
+        self.assertEqual(len(controller.renameReview._plan["rows"]), 3)
+        self.assertEqual(controller.renameReview._plan["mode"], "excel")
         controller.close()
 
     def test_workspace_selection_details_follow_model_refresh(self) -> None:

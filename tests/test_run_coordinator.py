@@ -44,6 +44,71 @@ def _fake_folder_rename(root_dir, *, mode, cancelled=None, progress_callback=Non
 
 
 class ProjectRunCoordinatorTests(unittest.TestCase):
+    def test_failed_reviewed_rename_keeps_journal_and_files_in_reported_quarantine(self) -> None:
+        from hr_toolkit.tools.rename_plan import build_rename_plan, execute_rename_plan
+        from hr_toolkit.tools.folder_rename import _rename_text_no_replace
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            (source / "old.pdf").write_bytes(b"original")
+            plan = build_rename_plan(source, mode="replace_text", text="old", replacement_name="new", file_type="pdf")
+            store = ProjectStore.create(root / "project", "测试项目")
+            errors, logs = [], []
+            def conflict(old, new):
+                if new.name == "new.pdf":
+                    new.write_bytes(b"external")
+                _rename_text_no_replace(old, new)
+            try:
+                request = RunRequest("folder_rename", "改名", "测试", "确认方案", execute_rename_plan,
+                                     (source,), {"plan": plan})
+                with patch("hr_toolkit.run_coordinator.should_use_process", return_value=False), \
+                     patch("hr_toolkit.tools.rename_plan.legacy._rename_text_no_replace", side_effect=conflict):
+                    ProjectRunCoordinator()._run(store, request, RunCallbacks(error=errors.append, log=logs.append), threading.Event())
+                self.assertEqual(len(errors), 1)
+                batch = store.list_batches()[0]
+                self.assertEqual(batch.status, "failed")
+                isolated = store.quarantine_dir / batch.id
+                self.assertIn(str(isolated), str(errors[0]))
+                self.assertTrue(any(str(isolated) in log for log in logs))
+                self.assertEqual(len(list(isolated.rglob("改名记录_*.jsonl"))), 1)
+                self.assertEqual(next(isolated.rglob("old.pdf")).read_bytes(), b"original")
+                self.assertEqual(next(isolated.rglob("new.pdf")).read_bytes(), b"external")
+                self.assertEqual((source / "old.pdf").read_bytes(), b"original")
+                self.assertFalse((source / "new.pdf").exists())
+            finally:
+                store.close()
+    def test_reviewed_plan_and_ledger_run_on_verified_result_copy(self) -> None:
+        from hr_toolkit.tools.rename_plan import build_rename_plan, execute_rename_plan
+        from hr_toolkit.project_store import CATEGORY_RESULTS
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            (source / "1.pdf").write_bytes(b"one")
+            (source / "2.pdf").write_bytes(b"two")
+            plan = build_rename_plan(source, mode="append", text="_new", file_type="pdf")
+            plan["rows"][0]["target_name"] = "manual.pdf"
+            plan["rows"][1]["included"] = False
+            store = ProjectStore.create(root / "project", "测试项目")
+            errors, successes = [], []
+            try:
+                request = RunRequest("folder_rename", "改名", "测试", "确认方案", execute_rename_plan,
+                                     (source,), {"plan": plan})
+                ProjectRunCoordinator()._run(store, request,
+                    RunCallbacks(error=errors.append, success=lambda *args: successes.append(args)), threading.Event())
+                self.assertEqual(errors, [])
+                self.assertEqual(len(successes), 1)
+                self.assertEqual((source / "1.pdf").read_bytes(), b"one")
+                self.assertFalse((source / "manual.pdf").exists())
+                detail = store.get_batch(store.list_batches()[0].id)
+                results = detail.directories[CATEGORY_RESULTS]
+                self.assertEqual((results / "source/manual.pdf").read_bytes(), b"one")
+                self.assertEqual((results / "source/2.pdf").read_bytes(), b"two")
+                self.assertEqual(len(list(results.glob("改名记录_*.jsonl"))), 1)
+                self.assertEqual(len(list(results.glob("改名清单_*.csv"))), 1)
+            finally:
+                store.close()
     def test_replace_text_confirmed_preview_runs_on_project_copy(self) -> None:
         from hr_toolkit.tools.folder_rename import rename_person_folders
         from hr_toolkit.project_store import CATEGORY_RESULTS

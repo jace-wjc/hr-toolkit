@@ -15,6 +15,18 @@ from hr_toolkit.gui_qt.form_specs import (
 
 
 class QtFormSpecTests(unittest.TestCase):
+    def test_explicit_mapping_and_cleanup_are_separate_preview_modes(self) -> None:
+        explicit = self.invocation("folder_rename", input_paths=[self.folder],
+            values={"rename_mode": "excel_map", "source_column": "文件名", "target_column": "目标", "file_type": "pdf"})
+        self.assertTrue(explicit.preview)
+        self.assertEqual(explicit.function_name, "build_rename_plan")
+        self.assertEqual(explicit.kwargs["source_column"], "文件名")
+        self.assertEqual(explicit.kwargs["file_type"], "pdf")
+        cleanup = self.invocation("folder_rename", input_paths=[self.folder], support_text="/missing.xlsx",
+            values={"rename_mode": "normalize", "normalize_separators": True})
+        self.assertTrue(cleanup.preview)
+        self.assertIsNone(cleanup.kwargs["excel_path"])
+        self.assertTrue(cleanup.kwargs["normalize_separators"])
     def test_ui_date_normalization_preserves_dates_and_rejects_invalid_calendar_days(self) -> None:
         for raw in ("20260915", "2026/9/15", "2026.9.15", "2026年9月15日", "2026-09-15", date(2026, 9, 15)):
             self.assertEqual(normalize_report_date_text(raw), "2026-09-15")

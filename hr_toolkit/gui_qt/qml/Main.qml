@@ -2529,6 +2529,7 @@ ApplicationWindow {
 
     RegionCodeDialog { id: regionCodeDialog; backend: controller; anchors.centerIn: parent }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }
+    RenameReviewDialog { backend: controller.renameReview }
 
     Connections {
         target: controller
