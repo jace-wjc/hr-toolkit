@@ -7,9 +7,11 @@ from __future__ import annotations
 import hashlib
 import json
 import inspect
+from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import copy
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 from .header_aliases import normalize_alias, validate_alias_rules, protected_aliases, has_custom_aliases
@@ -19,6 +21,46 @@ SUPPORTED_TOOLS = ("salary_split", "personnel_change_merge", "roster_update", "a
                    "insurance_ledger", "data_statistics", "social_security")
 _current = ContextVar("hr_input_template_mapping", default=None)
 _sheet_notices = ContextVar("hr_input_sheet_notices", default=None)
+_source_origins = ContextVar("hr_input_source_origins", default=None)
+_source_scope = ContextVar("hr_input_source_scope", default=None)
+
+
+def source_identity(path):
+    key = str(Path(path).expanduser().resolve())
+    return (_source_origins.get() or {}).get(key, key)
+
+
+def register_source_origin(path, original, member=None):
+    """Keep conversion/extraction identities stable when a confirmation restarts the run."""
+    origins = _source_origins.get()
+    if origins is not None:
+        identity = source_identity(original)
+        if member is not None:
+            identity = json.dumps([identity, str(member)], ensure_ascii=False)
+        origins[str(Path(path).resolve())] = identity
+
+
+@contextmanager
+def template_source(path):
+    token = _source_scope.set(source_identity(path))
+    try:
+        yield
+    finally:
+        _source_scope.reset(token)
+
+
+def file_template_source(function):
+    """Scope a single-file reader without changing its arguments or display names."""
+    signature = inspect.signature(function)
+    parameter = next(iter(signature.parameters))
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if not active():
+            return function(*args, **kwargs)
+        path = signature.bind(*args, **kwargs).arguments[parameter]
+        with template_source(path):
+            return function(*args, **kwargs)
+    return wrapped
 
 
 class TemplateSelectionRequired(Exception):
@@ -176,6 +218,7 @@ def template_tool(tool):
                 return function(*args, **kwargs)
             token = _current.set((tool, clean_rules(tool, template_rules)))
             notice_token = _sheet_notices.set([])
+            origins_token = _source_origins.set({})
             try:
                 result = function(*args, **kwargs)
                 notices = _sheet_notices.get()
@@ -184,6 +227,7 @@ def template_tool(tool):
                     warnings.extend(n for n in notices if n not in warnings)
                 return result
             finally:
+                _source_origins.reset(origins_token)
                 _sheet_notices.reset(notice_token)
                 _current.reset(token)
         signature = inspect.signature(function)
@@ -261,6 +305,7 @@ def request_selection(sheets, roles, *, file="", message="请选择原表对应�
         described.append({"key": "_ignore", "label": "此工作表不是本次业务数据，不参与处理", "fields": {}, "required": []})
     previews = [{"name": _title(ws), "rows": preview(ws)} for ws in sheets]
     raise TemplateSelectionRequired({"tool": tool, "file": str(file), "message": message, "row": row,
+        "choice_key": sheet_choice_key(sheets, file),
         "selected_sheet": selected_sheet,
         "suggested_role": roles[0] if len(roles) == 1 else suggest_role(described, previews),
         "roles": described,
@@ -302,7 +347,7 @@ def assigned_role(sheet, roles, *, confirmed_only=False, file="", source_sheets=
 
 
 def sheet_choice_key(sheets, file):
-    return hashlib.sha256(json.dumps([str(file), [_title(ws) for ws in sheets]], ensure_ascii=False).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([_source_scope.get() or str(file), [_title(ws) for ws in sheets]], ensure_ascii=False).encode()).hexdigest()
 
 
 def current_sheet_choices(sheets, file):
@@ -644,7 +689,7 @@ def save_choice(tool, rules, issue, payload):
                               "file": issue.get("file", ""), "headers": list(values),
                               "required": list(spec["required"]), "one_of": list(spec.get("one_of", []))})
     # 列确认窗口允许换页时，同步本次页选择，避免继续处理又被旧的页选择带回。
-    scope = hashlib.sha256(json.dumps([str(issue.get("file", "")), [s["name"] for s in issue["sheets"]]], ensure_ascii=False).encode()).hexdigest()
+    scope = issue.get("choice_key") or hashlib.sha256(json.dumps([str(issue.get("file", "")), [s["name"] for s in issue["sheets"]]], ensure_ascii=False).encode()).hexdigest()
     choices = rules.get("sheet_choices", {})
     if role in choices.get(scope, {}):
         rules["sheet_choices"] = {**choices, scope: {**choices[scope], role: sheet["name"]}}

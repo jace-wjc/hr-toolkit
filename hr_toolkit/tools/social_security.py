@@ -25,6 +25,7 @@ from typing import Any, Callable
 from hr_toolkit import runlog
 from openpyxl import load_workbook
 from hr_toolkit.common.template_mapping import (
+    file_template_source,
     template_tool, choose_sheet, map_sheet, active, request_selection,
     request_sheet_selection, choose_content_sheet, unused_sheet_notices,
 )
@@ -502,6 +503,7 @@ def _extract_archive_files(archive_path: Path, temp_dir: Path, warnings: list[st
     return [path for path in files if not _is_non_source_excel(path)]
 
 
+@file_template_source
 def _read_roster(roster_path: Path, temp_dir: Path) -> dict[str, RosterPerson]:
     if roster_path.suffix.lower() == ".xls" and _is_binary_xls(roster_path):
         return _read_xls_roster(roster_path)
@@ -548,6 +550,7 @@ def _read_roster(roster_path: Path, temp_dir: Path) -> dict[str, RosterPerson]:
         workbook.close()
 
 
+@file_template_source
 def _read_xls_roster(roster_path: Path) -> dict[str, RosterPerson]:
     try:
         import xlrd  # type: ignore[import-not-found]
@@ -609,6 +612,7 @@ def _find_xls_roster_header_row(sheet) -> int | None:
     return None
 
 
+@file_template_source
 def _read_payment_file(file_path: Path) -> list[SocialPaymentLine]:
     context = _source_context(file_path)
     if file_path.suffix.lower() == ".xls":
@@ -641,6 +645,7 @@ def _read_payment_file(file_path: Path) -> list[SocialPaymentLine]:
         workbook.close()
 
 
+@file_template_source
 def _read_xls_payment_file(file_path: Path, context: SourceContext) -> list[SocialPaymentLine]:
     try:
         import xlrd  # type: ignore[import-not-found]

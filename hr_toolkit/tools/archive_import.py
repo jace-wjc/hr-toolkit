@@ -11,6 +11,7 @@ _OTHER_PART_SEPARATOR = re.compile(r"[；;]+")
 
 import shutil
 from hr_toolkit.common.run_temp import temporary_directory
+from contextlib import closing
 from copy import copy
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
@@ -19,6 +20,7 @@ from typing import Any, Callable
 
 from openpyxl import Workbook, load_workbook
 from hr_toolkit.common.template_mapping import (
+    file_template_source, template_source,
     template_tool, choose_sheet, map_sheet, active, request_sheet_selection,
     unused_sheet_notices, current_sheet_choices, assigned_role,
 )
@@ -522,6 +524,7 @@ def _iter_excel_input_files(input_path: Path, temp_dir: Path, warnings: list[str
     return files
 
 
+@file_template_source
 def _read_transfer_file(file_path: Path) -> tuple[list[ArchiveTransferRecord], list[str]]:
     workbook = load_workbook(file_path, data_only=False)
     warnings: list[str] = []
@@ -1395,7 +1398,7 @@ def _read_archive_summary_records(
         _check_archive_cancelled(cancelled)
         workbook = load_workbook(summary_file, data_only=False)
         pending_format_sheets: list[Worksheet] = []
-        try:
+        with closing(workbook), template_source(summary_file):
             choices = current_sheet_choices(workbook.worksheets, summary_file.name)
             used_sheets = set()
             for ws in workbook.worksheets:
@@ -1467,8 +1470,6 @@ def _read_archive_summary_records(
                     format_templates,
                     warnings,
                 )
-        finally:
-            workbook.close()
     return records, format_templates
 
 

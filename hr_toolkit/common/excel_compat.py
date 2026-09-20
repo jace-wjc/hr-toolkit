@@ -180,6 +180,8 @@ def ensure_xlsx_workbook(
     output_dir = _conversion_dir(path, temp_dir, preserve_formatting=preserve_formatting)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{path.stem}.xlsx"
+    from .template_mapping import register_source_origin
+    register_source_origin(output_path, path)
     if output_path.exists():
         if _is_usable_xlsx(output_path):
             return output_path

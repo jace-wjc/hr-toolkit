@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from openpyxl import load_workbook
 from hr_toolkit.common.template_mapping import (
+    file_template_source,
     template_tool, choose_sheet, map_sheet, active, request_selection,
     request_sheet_selection, unused_sheet_notices,
 )
@@ -286,6 +287,7 @@ def _is_non_source_file(path: Path) -> bool:
     return any(keyword in path.name for keyword in ("模板", "台账", "汇总"))
 
 
+@file_template_source
 def _read_roster(
     workbook_path: Path,
     source_name: str,
@@ -416,6 +418,7 @@ def _cell_fill_rgb(cell) -> str:
     return (color.rgb or "").upper()
 
 
+@file_template_source
 def _read_policy_file(
     file_path: Path,
     warnings: list[str],
@@ -726,6 +729,7 @@ def _write_warning_sheet(
     ws.freeze_panes = "A2"
 
 
+@file_template_source
 def _write_roster_warning_workbook(
     source_workbook: Path,
     output_file: Path,

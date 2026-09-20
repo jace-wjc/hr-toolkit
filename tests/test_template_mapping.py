@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+from io import BytesIO
 import json
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from zipfile import ZipFile
 
 from openpyxl import Workbook
 
@@ -35,6 +37,51 @@ def invoke(tool, callback, rules=None):
 
 
 class TemplateMappingTest(unittest.TestCase):
+    def test_same_basename_files_do_not_share_absence_confirmation(self):
+        from hr_toolkit.tools.personnel_change_merge import _read_change_file, TARGET_SHEETS
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / company / "异动.xlsx" for company in ("甲公司", "乙公司")]
+            for path in paths:
+                path.parent.mkdir()
+                wb = Workbook()
+                wb.active.append(["序号", "姓名", "入职日期"])
+                wb.save(path)
+                wb.close()
+            with self.assertRaises(TemplateSelectionRequired) as first:
+                invoke("personnel_change_merge", lambda: _read_change_file(paths[0]))
+            saved = save_choice("personnel_change_merge", {}, first.exception.payload,
+                                {"sheet_selections": dict.fromkeys(TARGET_SHEETS)})
+            invoke("personnel_change_merge", lambda: _read_change_file(paths[0]), saved)
+            with self.assertRaises(TemplateSelectionRequired):
+                invoke("personnel_change_merge", lambda: _read_change_file(paths[1]), saved)
+
+    def test_archive_and_conversion_identity_survives_retry(self):
+        from hr_toolkit.common.inputs import extract_archive_excel_files
+        from hr_toolkit.common.excel_compat import ensure_xlsx_workbook
+        from hr_toolkit.tools.personnel_change_merge import _read_change_file, TARGET_SHEETS
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "资料.zip"
+            wb = Workbook()
+            wb.active.append(["说明"])
+            content = BytesIO()
+            wb.save(content)
+            wb.close()
+            with ZipFile(archive, "w") as packed:
+                # XLSX content with an XLS suffix exercises the conversion path.
+                for name in ("甲/异动.xls", "乙/异动.xls"):
+                    packed.writestr(name, content.getvalue())
+            def read(index):
+                with tempfile.TemporaryDirectory() as work:
+                    files = extract_archive_excel_files(archive, Path(work), [])
+                    return _read_change_file(ensure_xlsx_workbook(files[index], Path(work)))
+            with self.assertRaises(TemplateSelectionRequired) as first:
+                invoke("personnel_change_merge", lambda: read(0))
+            saved = save_choice("personnel_change_merge", {}, first.exception.payload,
+                                {"sheet_selections": dict.fromkeys(TARGET_SHEETS)})
+            invoke("personnel_change_merge", lambda: read(0), saved)
+            with self.assertRaises(TemplateSelectionRequired):
+                invoke("personnel_change_merge", lambda: read(1), saved)
+
     def test_extra_sheet_is_logged_without_interrupting_resolved_roles(self):
         ws = sheet(["说明"], name="说明")
         wb = ws.parent

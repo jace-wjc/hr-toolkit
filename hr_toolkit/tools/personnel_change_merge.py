@@ -18,6 +18,7 @@ from typing import Any, Callable
 from hr_toolkit import runlog
 from openpyxl import Workbook, load_workbook
 from hr_toolkit.common.template_mapping import (
+    file_template_source,
     template_tool, choose_sheet, map_sheet, active, resolve_sheet_roles,
     unused_sheet_notices,
 )
@@ -516,6 +517,7 @@ def _resolve_summary_sources(template_path: str | Path | None, temp_dir: Path) -
     return summary_sources
 
 
+@file_template_source
 def _read_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow]], list[str]]:
     warnings: list[str] = []
     rows_by_sheet: dict[str, list[ChangeRow]] = {sheet_name: [] for sheet_name in TARGET_SHEETS}
@@ -546,6 +548,7 @@ def _read_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow]], list
     return rows_by_sheet, warnings
 
 
+@file_template_source
 def _read_summary_change_file(file_path: Path) -> tuple[dict[str, list[ChangeRow]], list[str]]:
     warnings: list[str] = []
     rows_by_sheet: dict[str, list[ChangeRow]] = {sheet_name: [] for sheet_name in TARGET_SHEETS}
@@ -1202,6 +1205,7 @@ def _update_period_titles(workbook, period: str | None) -> None:
                 ws.cell(1, 1).value = f"{period}{value}"
 
 
+@file_template_source
 def _write_updated_roster(
     analysis_template: Path,
     output_file: Path,

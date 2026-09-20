@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from openpyxl import load_workbook
 from hr_toolkit.common.template_mapping import (
+    file_template_source,
     template_tool, choose_sheet, map_sheet, resolve_sheet_roles, unused_sheet_notices,
 )
 from openpyxl.cell.cell import MergedCell
@@ -206,6 +207,7 @@ class SalarySheetLayout:
 
 
 @template_tool("salary_split")
+@file_template_source
 def split_salary_by_company(
     input_path: str | Path,
     output_dir: str | Path,

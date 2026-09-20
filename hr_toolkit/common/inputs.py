@@ -150,6 +150,9 @@ def extract_archive_excel_files(
         for path in extract_dir.rglob("*")
         if path.is_file() and not path.is_symlink() and is_supported_excel_file(path)
     ]
+    from .template_mapping import register_source_origin
+    for path in files:
+        register_source_origin(path, archive_path, path.relative_to(extract_dir).as_posix())
     return sorted(files, key=lambda path: _relative_sort_key(path, extract_dir))
 
 

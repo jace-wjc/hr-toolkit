@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from openpyxl import load_workbook
 from hr_toolkit.common.template_mapping import (
+    file_template_source,
     template_tool, choose_sheet, map_sheet, assigned_role, active,
     request_selection, ignored_sheet, request_sheet_selection, current_sheet_choices, unused_sheet_notices, TemplateSelectionRequired,
 )
@@ -454,6 +455,7 @@ def _is_non_source_file(path: Path) -> bool:
     return any(keyword in path.name for keyword in ("模板", "汇总表"))
 
 
+@file_template_source
 def _read_statistics_file(file_path: Path, warnings: list[str]) -> tuple[list[AttendanceSourceRow], list[ReportRecord], list[ReportRecord]]:
     attendance_rows: list[AttendanceSourceRow] = []
     weekly_records: list[ReportRecord] = []
@@ -1135,6 +1137,7 @@ def _read_report_sheet(grid: SheetGrid, headers: dict[str, int], header_row: int
     return records
 
 
+@file_template_source
 def _read_expected_reporters(staff_path: Path, temp_dir: Path, warnings: list[str]) -> list[ExpectedReporter]:
     workbook_path = ensure_xlsx_workbook(staff_path, temp_dir)
     workbook = load_workbook(workbook_path, data_only=True, read_only=True)
