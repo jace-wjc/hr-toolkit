@@ -521,6 +521,11 @@ class AppController(QObject):
         payload = []
         for source in self._spec.fields:
             field = dict(source)
+            if (self._spec.tool_id == "folder_rename"
+                    and values.get("rename_mode", "append") in {"append", "remove"}
+                    and field["id"] == "target_name"):
+                field["label"] = "姓名/原名称（可选）"
+                field["placeholder"] = "留空处理所选文件类型的全部项目"
             if self._spec.tool_id == "folder_rename" and values.get("rename_mode") == "replace_text":
                 if field["id"] == "rename_text":
                     field["label"] = "原文字"
@@ -1274,6 +1279,8 @@ class AppController(QObject):
 
     @Property(str, notify=specChanged)
     def supportDropHint(self) -> str:
+        if self._spec.tool_id == "material_collector":
+            return "可拖入" + selection_hint(self._spec.support_mode) + "；已填写目标人员时可不选"
         return "可拖入" + selection_hint(self._spec.support_mode) if self.hasSupportField else ""
 
     @Property("QVariantMap", notify=selectionStateChanged)

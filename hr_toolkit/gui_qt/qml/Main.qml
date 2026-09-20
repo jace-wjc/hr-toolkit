@@ -1167,7 +1167,7 @@ ApplicationWindow {
                                             Text {
                                                 x: 74
                                                 width: Math.max(0, materialOptionsColumn.width - x)
-                                                text: "输入姓名或身份证（多人用逗号隔开，如“张三, 李四”）；留空则按名单表格处理"
+                                                text: "可选：留空时使用员工名单 Excel；填写时以此处人员为准"
                                                 color: root.textFaint
                                                 font.pixelSize: 11
                                                 wrapMode: Text.Wrap
