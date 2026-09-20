@@ -252,6 +252,7 @@ SPECS: tuple[ToolUiSpec, ...] = (
                 {"label": "追加文字", "value": "append"},
                 {"label": "删除结尾文字", "value": "remove"},
                 {"label": "修改单人名称", "value": "replace"},
+                {"label": "替换指定文字", "value": "replace_text"},
                 {"label": "按 Excel 人名顺序批量重命名", "value": "excel"}
             ]},
             {"id": "target_name", "kind": "text", "label": "姓名/原名称", "default": ""},
@@ -396,6 +397,7 @@ def build_invocation(
             "append": "追加文字",
             "remove": "删除结尾文字",
             "replace": "修改单人名称",
+            "replace_text": "替换指定文字",
             "excel": "按 Excel 人名顺序批量重命名",
         }
         description = f"{project_tool_name}-{rename_labels.get(str(values.get('rename_mode') or 'append'), '追加文字')}"
@@ -495,6 +497,20 @@ def build_invocation(
                 ]
                 kwargs["expected_warnings"] = list(preview_result.get("warnings", []))
             return ToolInvocation(**base, function_module="hr_toolkit.tools.folder_rename", function_name="rename_files_by_excel", args=(), kwargs=kwargs, preview=preview)
+        if mode == "replace_text":
+            kwargs = {
+                "root_dir": inputs[0], "mode": mode,
+                "text": str(values.get("rename_text") or ""),
+                "replacement_name": str(values.get("replacement_name") or ""),
+                "file_type": file_type, "dry_run": preview,
+            }
+            if not preview and preview_result is not None:
+                kwargs["expected_operations"] = [
+                    (Path(item["source"]).name, Path(item["target"]).name)
+                    for item in preview_result.get("operations", [])
+                ]
+                kwargs["expected_warnings"] = list(preview_result.get("warnings", []))
+            return ToolInvocation(**base, function_module="hr_toolkit.tools.folder_rename", function_name="rename_person_folders", args=(), kwargs=kwargs, preview=preview)
         return ToolInvocation(
             **base,
             function_module="hr_toolkit.tools.folder_rename",

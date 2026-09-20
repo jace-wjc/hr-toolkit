@@ -8,24 +8,278 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
 from hr_toolkit.cli import main as cli_main
 from hr_toolkit.tools.folder_rename import (
     FILE_TYPE_ALL,
+    FILE_TYPE_EXTENSIONS,
     FILE_TYPE_FOLDER,
     FILE_TYPE_IMAGE,
     MODE_APPEND,
     MODE_EXCEL_BATCH,
     MODE_REMOVE,
     MODE_REPLACE,
+    MODE_REPLACE_TEXT,
+    _rename_text_no_replace,
     rename_files_by_excel,
     rename_person_folders,
 )
 
 
 class FolderRenameTest(unittest.TestCase):
+    def test_replace_text_all_types_preserve_contents_extensions_and_unmatched_items(self) -> None:
+        for file_type in FILE_TYPE_EXTENSIONS:
+            with self.subTest(file_type=file_type), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                folder = root / "张三-劳动合同.v2"
+                folder.mkdir()
+                (folder / "劳动合同.txt").write_bytes(b"nested-content")
+                names = ["王五-劳动合同.PDF", "李四-劳动合同.xlsx", "赵六-劳动合同.JpG",
+                         "其他-劳动合同.bin", "劳动合同", "不匹配.pdf",
+                         ".隐藏-劳动合同.pdf", "~$劳动合同.xlsx"]
+                names += ["资料-劳动合同" + ext for ext in
+                          dict.fromkeys(ext for extensions in FILE_TYPE_EXTENSIONS.values() for ext in extensions)]
+                for name in names:
+                    (root / name).write_bytes(name.encode("utf-8"))
+                expected = {}
+                if file_type in ("folder", "all"):
+                    expected[folder.name] = "张三-资金合同.v2"
+                for name in names:
+                    path = root / name
+                    if name.startswith((".", "~$")) or "劳动合同" not in path.stem:
+                        continue
+                    if file_type == "all" or (file_type != "folder" and path.suffix.lower() in FILE_TYPE_EXTENSIONS[file_type]):
+                        expected[name] = name.replace("劳动合同", "资金合同")
+                kwargs = dict(mode=MODE_REPLACE_TEXT, text="劳动合同", replacement_name="资金合同",
+                              file_type=file_type, target_name="../ignored-hidden-field")
+                preview = rename_person_folders(root, **kwargs, dry_run=True)
+                self.assertEqual({op.source.name: op.target.name for op in preview.operations}, expected)
+                self.assertTrue(all((root / name).exists() for name in names))
+                result = rename_person_folders(root, **kwargs,
+                    expected_operations=[(op.source.name, op.target.name) for op in preview.operations],
+                    expected_warnings=preview.warnings)
+                self.assertEqual(result.operations, preview.operations)
+                for name in names:
+                    target = root / expected.get(name, name)
+                    self.assertEqual(target.read_bytes(), name.encode("utf-8"))
+                    self.assertEqual(target.suffix, Path(name).suffix)
+                    if name in expected:
+                        self.assertFalse((root / name).exists())
+                target_folder = root / expected.get(folder.name, folder.name)
+                self.assertEqual((target_folder / "劳动合同.txt").read_bytes(), b"nested-content")
+
+    def test_replace_text_matches_all_occurrences_and_preserves_literal_spaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("Old Old.PDF", "old Old.v2.pdf", "Only.pdf"):
+                (root / name).write_bytes(b"content")
+            result = rename_person_folders(root, mode=MODE_REPLACE_TEXT, file_type="pdf",
+                                          text="Old", replacement_name="New")
+            self.assertEqual(result.operation_count, 2)
+            self.assertTrue((root / "New New.PDF").is_file())
+            self.assertTrue((root / "old New.v2.pdf").is_file())
+            rename_person_folders(root, mode=MODE_REPLACE_TEXT, file_type="pdf",
+                                  text=" New", replacement_name=" - New")
+            self.assertTrue((root / "New - New.PDF").is_file())
+            preview = rename_person_folders(root, mode=MODE_REPLACE_TEXT, file_type="pdf",
+                                            text="PDF", replacement_name="txt", dry_run=True)
+            self.assertEqual(preview.operation_count, 0)
+            self.assertIn("没有找到", preview.warnings[0])
+
+    def test_replace_text_does_not_prioritize_an_exact_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("张三", "张三-劳动合同", "王五-身份证"):
+                (root / name).mkdir()
+            result = rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="张三", replacement_name="王五")
+            self.assertEqual(result.operation_count, 2)
+            self.assertEqual({path.name for path in root.iterdir()}, {"王五", "王五-劳动合同", "王五-身份证"})
+
+    def test_replace_text_blocks_entire_batch_for_existing_or_duplicate_targets(self) -> None:
+        cases = [
+            (["a-old.pdf", "b-old.pdf", "b-new.pdf"], "old", "new", "pdf", "已存在"),
+            (["a-old.pdf", "B-NEW.PDF", "b-old.pdf"], "old", "new", "pdf", "已存在"),
+            (["xaaa.pdf", "xaaaa.pdf"], "aa", "a", "pdf", "重复"),
+            (["xaaaA.pdf", "xaaaaa.PDF"], "aa", "a", "pdf", "重复"),
+        ]
+        for names, text, replacement, file_type, message in cases:
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for name in names:
+                    (root / name).write_bytes(name.encode())
+                before = {p.name: p.read_bytes() for p in root.iterdir()}
+                for preview in (True, False):
+                    with self.assertRaisesRegex(ValueError, message):
+                        rename_person_folders(root, mode=MODE_REPLACE_TEXT, text=text,
+                                              replacement_name=replacement, file_type=file_type, dry_run=preview)
+                    self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, before)
+
+    def test_replace_text_existing_folder_blocks_pdf_and_empty_folder_is_not_overwritten(self) -> None:
+        for folder_source in (False, True):
+            with self.subTest(folder_source=folder_source), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "old.pdf"
+                source.mkdir() if folder_source else source.write_bytes(b"source")
+                (root / "new.pdf").mkdir()
+                with self.assertRaisesRegex(ValueError, "已存在"):
+                    rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="new",
+                                          file_type="folder" if folder_source else "pdf")
+                self.assertTrue(source.exists())
+                self.assertEqual(list((root / "new.pdf").iterdir()), [])
+
+    def test_replace_text_invalid_names_and_inputs_never_mutate(self) -> None:
+        for replacement in ("bad/name", "bad\\name", "bad:name", 'bad"name', "bad|name", "bad?name", "bad*name",
+                            "bad<name", "bad>name", "bad\x00name", "CON", "NUL.txt", "..", ".", "bad.", "bad ", ""):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "old").mkdir()
+                with self.assertRaises(ValueError):
+                    rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name=replacement)
+                self.assertEqual([p.name for p in root.iterdir()], ["old"])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for kwargs in (dict(text="", replacement_name="new"), dict(text="old", replacement_name="new", file_type="unknown")):
+                with self.assertRaises(ValueError):
+                    rename_person_folders(root, mode=MODE_REPLACE_TEXT, **kwargs)
+            unchanged = rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="old")
+            self.assertEqual(unchanged.operation_count, 0)
+            self.assertIn("相同", unchanged.warnings[0])
+
+    def test_replace_text_refuses_to_add_an_extension_to_extensionless_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "old").write_bytes(b"content")
+            with self.assertRaisesRegex(ValueError, "扩展名"):
+                rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="new.txt", file_type="all")
+            self.assertEqual((root / "old").read_bytes(), b"content")
+
+    def test_replace_text_rejects_changed_preview_before_any_rename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "old.pdf").write_bytes(b"one")
+            kwargs = dict(mode=MODE_REPLACE_TEXT, text="old", replacement_name="new", file_type="pdf")
+            preview = rename_person_folders(root, **kwargs, dry_run=True)
+            (root / "another-old.pdf").write_bytes(b"two")
+            with self.assertRaisesRegex(RuntimeError, "重新预览"):
+                rename_person_folders(root, **kwargs, expected_operations=[(op.source.name, op.target.name) for op in preview.operations],
+                                      expected_warnings=preview.warnings)
+            self.assertEqual({p.name for p in root.iterdir()}, {"old.pdf", "another-old.pdf"})
+            with self.assertRaisesRegex(RuntimeError, "重新预览"):
+                rename_person_folders(root, **kwargs, expected_warnings=["changed"])
+
+    def test_replace_text_native_rename_refuses_existing_targets(self) -> None:
+        for is_folder in (False, True):
+            with self.subTest(is_folder=is_folder), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source, target = root / "old", root / "new"
+                if is_folder:
+                    source.mkdir()
+                    target.mkdir()
+                    (source / "record.txt").write_bytes(b"source")
+                else:
+                    source.write_bytes(b"source")
+                    target.write_bytes(b"target")
+                with self.assertRaises(OSError):
+                    _rename_text_no_replace(source, target)
+                self.assertTrue(source.exists())
+                if is_folder:
+                    self.assertEqual((source / "record.txt").read_bytes(), b"source")
+                    self.assertEqual(list(target.iterdir()), [])
+                else:
+                    self.assertEqual(source.read_bytes(), b"source")
+                    self.assertEqual(target.read_bytes(), b"target")
+
+    def test_replace_text_runtime_race_stops_without_overwriting_or_processing_remaining(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("a-old.pdf", "b-old.pdf", "c-old.pdf"):
+                (root / name).write_bytes(name.encode())
+            def race(source, target):
+                if source.name == "b-old.pdf":
+                    target.write_bytes(b"appeared-after-check")
+                _rename_text_no_replace(source, target)
+            with patch("hr_toolkit.tools.folder_rename._rename_text_no_replace", side_effect=race):
+                with self.assertRaisesRegex(RuntimeError, "已完成 1 项.*未处理 2 项"):
+                    rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="new", file_type="pdf")
+            self.assertEqual((root / "a-new.pdf").read_bytes(), b"a-old.pdf")
+            self.assertEqual((root / "b-new.pdf").read_bytes(), b"appeared-after-check")
+            self.assertEqual((root / "b-old.pdf").read_bytes(), b"b-old.pdf")
+            self.assertEqual((root / "c-old.pdf").read_bytes(), b"c-old.pdf")
+
+    def test_replace_text_windows_uses_existing_non_overwriting_os_rename(self) -> None:
+        source, target = Path("old.pdf"), Path("new.pdf")
+        with patch("hr_toolkit.tools.folder_rename.sys.platform", "win32"), \
+             patch("hr_toolkit.tools.folder_rename.os.rename", side_effect=FileExistsError) as rename:
+            with self.assertRaises(FileExistsError):
+                _rename_text_no_replace(source, target)
+            rename.assert_called_once_with(source, target)
+
+    def test_replace_text_cancellation_stops_remaining_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a-old.pdf").write_bytes(b"first")
+            (root / "b-old.pdf").write_bytes(b"second")
+            with self.assertRaisesRegex(RuntimeError, "已停止.*已完成 1 项.*未处理 1 项"):
+                rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="new",
+                                      file_type="pdf", cancelled=lambda: (root / "a-new.pdf").exists())
+            self.assertEqual((root / "a-new.pdf").read_bytes(), b"first")
+            self.assertEqual((root / "b-old.pdf").read_bytes(), b"second")
+
+    def test_replace_text_unsupported_exclusive_rename_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "old.pdf").write_bytes(b"original")
+            with patch("hr_toolkit.tools.folder_rename.sys.platform", "unsupported"), \
+                 self.assertRaisesRegex(RuntimeError, "不支持安全.*已完成 0 项"):
+                rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="new", file_type="pdf")
+            self.assertEqual((root / "old.pdf").read_bytes(), b"original")
+            self.assertFalse((root / "new.pdf").exists())
+
+    def test_replace_text_links_are_blocked_without_modifying_referents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "items"
+            root.mkdir()
+            outside = base / "outside"
+            outside.mkdir()
+            (outside / "record.txt").write_bytes(b"original")
+            try:
+                (root / "old").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlink creation is unavailable")
+            with self.assertRaisesRegex(ValueError, "链接"):
+                rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="new")
+            self.assertTrue((root / "old").is_symlink())
+            self.assertEqual((outside / "record.txt").read_bytes(), b"original")
+            (root / "old").unlink()
+            (root / "old").mkdir()
+            (root / "new").symlink_to(base / "missing")
+            with self.assertRaisesRegex(ValueError, "已存在"):
+                rename_person_folders(root, mode=MODE_REPLACE_TEXT, text="old", replacement_name="new")
+            self.assertTrue((root / "old").is_dir())
+            self.assertTrue((root / "new").is_symlink())
+
+    def test_cli_replace_text_preview_and_apply_keep_type_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "old.PDF").write_bytes(b"pdf")
+            (root / "old.jpg").write_bytes(b"image")
+            args = ["folder-rename", "--root", str(root), "--mode", "replace_text", "--file-type", "pdf",
+                    "--text", "old", "--replacement", "new", "--json"]
+            for apply in (False, True):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(cli_main(args + (["--apply"] if apply else [])), 0)
+                payload = json.loads(output.getvalue())
+                self.assertEqual(payload["operation_count"], 1)
+                self.assertEqual(payload["dry_run"], not apply)
+                self.assertEqual(payload["operations"][0]["target_name"], "new.PDF")
+                self.assertEqual((root / ("new.PDF" if apply else "old.PDF")).read_bytes(), b"pdf")
+                self.assertEqual((root / "old.jpg").read_bytes(), b"image")
+
     @staticmethod
     def _write_name_workbook(path: Path, names: list[str], *, header_row: int = 1) -> None:
         workbook = Workbook()

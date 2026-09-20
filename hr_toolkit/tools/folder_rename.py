@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import filecmp
+import os
 import re
+import stat
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -15,8 +18,9 @@ TOOL_NAME = "需求8-人员资料文件夹改名"
 MODE_APPEND = "append"
 MODE_REMOVE = "remove"
 MODE_REPLACE = "replace"
+MODE_REPLACE_TEXT = "replace_text"
 MODE_EXCEL_BATCH = "excel"
-MODES = {MODE_APPEND, MODE_REMOVE, MODE_REPLACE}
+MODES = {MODE_APPEND, MODE_REMOVE, MODE_REPLACE, MODE_REPLACE_TEXT}
 WINDOWS_INVALID_CHARS = set('<>:"/\\|?*')
 WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -91,6 +95,8 @@ def rename_person_folders(
     file_type: str = FILE_TYPE_FOLDER,
     dry_run: bool = False,
     cancelled: Callable[[], bool] | None = None,
+    expected_operations: list[tuple[str, str]] | None = None,
+    expected_warnings: list[str] | None = None,
 ) -> FolderRenameResult:
     _check_cancelled(cancelled)
     root_dir = Path(root_dir).expanduser().resolve()
@@ -107,6 +113,12 @@ def rename_person_folders(
         replacement_name=replacement_name,
         file_type=file_type,
     )
+    if mode == MODE_REPLACE_TEXT:
+        actual = [(operation.source.name, operation.target.name) for operation in operations]
+        if (expected_operations is not None and actual != [tuple(pair) for pair in expected_operations]) or (
+            expected_warnings is not None and warnings != expected_warnings
+        ):
+            raise RuntimeError("待改名项目在预览确认后发生了变化，本次未执行。请重新预览并确认。")
     result = FolderRenameResult(
         root_dir=root_dir,
         mode=mode,
@@ -115,6 +127,9 @@ def rename_person_folders(
         warnings=warnings,
     )
     if dry_run:
+        return result
+    if mode == MODE_REPLACE_TEXT:
+        _execute_text_operations(operations, cancelled=cancelled)
         return result
 
     completed: list[FolderRenameOperation] = []
@@ -435,6 +450,8 @@ def _plan_operations(
     replacement_name: str,
     file_type: str = FILE_TYPE_FOLDER,
 ) -> tuple[list[FolderRenameOperation], list[str]]:
+    if mode == MODE_REPLACE_TEXT:
+        return _plan_text_operations(root_dir, text, replacement_name, file_type)
     text = text.strip()
     target_name = target_name.strip()
     replacement_name = replacement_name.strip()
@@ -493,6 +510,101 @@ def _plan_operations(
 
     operations = _filter_invalid_operations(planned, warnings)
     return operations, warnings
+
+
+def _plan_text_operations(
+    root_dir: Path, text: str, replacement: str, file_type: str,
+) -> tuple[list[FolderRenameOperation], list[str]]:
+    """独立规划文字替换，沿用现有类型筛选；任何冲突均在执行前阻止整批。"""
+    if file_type not in FILE_TYPE_EXTENSIONS:
+        raise ValueError(f"不支持的文件类型：{file_type}")
+    if not text:
+        raise ValueError("请填写要替换的原文字")
+    if not replacement:
+        raise ValueError("请填写替换后的文字")
+    if text == replacement:
+        return [], ["原文字与替换文字相同，没有需要改名的项目。"]
+
+    operations: list[FolderRenameOperation] = []
+    targets: dict[str, str] = {}
+    # 检查所有目录项，包括不符合类型筛选的项目和失效链接。
+    existing = {path.name.casefold() for path in root_dir.iterdir()}
+    for source in _iter_target_items(root_dir, "", file_type):
+        is_file = source.is_file()
+        name = source.stem if is_file else source.name
+        if text not in name:
+            continue
+        _validate_text_source(source)
+        suffix = source.suffix if is_file else ""
+        target_name = name.replace(text, replacement) + suffix
+        try:
+            operation = _build_operation(source, target_name)
+            if is_file and operation.target.suffix != suffix:
+                raise ValueError("替换后会改变文件扩展名")
+        except ValueError as exc:
+            raise ValueError(f"{source.name} → {target_name}：{exc}；本批次未执行") from exc
+        key = target_name.casefold()
+        if key in targets:
+            raise ValueError(f"{targets[key]}、{source.name} → {target_name}：目标名称重复；本批次未执行")
+        if key in existing:
+            raise ValueError(f"{source.name} → {target_name}：目标已存在；本批次未执行，未覆盖任何项目")
+        targets[key] = source.name
+        operations.append(operation)
+    return operations, [] if operations else ["没有找到包含原文字且符合所选类型的项目。"]
+
+
+def _validate_text_source(source: Path) -> None:
+    info = source.lstat()
+    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        raise ValueError(f"{source.name} 是链接或重解析点，不能进行文字替换")
+    if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+        raise ValueError(f"{source.name} 已不是普通文件或文件夹，请重新预览")
+
+
+def _execute_text_operations(
+    operations: list[FolderRenameOperation], *, cancelled: Callable[[], bool] | None,
+) -> None:
+    for index, operation in enumerate(operations):
+        try:
+            _check_cancelled(cancelled)
+            _validate_text_source(operation.source)
+            if any(path.name.casefold() == operation.target.name.casefold()
+                   for path in operation.target.parent.iterdir()):
+                raise FileExistsError(f"目标 {operation.target.name} 执行前已存在，未覆盖")
+            _rename_text_no_replace(operation.source, operation.target)
+        except (OSError, ValueError, RuntimeError) as exc:
+            completed = _warning_item_list([item.target.name for item in operations[:index]]) or "无"
+            pending = _warning_item_list([item.source.name for item in operations[index:]])
+            raise RuntimeError(
+                f"{operation.source.name} → {operation.target.name} 改名失败，已停止：{exc}。"
+                f"已完成 {index} 项：{completed}；未处理 {len(operations) - index} 项：{pending}。"
+                "请检查结果并重新预览。"
+            ) from exc
+
+
+def _rename_text_no_replace(source: Path, target: Path) -> None:
+    """仅供新模式使用；使用系统的排他改名，避免检查后目标出现时被覆盖。"""
+    if sys.platform == "win32":
+        # Python 在 Windows 上使用不带替换标志的 MoveFileExW，兼容 Win7。
+        os.rename(source, target)
+        return
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin" and hasattr(libc, "renamex_np"):
+        rename = libc.renamex_np
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        args = (os.fsencode(source), os.fsencode(target), 0x00000004)  # RENAME_EXCL
+    elif sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        rename = libc.renameat2
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        args = (-100, os.fsencode(source), -100, os.fsencode(target), 1)  # AT_FDCWD, RENAME_NOREPLACE
+    else:
+        raise OSError("当前系统不支持安全的排他改名，本次未改名")
+    rename.restype = ctypes.c_int
+    if rename(*args) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(target))
 
 
 def _iter_target_items(root_dir: Path, target_name: str, file_type: str) -> list[Path]:

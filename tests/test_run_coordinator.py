@@ -44,6 +44,40 @@ def _fake_folder_rename(root_dir, *, mode, cancelled=None, progress_callback=Non
 
 
 class ProjectRunCoordinatorTests(unittest.TestCase):
+    def test_replace_text_confirmed_preview_runs_on_project_copy(self) -> None:
+        from hr_toolkit.tools.folder_rename import rename_person_folders
+        from hr_toolkit.project_store import CATEGORY_RESULTS
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "资料"
+            source.mkdir()
+            (source / "old.pdf").write_bytes(b"pdf-source")
+            (source / "old.jpg").write_bytes(b"image-source")
+            kwargs = {"mode": "replace_text", "text": "old", "replacement_name": "new", "file_type": "pdf"}
+            preview = rename_person_folders(source, **kwargs, dry_run=True)
+            kwargs["expected_operations"] = [(op.source.name, op.target.name) for op in preview.operations]
+            kwargs["expected_warnings"] = preview.warnings
+            store = ProjectStore.create(root / "project", "测试项目")
+            errors, successes = [], []
+            try:
+                request = RunRequest("folder_rename", "改名", "测试", "替换文字", rename_person_folders, (source,), kwargs)
+                ProjectRunCoordinator()._run(store, request,
+                    RunCallbacks(error=errors.append, success=lambda *args: successes.append(args)), threading.Event())
+                self.assertEqual(errors, [])
+                self.assertEqual(len(successes), 1)
+                self.assertEqual((source / "old.pdf").read_bytes(), b"pdf-source")
+                self.assertEqual((source / "old.jpg").read_bytes(), b"image-source")
+                self.assertFalse((source / "new.pdf").exists())
+                detail = store.get_batch(store.list_batches()[0].id)
+                results = detail.directories[CATEGORY_RESULTS]
+                renamed = list(results.rglob("new.pdf"))
+                self.assertEqual(len(renamed), 1)
+                self.assertEqual(renamed[0].read_bytes(), b"pdf-source")
+                self.assertEqual((renamed[0].parent / "old.jpg").read_bytes(), b"image-source")
+            finally:
+                store.close()
+
     def test_social_roster_mapping_prompt_does_not_create_output(self) -> None:
         from openpyxl import Workbook
         from hr_toolkit.common.template_mapping import TemplateSelectionRequired

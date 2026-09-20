@@ -515,6 +515,11 @@ class AppController(QObject):
         payload = []
         for source in self._spec.fields:
             field = dict(source)
+            if self._spec.tool_id == "folder_rename" and values.get("rename_mode") == "replace_text":
+                if field["id"] == "rename_text":
+                    field["label"] = "原文字"
+                elif field["id"] == "replacement_name":
+                    field["label"] = "替换为"
             if field.get("kind") == "date_range":
                 field["startValue"] = values.get(field["startId"], "")
                 field["endValue"] = values.get(field["endId"], "")
@@ -536,9 +541,9 @@ class AppController(QObject):
             if field_id == "target_name":
                 return mode in {"append", "remove", "replace"}
             if field_id == "rename_text":
-                return mode in {"append", "remove"}
+                return mode in {"append", "remove", "replace_text"}
             if field_id == "replacement_name":
-                return mode == "replace"
+                return mode in {"replace", "replace_text"}
         if self._spec.tool_id == "material_collector" and field_id == "material_types":
             return not bool(values.get("collect_all", True))
         return True

@@ -19,6 +19,7 @@ from hr_toolkit.tools.registry import (
 from .tools.folder_rename import (
     FILE_TYPE_FOLDER,
     MODE_EXCEL_BATCH,
+    MODE_REPLACE_TEXT,
     rename_files_by_excel,
     rename_person_folders,
 )
@@ -115,11 +116,11 @@ def _build_roster_update_parser(subparsers: argparse._SubParsersAction) -> None:
 def _build_folder_rename_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("folder-rename", help="人员资料批量改名（支持 Excel 人名顺序）")
     p.add_argument("-r", "--root", required=True, type=Path, help="需要处理的人员文件夹所在目录")
-    p.add_argument("--mode", required=True, choices=["append", "remove", "replace", MODE_EXCEL_BATCH], help="append=追加文字，remove=删除结尾文字，replace=修改名称，excel=按名单顺序改名")
+    p.add_argument("--mode", required=True, choices=["append", "remove", "replace", MODE_REPLACE_TEXT, MODE_EXCEL_BATCH], help="append=追加文字，remove=删除结尾文字，replace=修改名称，replace_text=按类型替换指定文字，excel=按名单顺序改名")
     p.add_argument("--excel", type=Path, help="excel 模式必填：包含姓名列的 .xlsx/.xls 名单")
-    p.add_argument("--text", default="", help="追加文字或要删除的结尾文字，例如：劳动合同、-劳动合同、_身份证")
+    p.add_argument("--text", default="", help="追加文字、要删除的结尾文字或 replace_text 模式的原文字，例如：劳动合同")
     p.add_argument("--target", default="", help="指定单个项目/原名称；不填时 append/remove 处理全部匹配项")
-    p.add_argument("--replacement", default="", help="replace 模式下的新名称")
+    p.add_argument("--replacement", default="", help="replace 模式下的新名称，或 replace_text 模式下的替换文字")
     p.add_argument("--file-type", default="folder", choices=["folder", "pdf", "image", "document", "all"], help="要改名的类型：folder=文件夹，pdf=PDF，image=图片，document=文档，all=全部")
     p.add_argument("--apply", action="store_true", help="实际执行改名；不加时只预览")
     p.add_argument("--json", action="store_true", help="以 JSON 输出执行结果，便于 ScriptHub/Web 集成")

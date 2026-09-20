@@ -208,6 +208,38 @@ class QtFormSpecTests(unittest.TestCase):
         self.assertEqual(confirmed.kwargs["expected_operations"], [("1.jpg", "张三.jpg")])
         self.assertEqual(confirmed.kwargs["expected_warnings"], ["提醒"])
 
+    def test_replace_text_preserves_type_and_passes_confirmed_preview_without_hidden_target(self) -> None:
+        from hr_toolkit.tools.folder_rename import FILE_TYPE_EXTENSIONS
+
+        for file_type in FILE_TYPE_EXTENSIONS:
+            with self.subTest(file_type=file_type):
+                values = {"rename_mode": "replace_text", "rename_text": " old ",
+                          "replacement_name": " new ", "file_type": file_type, "target_name": "../stale"}
+                preview = self.invocation("folder_rename", input_paths=[self.folder], values=values, preview=True,
+                                          support_text=str(self.root / "missing.xlsx"))
+                self.assertEqual(preview.description, "资料文件夹改名-替换指定文字")
+                self.assertEqual(preview.kwargs["file_type"], file_type)
+                self.assertEqual(preview.kwargs["text"], " old ")
+                self.assertEqual(preview.kwargs["replacement_name"], " new ")
+                self.assertNotIn("target_name", preview.kwargs)
+                self.assertNotIn("excel_path", preview.kwargs)
+                confirmed = self.invocation("folder_rename", input_paths=[self.folder], values=values, preview=False,
+                    preview_result={"operations": [{"source": "/original/old.pdf", "target": "/original/new.pdf"}],
+                                    "warnings": []})
+                self.assertEqual(confirmed.kwargs["file_type"], file_type)
+                self.assertFalse(confirmed.kwargs["dry_run"])
+                self.assertEqual(confirmed.kwargs["expected_operations"], [("old.pdf", "new.pdf")])
+                self.assertEqual(confirmed.kwargs["expected_warnings"], [])
+
+    def test_legacy_manual_rename_invocations_do_not_gain_new_parameters(self) -> None:
+        for mode in ("append", "remove", "replace"):
+            with self.subTest(mode=mode):
+                call = self.invocation("folder_rename", input_paths=[self.folder],
+                    values={"rename_mode": mode, "rename_text": "text", "replacement_name": "new", "target_name": "old"},
+                    preview=False, preview_result={"operations": [], "warnings": []})
+                self.assertEqual(call.kwargs, {"root_dir": self.folder, "mode": mode, "text": "text",
+                    "replacement_name": "new", "target_name": "old", "file_type": "folder", "dry_run": False})
+
     def test_invalid_inputs_fail_before_business_code_runs(self) -> None:
         with self.assertRaisesRegex(FormValidationError, "只支持 .xlsx"):
             unsupported = self.root / "bad.txt"

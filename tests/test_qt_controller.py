@@ -60,6 +60,33 @@ class QtControllerTests(unittest.TestCase):
         value._save_workspace_preferences = lambda: None
         return value
 
+    def test_replace_text_fields_keep_type_and_restore_existing_mode_labels(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("folder_rename")
+        for file_type in ("folder", "pdf", "image", "document", "all"):
+            controller.setFieldValue("file_type", file_type)
+            controller.setFieldValue("rename_mode", "replace_text")
+            fields = {field["id"]: field for field in controller.formFields}
+            self.assertTrue(fields["file_type"]["visible"])
+            self.assertEqual(fields["file_type"]["value"], file_type)
+            self.assertTrue(fields["rename_text"]["visible"])
+            self.assertEqual(fields["rename_text"]["label"], "原文字")
+            self.assertTrue(fields["replacement_name"]["visible"])
+            self.assertEqual(fields["replacement_name"]["label"], "替换为")
+            self.assertFalse(fields["target_name"]["visible"])
+            self.assertFalse(controller.hasSupportField)
+            for mode in ("append", "remove", "replace", "excel"):
+                controller.setFieldValue("rename_mode", mode)
+                legacy = {field["id"]: field for field in controller.formFields}
+                self.assertEqual(legacy["file_type"]["value"], file_type)
+                self.assertEqual(legacy["rename_text"]["label"], "追加/删除文字")
+                self.assertEqual(legacy["replacement_name"]["label"], "新名称")
+                self.assertEqual(legacy["target_name"]["visible"], mode != "excel")
+                self.assertEqual(legacy["rename_text"]["visible"], mode in ("append", "remove"))
+                self.assertEqual(legacy["replacement_name"]["visible"], mode == "replace")
+                self.assertEqual(controller.hasSupportField, mode == "excel")
+
     def test_copy_download_link_ignores_installed_version_and_update_cache(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)
