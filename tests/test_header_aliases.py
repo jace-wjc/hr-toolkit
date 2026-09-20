@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,6 +31,31 @@ def workbook(name="姓名", sheet="工资明细", amount="应发小计"):
 
 
 class HeaderAliasTest(unittest.TestCase):
+    def test_remembering_detail_sheet_preserves_summary_column_mapping(self):
+        wb = workbook(name="222", sheet="汇总")
+        self.addCleanup(wb.close)
+        group = inspect_workbook(wb, role="summary")
+        profile = profile_from_selection(group, {"name": 2, "id_card": 3})
+        saved = remember_sheet_names({group["key"]: profile},
+                                     [{"hinted": True, "role": "detail", "sheet": "工资数据"}])
+        restored = inspect_workbook(wb, role="summary", profiles=saved)
+        self.assertTrue(restored["ready"])
+        self.assertTrue(restored["saved"])
+        self.assertEqual(restored["selections"], {"name": 2, "id_card": 3})
+
+    def test_summary_mapping_accepts_legacy_bulk_migration_signature(self):
+        wb = workbook(name="222", sheet="汇总")
+        self.addCleanup(wb.close)
+        group = inspect_workbook(wb, role="summary")
+        profile = profile_from_selection(group, {"name": 2, "id_card": 3})
+        saved = {ALIAS_PROFILE_KEY: {"fields": {}, "sheets": {"detail": ["工资数据"]}}}
+        signature = hashlib.sha256(json.dumps(alias_rules(saved), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        saved[group["key"]] = {**profile, "alias_signature": signature}
+        self.assertTrue(inspect_workbook(wb, role="summary", profiles=saved)["saved"])
+        # An unrelated or stale signature must still be rejected.
+        saved[group["key"]]["alias_signature"] = "outdated"
+        self.assertFalse(inspect_workbook(wb, role="summary", profiles=saved)["saved"])
+
     def test_remembered_sheet_name_survives_column_layout_changes(self):
         wb = workbook(sheet="1")
         self.addCleanup(wb.close)

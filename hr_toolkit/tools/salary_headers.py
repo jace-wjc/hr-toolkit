@@ -54,22 +54,32 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def _alias_signature(rules, role):
+    return _digest(rules) if rules["fields"] or rules["sheets"].get(role) else ""
+
+
 def remember_sheet_names(profiles, groups):
     """Store explicitly selected page names independently of their current column fingerprint."""
     updated = dict(profiles)
     rules = alias_rules(profiles)
-    previous_signature = _digest(rules) if rules["fields"] or rules["sheets"] else ""
+    previous_rules = alias_rules(profiles)
     for group in groups:
         if not group.get("hinted"):
             continue
         role, name = group["role"], group["sheet"]
         rules["sheets"][role] = list(dict.fromkeys([*rules["sheets"].get(role, []), name]))
     rules = alias_rules({ALIAS_PROFILE_KEY: rules})
-    signature = _digest(rules) if rules["fields"] or rules["sheets"] else ""
-    if signature != previous_signature:
+    if rules != previous_rules:
         for key, profile in updated.items():
-            if key != ALIAS_PROFILE_KEY and profile.get("alias_signature", "") == previous_signature:
-                updated[key] = {**profile, "alias_signature": signature}
+            if key == ALIAS_PROFILE_KEY:
+                continue
+            role = profile.get("role")
+            previous_signature = _alias_signature(previous_rules, role)
+            compatible = {previous_signature}
+            if not previous_signature and previous_rules["sheets"]:
+                compatible.add(_digest(previous_rules))  # Repair records written by the old bulk migration.
+            if profile.get("alias_signature", "") in compatible:
+                updated[key] = {**profile, "alias_signature": _alias_signature(rules, role)}
     updated[ALIAS_PROFILE_KEY] = rules
     return updated
 
@@ -158,7 +168,7 @@ def _describe(ws, rows: list[list[Any]], role: str, first: int, last: int, alias
 
 
 def _apply_profile(group: dict[str, Any], profile: dict[str, Any]) -> bool:
-    if group.get("alias_signature", "") != profile.get("alias_signature", ""):
+    if not _profile_rules_match(group, profile):
         return False
     selections = {}
     for field in fields_for(group["role"]):
@@ -177,6 +187,12 @@ def _apply_profile(group: dict[str, Any], profile: dict[str, Any]) -> bool:
         return False
     group.update(selections=selections, ready=True, saved=True)
     return True
+
+
+def _profile_rules_match(group, profile):
+    signature = profile.get("alias_signature", "")
+    return signature == group.get("alias_signature", "") or (
+        bool(group.get("legacy_alias_signature")) and signature == group["legacy_alias_signature"])
 
 
 def inspect_workbook(
@@ -205,7 +221,9 @@ def inspect_workbook(
         first = first or _auto_header(rows, role, field_aliases)
         group = _describe(workbook[sheet], rows, role, first, bottom or first, field_aliases)
         if field_aliases or sheet_aliases:
-            group["alias_signature"] = _digest(rules)
+            group["alias_signature"] = _alias_signature(rules, role)
+        elif rules["sheets"]:
+            group["legacy_alias_signature"] = _digest(rules)
         group["sheet_names"] = names
         # 复用已经读到的少量行供统一确认窗口预览，不额外扫描全表。
         group["preview_rows"] = [[str(value)[:200] if value is not None else "" for value in row]
@@ -249,13 +267,13 @@ def inspect_workbook(
             seen.add(spec)
             candidate = describe(*spec)
             profile = profiles.get(candidate["key"])
-            if profile is not None and candidate.get("alias_signature", "") == profile.get("alias_signature", ""):
+            if profile is not None and _profile_rules_match(candidate, profile):
                 _apply_profile(candidate, profile)
                 candidates.append(candidate)
         group = describe(preferred)
         if group["key"] in profiles:
             applied = _apply_profile(group, profiles[group["key"]])
-            same_rules = group.get("alias_signature", "") == profiles[group["key"]].get("alias_signature", "")
+            same_rules = _profile_rules_match(group, profiles[group["key"]])
             if (applied or same_rules) and not any(c["key"] == group["key"] for c in candidates):
                 candidates.append(group)
         if len(candidates) == 1:
