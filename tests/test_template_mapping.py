@@ -4,15 +4,16 @@ from __future__ import annotations
 import inspect
 from io import BytesIO
 import json
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from zipfile import ZipFile
+from zipfile import ZipFile, ZIP_DEFLATED
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from hr_toolkit.common.excel import SheetGrid
 from hr_toolkit.common.template_mapping import (
@@ -81,6 +82,30 @@ class TemplateMappingTest(unittest.TestCase):
             invoke("personnel_change_merge", lambda: read(0), saved)
             with self.assertRaises(TemplateSelectionRequired):
                 invoke("personnel_change_merge", lambda: read(1), saved)
+
+    def test_content_selection_recovers_declared_range_before_choosing_sheet(self):
+        wb = Workbook()
+        wb.active.title = "本期缴费"
+        wb.active.append(["姓名", "证件号码"])
+        wb.active.append(["本期员工", "123"])
+        wb.create_sheet("历史备查").append(["姓名", "证件号码"])
+        original, damaged = BytesIO(), BytesIO()
+        wb.save(original)
+        wb.close()
+        with ZipFile(original) as source, ZipFile(damaged, "w", ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                data = source.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data = re.sub(rb'<dimension[^>]+>', b'<dimension ref="A1:A1"/>', data)
+                target.writestr(item, data)
+        damaged.seek(0)
+        loaded = load_workbook(damaged, read_only=True, data_only=True)
+        self.addCleanup(loaded.close)
+        selected = invoke("social_security", lambda: choose_content_sheet(loaded.worksheets, "payment", loaded.worksheets[0]))
+        self.assertEqual(selected.title, "本期缴费")
+        grid = SheetGrid(selected)
+        self.assertEqual(grid.value(2, 1), "本期员工")
+        self.assertTrue(grid.dimension_recovered)
 
     def test_extra_sheet_is_logged_without_interrupting_resolved_roles(self):
         ws = sheet(["说明"], name="说明")

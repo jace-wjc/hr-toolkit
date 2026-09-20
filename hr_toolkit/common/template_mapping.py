@@ -252,7 +252,17 @@ def preview(sheet):
     elif hasattr(sheet, "_rows"):
         rows = list(sheet._rows[:30])
     else:
-        rows = list(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row or 30, 30), max_col=min(sheet.max_column or 512, 512), values_only=True))
+        # Read-only Excel exports may declare A1:A1 despite containing a full
+        # table. Explicit preview bounds bypass that declaration without changing
+        # it; SheetGrid can still detect and recover it when reading the data.
+        read_only = callable(getattr(sheet, "reset_dimensions", None))
+        rows = list(sheet.iter_rows(min_row=1, max_row=30 if read_only else min(sheet.max_row or 30, 30),
+                                   max_col=512 if read_only else min(sheet.max_column or 512, 512), values_only=True))
+        if read_only:
+            occupied = [(r, c) for r, row in enumerate(rows, 1) for c, value in enumerate(row, 1) if value is not None]
+            width = max(min(sheet.max_column or 512, 512), max((c for _, c in occupied), default=0))
+            height = max(min(sheet.max_row or 30, 30), max((r for r, _ in occupied), default=0))
+            rows = [row[:width] for row in rows[:height]]
     return [[str(v)[:200] if v is not None else "" for v in row[:512]] for row in rows]
 
 
