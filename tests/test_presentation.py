@@ -131,6 +131,7 @@ class PresentationTests(unittest.TestCase):
                 qt_package.__path__ = []
                 qt_package.QtCore = qt_core
                 with patch.object(presentation, 'QT_MAJOR', major), \
+                     patch.object(presentation, '_QtCatalogTranslator', side_effect=translator_factory), \
                      patch.object(presentation, 'QApplication') as application, \
                      patch.dict(sys.modules, {
                          package: qt_package,
@@ -147,6 +148,38 @@ class PresentationTests(unittest.TestCase):
                     app.removeTranslator.assert_called_once_with(loaded[0])
                     loaded[0].deleteLater.assert_called_once_with()
                     self.assertEqual(view._qt_translators, [])
+
+    def test_legacy_catalog_translates_platform_buttons_without_hiding_other_text(self):
+        from hr_toolkit.gui_qt.presentation import _QtCatalogTranslator
+        translator = _QtCatalogTranslator()
+        fixture = ROOT / 'tests/fixtures/qt_legacy_context_zh_CN.qm'
+        self.assertTrue(translator.load(str(fixture)))
+        self.assertTrue(self.app.installTranslator(translator))
+        try:
+            self.assertEqual(QCoreApplication.translate('QPlatformTheme', 'Cancel'), '取消')
+            self.assertEqual(QCoreApplication.translate('QPlatformTheme', 'Save'), '保存')
+            self.assertEqual(QCoreApplication.translate('QFileDialog', 'Open'), '打开')
+            self.assertEqual(QCoreApplication.translate('QPlatformTheme', 'Unknown'), 'Unknown')
+            self.assertEqual(QCoreApplication.translate('SourceData', 'Cancel'), 'Cancel')
+        finally:
+            self.app.removeTranslator(translator)
+        self.assertEqual(QCoreApplication.translate('QPlatformTheme', 'Cancel'), 'Cancel')
+
+    def test_installed_qt_catalog_translates_real_standard_buttons(self):
+        # Exercise the production loader and the catalog shipped with the CI
+        # runtime. File existence or a mocked successful load is insufficient.
+        view = Presentation()
+        try:
+            for locale in ('en_US', 'zh_CN', 'en_US', 'zh_CN'):
+                view.setLanguage(locale)
+                for source, chinese in (('Cancel', '取消'), ('Save', '保存'), ('OK', '确定')):
+                    expected = chinese if locale == 'zh_CN' else source
+                    self.assertEqual(
+                        QCoreApplication.translate('QPlatformTheme', source), expected,
+                        'Installed Qt catalog: %s / %s' % (locale, source),
+                    )
+        finally:
+            view.setLanguage('en_US')
 
     def test_real_ui_themes_languages_dialogs_and_persistence(self):
         completed = subprocess.run(
