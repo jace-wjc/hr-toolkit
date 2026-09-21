@@ -459,13 +459,14 @@ AppDialog {
         id: problemViewport
         Layout.fillWidth: true; Layout.fillHeight: true; visible: !dialog.rulesPage && !dialog.profilesPage && dialog.hasDocument
         clip: true
-        contentHeight: body.implicitHeight
+        contentHeight: body.height
         contentWidth: width
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar {}
         ColumnLayout {
             id: body
-            width: parent.width
+            width: problemViewport.width
+            height: implicitHeight
             spacing: 10
             enabled: !dialog.working
             ColumnLayout {
