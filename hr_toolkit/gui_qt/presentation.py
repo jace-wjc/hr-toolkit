@@ -97,7 +97,12 @@ class Presentation(QObject):
                 from PySide2.QtCore import QLibraryInfo, QTranslator
             directory = (QLibraryInfo.path(QLibraryInfo.TranslationsPath) if QT_MAJOR == 6
                          else QLibraryInfo.location(QLibraryInfo.TranslationsPath))
-            for module in ("qtbase", "qtdeclarative", "qtquickcontrols", "qtquickcontrols2"):
+            modules = ("qtbase", "qtdeclarative", "qtquickcontrols", "qtquickcontrols2")
+            # The pinned Windows PySide2 wheel ships widget translations in
+            # qt_zh_CN.qm, while newer Qt wheels use the split qtbase catalog.
+            if QT_MAJOR == 5:
+                modules = ("qt",) + modules
+            for module in modules:
                 translator = QTranslator(self)
                 if translator.load(module + "_" + qt_locale, directory):
                     app.installTranslator(translator)

@@ -8,7 +8,8 @@ import re
 import subprocess
 import sys
 import unittest
-from unittest.mock import Mock
+from types import ModuleType
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 try:
@@ -103,6 +104,49 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(picker.call_args[0][2], "C:/资料")
         self.assertEqual(picker.call_args[1]["options"], QFileDialog.DontUseNativeDialog)
         self.assertNotRegex(picker.call_args[0][1], r"[\u3400-\u9fff]")
+
+    def test_qt_catalog_layouts_load_and_unload_on_language_switch(self):
+        from hr_toolkit.gui_qt import presentation
+        # Model the actual catalog names shipped by the pinned Qt5 Windows
+        # wheel and modern Qt6 wheels without requiring both bindings at once.
+        for major, catalog in ((5, 'qt_zh_CN'), (6, 'qtbase_zh_CN')):
+            with self.subTest(qt=major):
+                view = Presentation()
+                app = Mock()
+                translators = []
+
+                def translator_factory(parent):
+                    translator = Mock()
+                    translator.load.side_effect = lambda name, directory: name == catalog
+                    translators.append(translator)
+                    return translator
+
+                library = Mock()
+                library.location.return_value = library.path.return_value = 'bundled-translations'
+                package = 'PySide2' if major == 5 else 'PySide6'
+                qt_core = ModuleType(package + '.QtCore')
+                qt_core.QLibraryInfo = library
+                qt_core.QTranslator = translator_factory
+                qt_package = ModuleType(package)
+                qt_package.__path__ = []
+                qt_package.QtCore = qt_core
+                with patch.object(presentation, 'QT_MAJOR', major), \
+                     patch.object(presentation, 'QApplication') as application, \
+                     patch.dict(sys.modules, {
+                         package: qt_package,
+                         package + '.QtCore': qt_core,
+                     }):
+                    application.instance.return_value = app
+                    view.setLanguage('en_US')
+                    view.setLanguage('zh_CN')
+                    loaded = [t for t in translators if t.load.call_args[0][0] == catalog]
+                    self.assertEqual(len(loaded), 1)
+                    app.installTranslator.assert_called_once_with(loaded[0])
+                    self.assertEqual(view._qt_translators, loaded)
+                    view.setLanguage('en_US')
+                    app.removeTranslator.assert_called_once_with(loaded[0])
+                    loaded[0].deleteLater.assert_called_once_with()
+                    self.assertEqual(view._qt_translators, [])
 
     def test_real_ui_themes_languages_dialogs_and_persistence(self):
         completed = subprocess.run(
