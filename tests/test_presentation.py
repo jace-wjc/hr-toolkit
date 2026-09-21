@@ -117,7 +117,7 @@ class PresentationTests(unittest.TestCase):
 
                 def translator_factory(parent):
                     translator = Mock()
-                    translator.load.side_effect = lambda name, directory: name == catalog
+                    translator.load.side_effect = lambda name, *args: name == catalog or name.endswith('qt_buttons_zh_CN.qm')
                     translators.append(translator)
                     return translator
 
@@ -131,7 +131,7 @@ class PresentationTests(unittest.TestCase):
                 qt_package.__path__ = []
                 qt_package.QtCore = qt_core
                 with patch.object(presentation, 'QT_MAJOR', major), \
-                     patch.object(presentation, '_QtCatalogTranslator', side_effect=translator_factory), \
+                     patch.object(presentation, 'QTranslator', side_effect=translator_factory), \
                      patch.object(presentation, 'QApplication') as application, \
                      patch.dict(sys.modules, {
                          package: qt_package,
@@ -142,16 +142,21 @@ class PresentationTests(unittest.TestCase):
                     view.setLanguage('zh_CN')
                     loaded = [t for t in translators if t.load.call_args[0][0] == catalog]
                     self.assertEqual(len(loaded), 1)
-                    app.installTranslator.assert_called_once_with(loaded[0])
-                    self.assertEqual(view._qt_translators, loaded)
+                    expected = ([translators[0]] if major == 5 else []) + loaded
+                    self.assertEqual([call.args[0] for call in app.installTranslator.call_args_list], expected)
+                    self.assertEqual(view._qt_translators, expected)
                     view.setLanguage('en_US')
-                    app.removeTranslator.assert_called_once_with(loaded[0])
-                    loaded[0].deleteLater.assert_called_once_with()
+                    self.assertEqual([call.args[0] for call in app.removeTranslator.call_args_list], expected)
+                    for translator in expected:
+                        translator.deleteLater.assert_called_once_with()
                     self.assertEqual(view._qt_translators, [])
 
     def test_legacy_catalog_translates_platform_buttons_without_hiding_other_text(self):
-        from hr_toolkit.gui_qt.presentation import _QtCatalogTranslator
-        translator = _QtCatalogTranslator()
+        from hr_toolkit.gui_qt.presentation import QTranslator, _qt_button_catalog
+        supplement = QTranslator()
+        self.assertTrue(supplement.load(_qt_button_catalog('zh_CN')))
+        self.assertTrue(self.app.installTranslator(supplement))
+        translator = QTranslator()
         fixture = ROOT / 'tests/fixtures/qt_legacy_context_zh_CN.qm'
         self.assertTrue(translator.load(str(fixture)))
         self.assertTrue(self.app.installTranslator(translator))
@@ -163,6 +168,7 @@ class PresentationTests(unittest.TestCase):
             self.assertEqual(QCoreApplication.translate('SourceData', 'Cancel'), 'Cancel')
         finally:
             self.app.removeTranslator(translator)
+            self.app.removeTranslator(supplement)
         self.assertEqual(QCoreApplication.translate('QPlatformTheme', 'Cancel'), 'Cancel')
 
     def test_installed_qt_catalog_translates_real_standard_buttons(self):
@@ -181,12 +187,38 @@ class PresentationTests(unittest.TestCase):
         finally:
             view.setLanguage('en_US')
 
+    def test_language_translators_allow_clean_process_shutdown(self):
+        # Keep translators alive until interpreter shutdown, as can happen in
+        # the CI core-test process. Native crashes must fail this isolated check.
+        source = '''
+from hr_toolkit.gui_qt.compat import QCoreApplication
+from hr_toolkit.gui_qt.presentation import Presentation
+app = QCoreApplication([])
+views = [Presentation() for _ in range(5)]
+for view in views:
+    for language in ('en_US', 'zh_CN', 'en_US', 'zh_CN'):
+        view.setLanguage(language)
+assert QCoreApplication.translate('QPlatformTheme', 'Cancel') == '取消'
+print('translation shutdown probe reached exit', flush=True)
+'''
+        completed = subprocess.run(
+            [sys.executable, '-X', 'faulthandler', '-c', source], cwd=str(ROOT),
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn('translation shutdown probe reached exit', completed.stdout)
+
     def test_real_ui_themes_languages_dialogs_and_persistence(self):
         completed = subprocess.run(
-            [sys.executable, str(ROOT / "tests/qt_presentation_probe.py")], cwd=str(ROOT),
+            [sys.executable, '-X', 'faulthandler', str(ROOT / "tests/qt_presentation_probe.py")], cwd=str(ROOT),
             env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software", "QT_QUICK_CONTROLS_STYLE": "Basic", "HR_TOOLKIT_SKIP_UPDATE": "1"},
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90,
         )
+        if completed.returncode:
+            # Print immediately: a later native crash can prevent unittest from
+            # reaching its final summary and otherwise hide this probe's error.
+            sys.stderr.write(completed.stdout + completed.stderr)
+            sys.stderr.flush()
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("presentation probe OK", completed.stdout)
 
@@ -214,7 +246,7 @@ class PaletteContracts(unittest.TestCase):
 
     def test_ci_routes_new_display_files_on_both_qt_lanes(self):
         from scripts.ci_scope import select_scope
-        for path in ['hr_toolkit/gui_qt/presentation.py', 'hr_toolkit/gui_qt/translations_en.py', 'hr_toolkit/gui_qt/qml/components/Palettes.js', 'hr_toolkit/gui_qt/qml/components/qmldir', 'tests/qt_presentation_probe.py']:
+        for path in ['hr_toolkit/gui_qt/presentation.py', 'hr_toolkit/gui_qt/translations_en.py', 'hr_toolkit/gui_qt/qml/translations/qt_buttons_zh_CN.qm', 'hr_toolkit/gui_qt/qml/components/Palettes.js', 'hr_toolkit/gui_qt/qml/components/qmldir', 'tests/qt_presentation_probe.py']:
             scope = select_scope([path])
             self.assertIn('tests.test_presentation', scope['targets'])
             self.assertIn('tests.test_presentation', scope['win7_targets'])

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
+from pathlib import Path
 from .compat import QObject, Property, Signal, Slot, QApplication, QEvent, QT_MAJOR, constant_property
 
 if QT_MAJOR == 6:
@@ -11,16 +12,8 @@ else:
     from PySide2.QtCore import QTranslator
 
 
-class _QtCatalogTranslator(QTranslator):
-    """Bridge standard-button contexts missing from older bundled catalogs."""
-
-    def translate(self, context, source_text, disambiguation=None, n=-1):
-        translated = super().translate(context, source_text, disambiguation, n)
-        if not translated and context == 'QPlatformTheme':
-            translated = super().translate('QDialogButtonBox', source_text, disambiguation, n)
-        # A null result lets Qt continue through other translators or use the
-        # source text. Returning an empty string would hide untranslated labels.
-        return translated or None
+def _qt_button_catalog(locale):
+    return str(Path(__file__).parent / 'qml' / 'translations' / ('qt_buttons_' + locale + '.qm'))
 
 
 def _english_catalog():
@@ -108,6 +101,16 @@ class Presentation(QObject):
         self._qt_translators = []
         qt_locale = LANGUAGES[self._language]["qt"]
         if qt_locale:
+            if QT_MAJOR == 5:
+                # Use native translators only: Qt may request translations while
+                # the Python interpreter is shutting down. Install the supplement
+                # first so official catalog entries take precedence when present.
+                translator = QTranslator(self)
+                if translator.load(_qt_button_catalog(qt_locale)):
+                    app.installTranslator(translator)
+                    self._qt_translators.append(translator)
+                else:
+                    translator.deleteLater()
             if QT_MAJOR == 6:
                 from PySide6.QtCore import QLibraryInfo
             else:
@@ -120,7 +123,7 @@ class Presentation(QObject):
             if QT_MAJOR == 5:
                 modules = ("qt",) + modules
             for module in modules:
-                translator = _QtCatalogTranslator(self)
+                translator = QTranslator(self)
                 if translator.load(module + "_" + qt_locale, directory):
                     app.installTranslator(translator)
                     self._qt_translators.append(translator)
