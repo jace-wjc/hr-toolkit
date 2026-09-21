@@ -11,16 +11,16 @@ TextField {
     bottomPadding: 7
     selectByMouse: true
     hoverEnabled: true
-    color: enabled ? "#292825" : "#B3B0A6"
-    placeholderTextColor: "#98958C"
-    selectionColor: "#17715B"
-    selectedTextColor: "#FFFFFF"
+    color: enabled ? Ui.color("text") : Ui.color("disabledText")
+    placeholderTextColor: Ui.color("faint")
+    selectionColor: Ui.color("accent")
+    selectedTextColor: Ui.color("surface")
     font.pixelSize: 13
 
     background: Rectangle {
         radius: 6
-        color: control.enabled ? "#FAF9F6" : "#F2F0EA"
+        color: control.enabled ? Ui.color("input") : Ui.color("disabledSurface")
         border.width: 1
-        border.color: control.activeFocus ? "#17715B" : control.enabled && control.hovered ? "#C4CCC7" : "#ECEAE4"
+        border.color: control.activeFocus ? Ui.color("accent") : control.enabled && control.hovered ? Ui.color("selection2") : Ui.color("border")
     }
 }

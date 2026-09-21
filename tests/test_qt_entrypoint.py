@@ -385,7 +385,7 @@ class QtEntrypointTests(unittest.TestCase):
         label = source.split("id: supportFieldLabel", 1)[1].split("Item {", 1)[0]
         self.assertIn("Layout.minimumWidth: Math.max(145, implicitWidth)", label)
         self.assertIn("Layout.preferredWidth: Layout.minimumWidth", label)
-        self.assertIn("text: controller.supportLabel", label)
+        self.assertIn("text: Ui.text(controller.supportLabel)", label)
 
     def test_workspace_drag_has_stable_proxy_copy_action_and_click_alternative(self) -> None:
         qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
@@ -533,7 +533,7 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertNotIn('objectName: "workspaceButtonMouse"', source)
         self.assertNotIn('text: "项\\n目\\n文\\n件"', source)
         self.assertIn("enabled: controller.busy || (!controller.workspaceBusy && !controller.updateBlocksTools && !controller.selectionChecking)", source)
-        self.assertIn("text: controller.updateBlockMessage", source)
+        self.assertIn("text: Ui.text(controller.updateBlockMessage)", source)
         self.assertNotIn("UpdateProgressDialog {", source)
         self.assertIn("readonly property int preferredWindowWidth: 1600", source)
         self.assertIn("readonly property int preferredWindowHeight: 900", source)
@@ -563,7 +563,7 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn('objectName: "sidebarProjectCard"', source)
         self.assertIn('readonly property bool showLegacyHistoryEntry: false', source)
         self.assertIn('objectName: "runLogIconButton"', source)
-        self.assertIn('ToolTip.text: "打开运行日志"', source)
+        self.assertIn('ToolTip.text: Ui.text("打开运行日志")', source)
         self.assertIn("model: controller.tutorialGroups", source)
         self.assertIn("workspaceList.positionViewAtIndex(safeRow, ListView.Contain)", source)
 

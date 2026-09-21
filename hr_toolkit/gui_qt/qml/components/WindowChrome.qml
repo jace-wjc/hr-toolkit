@@ -42,18 +42,18 @@ Item {
         y: chrome.nativeMac || chrome.nativeWindows ? 5 : 9; width: 32; height: 30
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
-        Accessible.name: chrome.sidebar.pinned ? "收起左侧栏" : "固定展开左侧栏"
+        Accessible.name: Ui.text(chrome.sidebar.pinned ? "收起左侧栏" : "固定展开左侧栏")
         onClicked: chrome.sidebar.togglePinned()
         background: Rectangle {
             radius: 6
-            color: sidebarButton.down ? "#E3E0D9" : sidebarButton.hovered ? "#EBE8E1" : "transparent"
+            color: sidebarButton.down ? Ui.color("border10") : sidebarButton.hovered ? Ui.color("pressed") : "transparent"
             border.width: sidebarButton.visualFocus ? 1 : 0
-            border.color: "#78766E"
+            border.color: Ui.color("muted")
         }
-        contentItem: Item { Image { anchors.centerIn: parent; width: 17; height: 17; source: "sidebar-simple.png"; opacity: 0.65; sourceSize.width: 34; sourceSize.height: 34 } }
+        contentItem: Item { ThemedImage { anchors.centerIn: parent; width: 17; height: 17; source: "sidebar-simple.png"; opacity: 0.65; sourceSize.width: 34; sourceSize.height: 34 } }
         ToolTip.visible: hovered
         ToolTip.delay: 700
-        ToolTip.text: chrome.sidebar.pinned ? "收起左侧栏" : "悬停展开，点击固定"
+        ToolTip.text: Ui.text(chrome.sidebar.pinned ? "收起左侧栏" : "悬停展开，点击固定")
     }
     Button {
         id: workspaceButton
@@ -65,19 +65,19 @@ Item {
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         enabled: chrome.workspaceAvailable || chrome.workspaceExpanded
-        Accessible.name: chrome.workspaceAutoHidden ? "取消项目文件自动恢复"
-                         : chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件"
+        Accessible.name: Ui.text(chrome.workspaceAutoHidden ? "取消项目文件自动恢复"
+                         : chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件")
         onClicked: chrome.workspaceToggleRequested()
         background: Rectangle {
             radius: 6
             color: chrome.workspaceExpanded
-                   ? (workspaceButton.down ? "#B5D3F7" : "#CDE2FB")
-                   : (workspaceButton.down ? "#E3E0D9" : workspaceButton.hovered ? "#EBE8E1" : "transparent")
+                   ? (workspaceButton.down ? Ui.color("selection1") : Ui.color("selection3"))
+                   : (workspaceButton.down ? Ui.color("border10") : workspaceButton.hovered ? Ui.color("pressed") : "transparent")
             border.width: workspaceButton.visualFocus ? 1 : 0
-            border.color: "#78766E"
+            border.color: Ui.color("muted")
         }
         contentItem: Item {
-            Image {
+            ThemedImage {
                 anchors.centerIn: parent; width: 17; height: 17
                 source: "sidebar-simple.png"
                 mirror: true
@@ -87,8 +87,8 @@ Item {
         }
         ToolTip.visible: hovered
         ToolTip.delay: 700
-        ToolTip.text: chrome.workspaceAutoHidden ? "窗口较窄，项目文件将在放大后恢复；点击取消恢复"
-                      : chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件"
+        ToolTip.text: Ui.text(chrome.workspaceAutoHidden ? "窗口较窄，项目文件将在放大后恢复；点击取消恢复"
+                      : chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件")
     }
     Row {
         anchors.right: parent.right
@@ -101,15 +101,15 @@ Item {
                 objectName: "windowControl" + index
                 width: 46; height: chrome.height
                 hoverEnabled: true
-                Accessible.name: modelData
+                Accessible.name: Ui.text(modelData)
                 onClicked: {
                     if (index === 0) chrome.window.showMinimized()
                     else if (index === 1) chrome.toggleMaximized()
                     else chrome.window.close()
                 }
-                background: Rectangle { color: windowButton.hovered ? (index === 2 ? "#E9B0AA" : "#EBE8E1") : "transparent" }
+                background: Rectangle { color: windowButton.hovered ? (index === 2 ? Ui.color("error2") : Ui.color("pressed")) : "transparent" }
                 contentItem: Item {
-                    Image {
+                    ThemedImage {
                         anchors.centerIn: parent; width: 13; height: 13
                         anchors.verticalCenterOffset: 4
                         source: index === 0 ? "minus.png" : index === 2 ? "x.png" : chrome.window.visibility === Window.Maximized ? "copy-simple.png" : "square.png"

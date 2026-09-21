@@ -4,7 +4,7 @@ Canvas {
     id: icon
 
     property string iconId: ""
-    property color strokeColor: "#55534C"
+    property color strokeColor: Ui.color("text1")
     property real lineWidth: 1.25
 
     implicitWidth: 16
@@ -18,6 +18,8 @@ Canvas {
     onWidthChanged: requestPaint()
     onHeightChanged: requestPaint()
 
+    property color themeRepaintColor: Ui.color("text")
+    onThemeRepaintColorChanged: requestPaint()
     onPaint: {
         var context = getContext("2d")
         context.clearRect(0, 0, width, height)

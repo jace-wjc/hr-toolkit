@@ -7,6 +7,7 @@ import "components"
 ApplicationWindow {
     id: root
     objectName: "mainWindow"
+    Binding { target: Ui; property: "backend"; value: controller.presentation }
     minimumWidth: 760
     minimumHeight: 600
     readonly property int preferredWindowWidth: 1600
@@ -20,7 +21,7 @@ ApplicationWindow {
                      Math.max(minimumHeight, currentScreenAvailableHeight - initialWindowMargin
                               - (Qt.platform.os === "windows" ? 48 : 0)))
     visible: true
-    color: "#FCFCFB"
+    color: Ui.color("window")
     title: "HR Workbench v" + controller.appVersion
     // Keep Windows' native caption, resize frame and DWM decorations. macOS
     // still integrates its existing native titlebar through window_chrome.py.
@@ -33,19 +34,19 @@ ApplicationWindow {
         value: !controller.updateRestarting
     }
 
-    readonly property color primary: "#17715B"
-    readonly property color primaryActive: "#125E4B"
-    readonly property color primarySoft: "#E4EFEA"
-    readonly property color textMain: "#292825"
-    readonly property color textMuted: "#78766E"
-    readonly property color textFaint: "#98958C"
-    readonly property color textDisabled: "#B3B0A6"
-    readonly property color border: "#ECEAE4"
-    readonly property color borderFaint: "#F1EFE9"
-    readonly property color surface: "#FFFFFF"
-    readonly property color surfaceAlt: "#FAF9F6"
-    readonly property color navSelected: "#EBE8E1"
-    readonly property color navHover: "#F0EEE8"
+    readonly property color primary: Ui.color("accent")
+    readonly property color primaryActive: Ui.color("accentPressed")
+    readonly property color primarySoft: Ui.color("selection")
+    readonly property color textMain: Ui.color("text")
+    readonly property color textMuted: Ui.color("muted")
+    readonly property color textFaint: Ui.color("faint")
+    readonly property color textDisabled: Ui.color("disabledText")
+    readonly property color border: Ui.color("border")
+    readonly property color borderFaint: Ui.color("divider")
+    readonly property color surface: Ui.color("surface")
+    readonly property color surfaceAlt: Ui.color("input")
+    readonly property color navSelected: Ui.color("pressed")
+    readonly property color navHover: Ui.color("hover")
     readonly property int contentMaxWidth: 820
     readonly property bool showLegacyHistoryEntry: false
     // Navigation stays full-width when shown; small windows start collapsed.
@@ -120,6 +121,19 @@ ApplicationWindow {
         controller.start()
     }
 
+    AppButton {
+        id: appearanceButton
+        objectName: "appearanceButton"
+        anchors.top: parent.top; anchors.topMargin: 8
+        anchors.right: parent.right
+        anchors.rightMargin: workspaceDrawer.opened ? root.width - workspaceDrawer.x + 54 : 54
+        z: 31
+        text: "设置"; variant: "link"
+        ToolTip.visible: hovered
+        ToolTip.text: Ui.text("外观与语言")
+        onClicked: appearanceDialog.open()
+    }
+
     Rectangle {
         objectName: "sidebarTitleBackground"
         x: sidebar.x
@@ -155,7 +169,7 @@ ApplicationWindow {
         width: 1
         height: parent.height
         visible: sidebar.visible
-        color: "#EBE9E4"
+        color: Ui.color("border12")
         z: 31
     }
 
@@ -209,7 +223,7 @@ ApplicationWindow {
                             focusPolicy: Qt.StrongFocus
                             onClicked: projectMenu.open()
                             contentItem: Text {
-                                text: "项目"
+                                text: Ui.text("项目")
                                 color: root.textMain
                                 font.pixelSize: 11
                                 font.weight: Font.DemiBold
@@ -233,7 +247,7 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 spacing: 4
                                 Text {
-                                    text: "工作项目"
+                                    text: Ui.text("工作项目")
                                     color: root.textFaint
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
@@ -258,7 +272,7 @@ ApplicationWindow {
                                     spacing: 4
                                     Text {
                                         Layout.fillWidth: true
-                                        text: controller.hasProject ? controller.projectName : "尚未打开项目"
+                                        text: controller.hasProject ? controller.projectName : Ui.text("尚未打开项目")
                                         color: root.textMain
                                         font.pixelSize: 13
                                         font.weight: Font.DemiBold
@@ -266,7 +280,7 @@ ApplicationWindow {
                                     }
                                     Text {
                                         Layout.fillWidth: true
-                                        text: controller.hasProject ? "当前项目 · 只读" : "新建或打开项目后开始处理"
+                                        text: Ui.text(controller.hasProject ? (controller.projectWritable ? "当前项目" : "当前项目 · 只读") : "新建或打开项目后开始处理")
                                         color: root.textFaint
                                         font.pixelSize: 10
                                         elide: Text.ElideRight
@@ -276,7 +290,7 @@ ApplicationWindow {
                             }
                             background: Rectangle {
                                 radius: 8
-                                color: parent.hovered ? "#FAF8F4" : "#FCFBF8"
+                                color: parent.hovered ? Ui.color("surface14") : Ui.color("surface17")
                                 border.color: parent.activeFocus ? root.primary : root.border
                             }
                         }
@@ -288,6 +302,9 @@ ApplicationWindow {
                             spacing: 0
                             Button {
                                 objectName: "newProjectAction"
+                                Accessible.name: Ui.text("新建项目")
+                                ToolTip.visible: hovered
+                                ToolTip.text: Ui.text("新建项目")
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 hoverEnabled: true
@@ -297,8 +314,8 @@ ApplicationWindow {
                                     Row {
                                         anchors.centerIn: parent
                                         spacing: 7
-                                        ToolIcon { width: 16; height: 16; iconId: "plus_circle"; strokeColor: "#55534C"; lineWidth: 1.25 }
-                                        Text { text: "新建项目"; color: root.textMain; font.pixelSize: 12 }
+                                        ToolIcon { width: 16; height: 16; iconId: "plus_circle"; strokeColor: Ui.color("text1"); lineWidth: 1.25 }
+                                        Text { text: Ui.text("新建"); color: root.textMain; font.pixelSize: 12 }
                                     }
                                 }
                                 background: Rectangle { radius: 7; color: parent.down ? root.navSelected : (parent.hovered ? root.navHover : "transparent") }
@@ -306,6 +323,9 @@ ApplicationWindow {
                             Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: root.border }
                             Button {
                                 objectName: "openProjectAction"
+                                Accessible.name: Ui.text("打开项目")
+                                ToolTip.visible: hovered
+                                ToolTip.text: Ui.text("打开项目")
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 hoverEnabled: true
@@ -315,8 +335,8 @@ ApplicationWindow {
                                     Row {
                                         anchors.centerIn: parent
                                         spacing: 7
-                                        ToolIcon { width: 16; height: 16; iconId: "folder_open"; strokeColor: "#55534C"; lineWidth: 1.25 }
-                                        Text { text: "打开项目"; color: root.textMain; font.pixelSize: 12 }
+                                        ToolIcon { width: 16; height: 16; iconId: "folder_open"; strokeColor: Ui.color("text1"); lineWidth: 1.25 }
+                                        Text { text: Ui.text("打开"); color: root.textMain; font.pixelSize: 12 }
                                     }
                                 }
                                 background: Rectangle { radius: 7; color: parent.down ? root.navSelected : (parent.hovered ? root.navHover : "transparent") }
@@ -345,7 +365,7 @@ ApplicationWindow {
                                     visible: !root.compactSidebar
                                     width: parent.width
                                     leftPadding: 7
-                                    text: modelData.name
+                                    text: Ui.text(modelData.name)
                                     color: root.textDisabled
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
@@ -369,16 +389,17 @@ ApplicationWindow {
                                                     width: 16
                                                     height: 16
                                                     iconId: modelData.id
-                                                    strokeColor: controller.currentTool === modelData.id ? root.primary : "#55534C"
+                                                    strokeColor: controller.currentTool === modelData.id ? root.primary : Ui.color("text1")
                                                     lineWidth: 1.25
                                                 }
                                             }
                                             Text {
+                                                id: navLabel
                                                 visible: !root.compactSidebar
                                                 width: parent.width - 34
                                                 height: parent.height
-                                                text: modelData.label
-                                                color: controller.currentTool === modelData.id ? root.primary : "#55534C"
+                                                text: Ui.text(modelData.id === "social_security" ? "社保汇总" : modelData.label)
+                                                color: controller.currentTool === modelData.id ? root.primary : Ui.color("text1")
                                                 font.pixelSize: 13
                                                 font.weight: controller.currentTool === modelData.id ? Font.DemiBold : Font.Normal
                                                 verticalAlignment: Text.AlignVCenter
@@ -391,6 +412,27 @@ ApplicationWindow {
                                             hoverEnabled: true
                                             cursorShape: Qt.PointingHandCursor
                                             onClicked: controller.selectTool(modelData.id)
+                                            ToolTip {
+                                                id: navTooltip
+                                                objectName: "navigationTooltip_" + modelData.id
+                                                visible: navMouse.containsMouse && !navMouse.pressed
+                                                         && (root.compactSidebar || navLabel.truncated
+                                                             || navLabel.text !== Ui.text(modelData.label))
+                                                text: Ui.text(modelData.label)
+                                                delay: 600
+                                                timeout: 5000
+                                                padding: 8
+                                                contentItem: Text {
+                                                    text: navTooltip.text
+                                                    color: Ui.color("text")
+                                                    font.pixelSize: 12
+                                                }
+                                                background: Rectangle {
+                                                    color: Ui.color("surface")
+                                                    border.color: Ui.color("border")
+                                                    radius: 6
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -399,17 +441,17 @@ ApplicationWindow {
                     }
                 }
 
-                Rectangle { visible: root.showLegacyHistoryEntry; Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.bottomMargin: 6; color: "#EBE9E4" }
+                Rectangle { visible: root.showLegacyHistoryEntry; Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.bottomMargin: 6; color: Ui.color("border12") }
                 Rectangle {
                     visible: root.showLegacyHistoryEntry
                     Layout.fillWidth: true; Layout.preferredHeight: visible ? 32 : 0; radius: 8; color: historyNavMouse.containsMouse ? root.navHover : "transparent"
                     Row { anchors.fill: parent; anchors.leftMargin: root.compactSidebar ? 0 : 9; spacing: 8
-                        Item { width: root.compactSidebar ? parent.width : 18; height: parent.height; ToolIcon { anchors.centerIn: parent; width: 16; height: 16; iconId: "clock"; strokeColor: "#55534C" } }
-                        Text { visible: !root.compactSidebar; width: parent.width - 34; height: parent.height; text: "旧版记录"; color: "#55534C"; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+                        Item { width: root.compactSidebar ? parent.width : 18; height: parent.height; ToolIcon { anchors.centerIn: parent; width: 16; height: 16; iconId: "clock"; strokeColor: Ui.color("text1") } }
+                        Text { visible: !root.compactSidebar; width: parent.width - 34; height: parent.height; text: Ui.text("旧版记录"); color: Ui.color("text1"); font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
                     }
                     MouseArea { id: historyNavMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { controller.requestHistory(); historyDrawer.open() } }
                 }
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 6; color: "#EBE9E4" }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 6; color: Ui.color("border12") }
                 AppButton {
                     id: sidebarUpdateCheckButton
                     objectName: "sidebarUpdateCheckButton"
@@ -427,17 +469,17 @@ ApplicationWindow {
                         Item {
                             Layout.preferredWidth: 18
                             Layout.fillHeight: true
-                            Image {
+                            ThemedImage {
                                 anchors.centerIn: parent
                                 width: 16; height: 16
-                                source: "components/arrows-clockwise.png"
+                                source: Qt.resolvedUrl("components/arrows-clockwise.png")
                                 sourceSize.width: 32; sourceSize.height: 32
                                 opacity: sidebarUpdateCheckButton.enabled ? 0.65 : 0.3
                             }
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: sidebarUpdateCheckButton.text
+                            text: Ui.text(sidebarUpdateCheckButton.text)
                             color: sidebarUpdateCheckButton.enabled ? root.textMain : root.textDisabled
                             font.pixelSize: 13
                             elide: Text.ElideRight
@@ -456,13 +498,13 @@ ApplicationWindow {
                     enabled: controller.updateReady && !controller.updateBusy
                     hoverEnabled: true
                     padding: 10
-                    Accessible.name: controller.updateReady ? "重启以更新，版本" + controller.updateVersion : "正在下载更新"
+                    Accessible.name: Ui.text(controller.updateReady ? "重启以更新，版本" + controller.updateVersion : "正在下载更新")
                     onClicked: controller.restartToUpdate()
                     background: Item {
-                        Rectangle { anchors.fill: parent; anchors.topMargin: 2; anchors.bottomMargin: -2; color: "#0A000000"; radius: 10 }
+                        Rectangle { anchors.fill: parent; anchors.topMargin: 2; anchors.bottomMargin: -2; color: Ui.color("overlay3"); radius: 10 }
                         Rectangle {
                             anchors.fill: parent; radius: 10
-                            color: sidebarUpdateCard.down ? "#F3F3F1" : "#FFFFFF"
+                            color: sidebarUpdateCard.down ? Ui.color("surface6") : Ui.color("surface")
                         }
                         // Small CPU-painted waves also work with Qt 5's software
                         // renderer. No shader, blur layer or continuous idle work.
@@ -495,7 +537,9 @@ ApplicationWindow {
                                     updateFill.requestPaint()
                                 }
                             }
-                            onPaint: {
+                            property color themeRepaintColor: Ui.color("text")
+            onThemeRepaintColorChanged: requestPaint()
+            onPaint: {
                                 if (paintSuspended) return
                                 // Geometry and phase stay constant throughout
                                 // this paint; avoid QML property lookups per point.
@@ -534,55 +578,60 @@ ApplicationWindow {
                         }
                         Rectangle {
                             anchors.fill: parent; anchors.margins: 1; radius: 9
-                            color: "transparent"; border.color: "#B3FFFFFF"
+                            color: "transparent"; border.color: Ui.color("overlay43")
                         }
                         Rectangle {
                             anchors.fill: parent; radius: 10; color: "transparent"
-                            border.color: sidebarUpdateCard.visualFocus ? "#99C7FF" : "#E1E5E5"
+                            border.color: sidebarUpdateCard.visualFocus ? Ui.color("link6") : Ui.color("border8")
                         }
                     }
                     contentItem: RowLayout {
                         spacing: 10
                         Image {
                             Layout.preferredWidth: 28; Layout.preferredHeight: 28
-                            source: "components/update-feather.png"
+                            source: Qt.resolvedUrl("components/update-feather.png")
                             fillMode: Image.PreserveAspectFit; smooth: true
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 3
                             Text {
                                 Layout.fillWidth: true; font.pixelSize: 12; font.bold: true; color: root.textMain
-                                text: controller.updateReady ? (controller.updateRestarting ? "正在重启…" : "重启以更新") : controller.updatePhase === "verifying" ? "正在检查更新文件…" : "正在下载更新"
+                                text: Ui.text(controller.updateReady ? (controller.updateRestarting ? "正在重启…" : "重启以更新") : controller.updatePhase === "verifying" ? "正在检查更新文件…" : "正在下载更新")
                                 elide: Text.ElideRight
                             }
                             Text {
                                 Layout.fillWidth: true; font.pixelSize: 10; color: root.textMuted
-                                text: controller.updateVersion ? "v" + controller.updateVersion : controller.updateStatus
+                                text: Ui.text(controller.updateVersion ? "v" + controller.updateVersion : controller.updateStatus)
                                 elide: Text.ElideRight
                             }
                         }
                         Text {
                             visible: !controller.updateReady && controller.updateProgress >= 0
-                            text: Math.floor(controller.updateProgress * 100) + "%"
+                            text: Ui.text(Math.floor(controller.updateProgress * 100) + "%")
                             font.pixelSize: 13; color: root.textMain
                         }
-                        Image {
+                        ThemedImage {
                             visible: controller.updateReady
                             Layout.preferredWidth: 14; Layout.preferredHeight: 14
-                            source: "components/arrow-right.png"; sourceSize.width: 28; sourceSize.height: 28; opacity: 0.45
+                            source: Qt.resolvedUrl("components/arrow-right.png"); sourceSize.width: 28; sourceSize.height: 28; opacity: 0.45
                         }
                     }
                 }
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 6; Layout.bottomMargin: 8; color: "#EBE9E4" }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 6; Layout.bottomMargin: 8; color: Ui.color("border12") }
                 RowLayout {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 24
+                    Layout.preferredHeight: Math.max(24, sidebarPrivacyText.implicitHeight)
                     spacing: 5
                     BrandMark { Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
-                    Text { visible: !root.compactSidebar; text: "v" + controller.appVersion; color: root.textDisabled; font.pixelSize: 10 }
-                    Rectangle { visible: !root.compactSidebar; Layout.preferredWidth: 4; Layout.preferredHeight: 4; radius: 2; color: "#35A37B" }
-                    Item { Layout.fillWidth: true }
-                    Text { visible: !root.compactSidebar; text: "本地处理 · 不上传数据"; color: root.textDisabled; font.pixelSize: 10 }
+                    Text { visible: !root.compactSidebar; text: Ui.text("v" + controller.appVersion); color: root.textDisabled; font.pixelSize: 10 }
+                    Rectangle { visible: !root.compactSidebar; Layout.preferredWidth: 4; Layout.preferredHeight: 4; radius: 2; color: Ui.color("accent6") }
+                    Text {
+                        id: sidebarPrivacyText
+                        visible: !root.compactSidebar
+                        Layout.fillWidth: true; Layout.minimumWidth: 0
+                        text: Ui.text("本地处理 · 不上传数据")
+                        color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap
+                    }
                     Button {
                         id: runLogIconButton
                         objectName: "runLogIconButton"
@@ -596,7 +645,7 @@ ApplicationWindow {
                         }
                         background: Rectangle { radius: 6; color: parent.hovered ? root.navHover : "transparent" }
                         ToolTip.visible: hovered
-                        ToolTip.text: "打开运行日志"
+                        ToolTip.text: Ui.text("打开运行日志")
                     }
                 }
             }
@@ -636,10 +685,10 @@ ApplicationWindow {
                     Column {
                         Layout.fillWidth: true
                         spacing: 14
-                        Text { width: parent.width; text: controller.toolGroup; color: root.primary; font.pixelSize: 12; font.weight: Font.DemiBold }
+                        Text { width: parent.width; text: Ui.text(controller.toolGroup); color: root.primary; font.pixelSize: 12; font.weight: Font.DemiBold }
                         Text {
                             width: parent.width
-                            text: controller.toolTitle
+                            text: Ui.text(controller.toolTitle)
                             color: root.textMain
                             font.pixelSize: 24
                             font.weight: Font.Bold
@@ -647,7 +696,7 @@ ApplicationWindow {
                         }
                         Text {
                             width: parent.width
-                            text: controller.toolDescription
+                            text: Ui.text(controller.toolDescription)
                             color: root.textMuted
                             font.pixelSize: 13
                             wrapMode: Text.Wrap
@@ -681,7 +730,7 @@ ApplicationWindow {
                         enabled: !controller.downloadLinkBusy
                         onClicked: downloadLinkMenu.open()
                         ToolTip.visible: hovered
-                        ToolTip.text: "复制最新版安装包地址，发给同事下载"
+                        ToolTip.text: Ui.text("复制最新版安装包地址，发给同事下载")
                         Popup {
                             id: downloadLinkMenu
                             x: downloadLinkButton.width - width
@@ -689,12 +738,12 @@ ApplicationWindow {
                             width: 304
                             padding: 12
                             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                            background: Rectangle { color: "#FFFFFF"; radius: 9; border.color: "#ECEAE4" }
+                            background: Rectangle { color: Ui.color("surface"); radius: 9; border.color: Ui.color("border") }
                             contentItem: ColumnLayout {
                                 spacing: 8
                                 Text {
                                     Layout.fillWidth: true
-                                    text: "选择同事电脑的系统"
+                                    text: Ui.text("选择同事电脑的系统")
                                     font.pixelSize: 12
                                     color: root.textMuted
                                 }
@@ -710,14 +759,14 @@ ApplicationWindow {
                                 }
                                 Text {
                                     Layout.fillWidth: true
-                                    text: "请务必按接收方电脑的系统选择链接：Windows 7 必须使用 Win7 安装包，切勿下载或安装 Win10/11 安装包；Windows 10/11 请使用对应的 Win10/11 安装包。"
+                                    text: Ui.text("请务必按接收方电脑的系统选择链接：Windows 7 必须使用 Win7 安装包，切勿下载或安装 Win10/11 安装包；Windows 10/11 请使用对应的 Win10/11 安装包。")
                                     wrapMode: Text.Wrap
                                     font.pixelSize: 12
-                                    color: "#A66A12"
+                                    color: Ui.color("warning4")
                                 }
                                 Text {
                                     Layout.fillWidth: true
-                                    text: "此处仅提供 Windows 安装包；Mac 及其他系统的安装包，请联系管理员获取。\n每次获取最新版地址，复制后可直接分享。"
+                                    text: Ui.text("此处仅提供 Windows 安装包；Mac 及其他系统的安装包，请联系管理员获取。\n每次获取最新版地址，复制后可直接分享。")
                                     wrapMode: Text.Wrap
                                     font.pixelSize: 11
                                     color: root.textMuted
@@ -804,12 +853,12 @@ ApplicationWindow {
                                 RowLayout {
                                     width: uploadColumn.width
                                     height: Math.max(26, implicitHeight)
-                                    Text { text: controller.inputLabel; color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
-                                    Text { Layout.fillWidth: true; text: controller.inputHint; color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
+                                    Text { text: Ui.text(controller.inputLabel); color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
+                                    Text { Layout.fillWidth: true; text: Ui.text(controller.inputHint); color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
                                 }
                                 RowLayout {
                                     width: uploadColumn.width
-                                    Text { Layout.fillWidth: true; text: controller.inputDropHint; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+                                    Text { Layout.fillWidth: true; text: Ui.text(controller.inputDropHint); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
                                     AppButton {
                                         objectName: "continueInputButton"
                                         visible: inputList.count > 0
@@ -830,7 +879,7 @@ ApplicationWindow {
                                     width: uploadColumn.width
                                     height: inputList.count > 0 ? Math.min(260, Math.max(54, inputList.count * 46)) : 118
                                     radius: 12
-                                    color: "#FBFAF7"
+                                    color: Ui.color("surface15")
                                     border.width: 0
 
                                     DashedBorder { anchors.fill: parent }
@@ -840,12 +889,12 @@ ApplicationWindow {
                                         visible: inputList.count === 0
                                         spacing: 6
                                         FolderDropIcon { anchors.horizontalCenter: parent.horizontalCenter }
-                                        Text { anchors.horizontalCenter: parent.horizontalCenter; text: controller.inputDropTitle; color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold }
+                                        Text { anchors.horizontalCenter: parent.horizontalCenter; text: Ui.text(controller.inputDropTitle); color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold }
                                         Text {
                                             anchors.horizontalCenter: parent.horizontalCenter
-                                            text: controller.inputAllowsFolder && !controller.inputAllowsFiles
+                                            text: Ui.text(controller.inputAllowsFolder && !controller.inputAllowsFiles
                                                 ? "点击浏览文件夹路径"
-                                                : (controller.inputAllowsFolder ? "浏览文件 · 选择文件夹" : "点击浏览文件")
+                                                : (controller.inputAllowsFolder ? "浏览文件 · 选择文件夹" : "点击浏览文件"))
                                             color: root.primary
                                             font.pixelSize: 11
                                             font.weight: Font.DemiBold
@@ -874,7 +923,7 @@ ApplicationWindow {
                                             width: inputList.width
                                             height: 44
                                             radius: 8
-                                            color: fileMouse.containsMouse ? "#F2F5F2" : "transparent"
+                                            color: fileMouse.containsMouse ? Ui.color("surface5") : "transparent"
                                             RowLayout {
                                                 anchors.fill: parent
                                                 anchors.leftMargin: 10
@@ -882,8 +931,8 @@ ApplicationWindow {
                                                 spacing: 9
                                                 Rectangle {
                                                     Layout.preferredWidth: 30; Layout.preferredHeight: 26; radius: 6
-                                                    color: kind === "folder" ? "#E7EFEA" : "#EAF0F5"
-                                                    Text { anchors.centerIn: parent; text: kind === "folder" ? "夹" : detail.slice(0, 3); color: kind === "folder" ? root.primary : "#557087"; font.pixelSize: 10; font.weight: Font.DemiBold }
+                                                    color: kind === "folder" ? Ui.color("selection10") : Ui.color("selection11")
+                                                    Text { anchors.centerIn: parent; text: Ui.text(kind === "folder" ? "夹" : detail.slice(0, 3)); color: kind === "folder" ? root.primary : Ui.color("link4"); font.pixelSize: 10; font.weight: Font.DemiBold }
                                                 }
                                                 Item {
                                                     Layout.fillWidth: true
@@ -899,10 +948,10 @@ ApplicationWindow {
                                                         enabled: controller.selectionEnabled
                                                         onDoubleClicked: controller.openSelectedInput(path)
                                                         ToolTip.visible: containsMouse; ToolTip.delay: 600
-                                                        ToolTip.text: path + "\n双击打开"
+                                                        ToolTip.text: Ui.text(path + "\n双击打开")
                                                     }
                                                 }
-                                                AppButton { text: "移除"; variant: "link"; enabled: controller.selectionEnabled; implicitWidth: 54; implicitHeight: 30; onClicked: controller.removeInput(index) }
+                                                AppButton { text: "移除"; variant: "link"; enabled: controller.selectionEnabled; implicitWidth: Math.max(54, contentItem.implicitWidth + 12); implicitHeight: 30; onClicked: controller.removeInput(index) }
                                             }
                                             MouseArea { id: fileMouse; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                                         }
@@ -932,7 +981,7 @@ ApplicationWindow {
                                         width: 230
                                         padding: 8
                                         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                                        background: Rectangle { radius: 10; color: "#FFFFFF"; border.color: root.border }
+                                        background: Rectangle { radius: 10; color: Ui.color("surface"); border.color: root.border }
                                         contentItem: ColumnLayout {
                                             spacing: 4
                                             AppButton { Layout.fillWidth: true; enabled: controller.selectionEnabled; text: "添加文件 / 压缩包"; onClicked: { addInputPopup.close(); if (addInputPopup.appendMode) controller.appendInputFiles(); else controller.chooseInputFiles() } }
@@ -945,12 +994,12 @@ ApplicationWindow {
                                     width: uploadColumn.width
                                     property var feedback: controller.selectionFeedback.input || ({})
                                     visible: !!feedback.text
-                                    text: feedback.text || ""
+                                    text: Ui.text(feedback.text || "")
                                     textFormat: Text.PlainText; wrapMode: Text.Wrap
                                     maximumLineCount: 6; elide: Text.ElideRight
-                                    font.pixelSize: 12; color: feedback.error ? "#A63C2C" : root.textMuted
+                                    font.pixelSize: 12; color: feedback.error ? Ui.color("error") : root.textMuted
                                     ToolTip.visible: inputFeedbackHover.hovered && truncated
-                                    ToolTip.text: text
+                                    ToolTip.text: Ui.text(text)
                                     HoverHandler { id: inputFeedbackHover }
                                 }
                                 AppButton { visible: controller.selectionChecking; text: "取消资料检查"; variant: "link"; onClicked: controller.cancelSelectionCheck() }
@@ -1024,37 +1073,37 @@ ApplicationWindow {
                                                 id: supportFieldLabel
                                                 Layout.minimumWidth: Math.max(145, implicitWidth)
                                                 Layout.preferredWidth: Layout.minimumWidth
-                                                text: controller.supportLabel
+                                                text: Ui.text(controller.supportLabel)
                                                 color: root.textMain; font.pixelSize: 13
                                             }
                                             Item {
                                                 Layout.fillWidth: true
                                                 Layout.preferredHeight: 30
-                                                Text { anchors.fill: parent; text: controller.supportPath || "未选择"; color: controller.supportPath ? root.textMain : root.textFaint; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
+                                                Text { anchors.fill: parent; text: Ui.text(controller.supportPath || "未选择"); color: controller.supportPath ? root.textMain : root.textFaint; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
                                                 MouseArea {
                                                     anchors.fill: parent; hoverEnabled: true
                                                     enabled: controller.selectionEnabled && !!controller.supportPath
                                                     onDoubleClicked: controller.openSelectedInput(controller.supportPath)
                                                     ToolTip.visible: containsMouse; ToolTip.delay: 600
-                                                    ToolTip.text: controller.supportPath + "\n双击打开"
+                                                    ToolTip.text: Ui.text(controller.supportPath + "\n双击打开")
                                                 }
                                             }
                                             AppButton { enabled: controller.selectionEnabled; text: controller.currentTool === "material_collector" ? "选择文件" : controller.supportButtonText; variant: "link"; onClicked: controller.chooseSupportFile() }
                                             AppButton { enabled: controller.selectionEnabled; visible: controller.supportAllowsFolder; text: "选择文件夹"; variant: "link"; onClicked: controller.chooseSupportFolder() }
                                             AppButton { enabled: controller.selectionEnabled; visible: !!controller.supportPath; text: "清除"; variant: "link"; onClicked: controller.clearSupport() }
                                         }
-                                        Text { Layout.fillWidth: true; text: controller.supportDropHint; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+                                        Text { Layout.fillWidth: true; text: Ui.text(controller.supportDropHint); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
                                         Text {
                                             id: supportSelectionFeedback
                                             Layout.fillWidth: true
                                             property var feedback: controller.selectionFeedback.support || ({})
                                             visible: !!feedback.text
-                                            text: feedback.text || ""
+                                            text: Ui.text(feedback.text || "")
                                             textFormat: Text.PlainText; wrapMode: Text.Wrap
                                             maximumLineCount: 6; elide: Text.ElideRight
-                                            font.pixelSize: 12; color: feedback.error ? "#A63C2C" : root.textMuted
+                                            font.pixelSize: 12; color: feedback.error ? Ui.color("error") : root.textMuted
                                             ToolTip.visible: supportFeedbackHover.hovered && truncated
-                                            ToolTip.text: text
+                                            ToolTip.text: Ui.text(text)
                                             HoverHandler { id: supportFeedbackHover }
                                         }
                                     }
@@ -1071,7 +1120,7 @@ ApplicationWindow {
                                     width: formColumn.width
                                     visible: controller.currentTool !== "folder_rename"
                                     spacing: 10
-                                    Text { Layout.preferredWidth: 145; text: "结果位置"; color: root.textMain; font.pixelSize: 13 }
+                                    Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text("结果位置"); color: root.textMain; font.pixelSize: 13 }
                                     Rectangle {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 36
@@ -1079,7 +1128,7 @@ ApplicationWindow {
                                         radius: 6
                                         border.width: 1
                                         border.color: root.border
-                                        Text { anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; text: controller.hasProject ? "当前项目 / 本次处理结果" : "请先新建或打开工作项目"; color: controller.hasProject ? root.textFaint : root.textDisabled; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
+                                        Text { anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; text: Ui.text(controller.hasProject ? "当前项目 / 本次处理结果" : "请先新建或打开工作项目"); color: controller.hasProject ? root.textFaint : root.textDisabled; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
                                     }
                                     AppButton { text: "打开项目"; variant: "link"; visible: controller.hasProject; onClicked: controller.openProjectFolder() }
                                     AppButton { text: "新建项目"; variant: "link"; visible: !controller.hasProject; enabled: controller.selectionEnabled; onClicked: controller.requestCreateProject() }
@@ -1101,7 +1150,7 @@ ApplicationWindow {
 
                                     Text {
                                         width: materialOptions.width
-                                        text: "资料检索与打包设置"
+                                        text: Ui.text("资料检索与打包设置")
                                         color: root.textMain
                                         font.pixelSize: 13
                                         font.weight: Font.DemiBold
@@ -1125,7 +1174,7 @@ ApplicationWindow {
                                             RowLayout {
                                                 width: materialOptionsColumn.width
                                                 spacing: 8
-                                                Text { Layout.preferredWidth: 66; text: "资料库形式"; color: root.textMain; font.pixelSize: 13 }
+                                                Text { Layout.preferredWidth: 66; wrapMode: Text.Wrap; text: Ui.text("资料库形式"); color: root.textMain; font.pixelSize: 13 }
                                                 AppComboBox {
                                                     id: materialLibraryMode
                                                     Layout.preferredWidth: Math.min(290, Math.max(160, (contentColumn.width - 76) * 0.5))
@@ -1136,7 +1185,7 @@ ApplicationWindow {
                                                 }
                                                 Text {
                                                     Layout.fillWidth: true
-                                                    text: materialOptions.flatOcr ? "源文件不改；首次建立隐藏索引，未变化文件直接复用" : "原模式按姓名文件夹查找"
+                                                    text: Ui.text(materialOptions.flatOcr ? "源文件不改；首次建立隐藏索引，未变化文件直接复用" : "原模式按姓名文件夹查找")
                                                     color: root.textFaint
                                                     font.pixelSize: 11
                                                     wrapMode: Text.Wrap
@@ -1146,12 +1195,12 @@ ApplicationWindow {
                                             RowLayout {
                                                 width: materialOptionsColumn.width
                                                 spacing: 8
-                                                Text { Layout.preferredWidth: 66; text: "目标人员"; color: root.textMain; font.pixelSize: 13 }
+                                                Text { Layout.preferredWidth: 66; wrapMode: Text.Wrap; text: Ui.text("目标人员"); color: root.textMain; font.pixelSize: 13 }
                                                 AppTextField {
                                                     id: materialTargetInput
                                                     Layout.fillWidth: true
                                                     text: materialOptions.targetField.value === undefined || materialOptions.targetField.value === null ? "" : String(materialOptions.targetField.value)
-                                                    placeholderText: "姓名或身份证，多人用逗号隔开"
+                                                    placeholderText: Ui.text("姓名或身份证，多人用逗号隔开")
                                                     onTextEdited: controller.setFieldValue("target_input", text)
                                                 }
                                                 AppButton {
@@ -1167,7 +1216,7 @@ ApplicationWindow {
                                             Text {
                                                 x: 74
                                                 width: Math.max(0, materialOptionsColumn.width - x)
-                                                text: "可选：留空时使用员工名单 Excel；填写时以此处人员为准"
+                                                text: Ui.text("可选：留空时使用员工名单 Excel；填写时以此处人员为准")
                                                 color: root.textFaint
                                                 font.pixelSize: 11
                                                 wrapMode: Text.Wrap
@@ -1176,7 +1225,7 @@ ApplicationWindow {
                                             RowLayout {
                                                 width: materialOptionsColumn.width
                                                 spacing: 8
-                                                Text { Layout.preferredWidth: 66; text: "打包设置"; color: root.textMain; font.pixelSize: 13; Layout.alignment: Qt.AlignTop; topPadding: 5 }
+                                                Text { Layout.preferredWidth: 66; wrapMode: Text.Wrap; text: Ui.text("打包设置"); color: root.textMain; font.pixelSize: 13; Layout.alignment: Qt.AlignTop; topPadding: 5 }
                                                 Flow {
                                                     Layout.fillWidth: true
                                                     spacing: 15
@@ -1205,7 +1254,7 @@ ApplicationWindow {
                                                 x: 74
                                                 width: Math.max(0, materialOptionsColumn.width - x)
                                                 visible: !!materialOptions.collectAllField.value
-                                                text: materialOptions.flatOcr ? "取消勾选「全部」后，可只提取指定材料；索引仍会覆盖整个资料库" : "取消勾选「全部」后可按需勾选材料类型（如身份证、劳动合同等）"
+                                                text: Ui.text(materialOptions.flatOcr ? "取消勾选「全部」后，可只提取指定材料；索引仍会覆盖整个资料库" : "取消勾选「全部」后可按需勾选材料类型（如身份证、劳动合同等）")
                                                 color: root.textFaint
                                                 font.pixelSize: 11
                                                 wrapMode: Text.Wrap
@@ -1221,9 +1270,9 @@ ApplicationWindow {
                                             Text {
                                                 width: materialOptionsColumn.width
                                                 readonly property var feedback: controller.selectionFeedback.material_types || ({})
-                                                visible: !!feedback.text; text: feedback.text || ""
+                                                visible: !!feedback.text; text: Ui.text(feedback.text || "")
                                                 textFormat: Text.PlainText; wrapMode: Text.Wrap
-                                                color: "#A63C2C"; font.pixelSize: 12
+                                                color: Ui.color("error"); font.pixelSize: 12
                                             }
                                         }
                                     }
@@ -1258,7 +1307,7 @@ ApplicationWindow {
                                     readonly property var workdayTripField: root.fieldById("include_workday_business_trip")
                                     Text {
                                         Layout.minimumWidth: Math.max(145, implicitWidth)
-                                        text: attendanceOptions.unitField.label || ""
+                                        text: Ui.text(attendanceOptions.unitField.label || "")
                                         color: root.textMain; font.pixelSize: 13
                                     }
                                     AppComboBox {
@@ -1304,21 +1353,21 @@ ApplicationWindow {
                                 // running action must also stay clickable so it can
                                 // always be stopped safely.
                                 enabled: controller.busy || (!controller.workspaceBusy && !controller.updateBlocksTools && !controller.selectionChecking)
-                                implicitWidth: 132
+                                implicitWidth: Math.max(132, contentItem.implicitWidth + 26)
                                 implicitHeight: 40
                                 onClicked: controller.runOrCancel()
                             }
-                            AppButton { text: "打开结果目录"; enabled: controller.canOpenLastResult; implicitWidth: 138; implicitHeight: 40; onClicked: controller.openLastResult() }
+                            AppButton { text: "打开结果目录"; enabled: controller.canOpenLastResult; implicitWidth: Math.max(138, contentItem.implicitWidth + 26); implicitHeight: 40; onClicked: controller.openLastResult() }
                             AppButton { text: "打开报表"; visible: controller.canOpenPrimaryResult; enabled: !controller.busy; onClicked: controller.openPrimaryResult() }
                             AppButton { objectName: "templateNameSettings"; text: "模板设置" + (controller.templateSavedProfileCount ? "（已记住 " + controller.templateSavedProfileCount + " 项）" : ""); visible: controller.supportsTemplateRules; enabled: !controller.busy && !controller.workspaceBusy; onClicked: controller.reviewTemplateRules() }
-                            Text { visible: !!controller.lastRunText; text: controller.lastRunText; color: root.textMuted; font.pixelSize: 12 }
+                            Text { visible: !!controller.lastRunText; text: Ui.text(controller.lastRunText); color: root.textMuted; font.pixelSize: 12 }
                             Item { Layout.fillWidth: true }
                         }
 
                         Text {
                             visible: controller.updateBlocksTools
                             width: contentColumn.width; wrapMode: Text.Wrap
-                            text: controller.updateBlockMessage
+                            text: Ui.text(controller.updateBlockMessage)
                             color: root.primary; font.pixelSize: 12
                         }
 
@@ -1326,8 +1375,8 @@ ApplicationWindow {
                             objectName: "taskStageText"
                             width: contentColumn.width
                             visible: controller.busy && controller.currentTool !== "material_collector"
-                            text: controller.runProgressMessage + (controller.runProgressTotal > 0
-                                ? "（当前阶段 " + controller.runProgressCurrent + "/" + controller.runProgressTotal + "）" : "")
+                            text: Ui.text(controller.runProgressMessage + (controller.runProgressTotal > 0
+                                ? "（当前阶段 " + controller.runProgressCurrent + "/" + controller.runProgressTotal + "）" : ""))
                             textFormat: Text.PlainText; wrapMode: Text.Wrap
                             color: root.primary; font.pixelSize: 13
                         }
@@ -1340,18 +1389,18 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.margins: 14
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Text { text: "处理完成 · " + controller.resultNoticeCount + " 条提醒/运行信息"; color: root.textMain; font.pixelSize: 13 }
+                                    Text { text: Ui.text("处理完成 · " + controller.resultNoticeCount + " 条提醒/运行信息"); color: root.textMain; font.pixelSize: 13 }
                                     Item { Layout.fillWidth: true }
                                     AppButton { text: "复制全部"; variant: "link"; onClicked: controller.copyResultNotices() }
                                 }
-                                Text { Layout.fillWidth: true; text: "请按原文核对；条数不代表异常人数。"; color: root.textMuted; font.pixelSize: 11 }
+                                Text { Layout.fillWidth: true; text: Ui.text("请按原文核对；条数不代表异常人数。"); color: root.textMuted; font.pixelSize: 11 }
                                 Flow {
                                     Layout.fillWidth: true; Layout.preferredHeight: childrenRect.height
                                     spacing: 4
                                     Repeater {
                                         model: controller.resultNoticeCategories
                                         AppButton {
-                                            text: modelData.name + " " + modelData.count
+                                            text: Ui.text(modelData.name) + " " + modelData.count
                                             variant: controller.resultNoticeFilter === modelData.name ? "tonal" : "link"
                                             onClicked: controller.setResultNoticeFilter(modelData.name)
                                         }
@@ -1365,11 +1414,11 @@ ApplicationWindow {
                                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                     delegate: Text {
                                         width: ListView.view.width; height: implicitHeight + 6
-                                        text: "【" + model.category + "】" + model.text; textFormat: Text.PlainText
+                                        text: Ui.text("【" + model.category + "】" + model.text); textFormat: Text.PlainText
                                         wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
                                         color: root.textMain; font.pixelSize: 12
                                         ToolTip.visible: noticeHover.hovered && truncated
-                                        ToolTip.text: text
+                                        ToolTip.text: Ui.text(text)
                                         HoverHandler { id: noticeHover }
                                     }
                                 }
@@ -1396,7 +1445,7 @@ ApplicationWindow {
                                 spacing: 8
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Text { text: "运行记录"; color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
+                                    Text { text: Ui.text("运行记录"); color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
                                     Item { Layout.fillWidth: true }
                                     AppButton {
                                         objectName: "copyRunLogsButton"
@@ -1428,8 +1477,8 @@ ApplicationWindow {
                                             id: logBullet
                                             width: Math.ceil(implicitWidth)
                                             y: Math.round((parent.height - height) / 2)
-                                            text: level === "muted" ? "" : "●"
-                                            color: level === "error" ? "#C83A3A" : level === "warning" ? "#C28112" : level === "success" ? "#1D8E68" : root.primary
+                                            text: Ui.text(level === "muted" ? "" : "●")
+                                            color: level === "error" ? Ui.color("error1") : level === "warning" ? Ui.color("warning7") : level === "success" ? Ui.color("accent2") : root.primary
                                             font.pixelSize: 9
                                         }
                                         Text {
@@ -1437,7 +1486,7 @@ ApplicationWindow {
                                             x: logBullet.width + 7
                                             width: Math.ceil(implicitWidth)
                                             y: Math.round((parent.height - height) / 2)
-                                            text: time; color: "#9A9D99"; font.pixelSize: 10
+                                            text: Ui.text(time); color: Ui.color("muted7"); font.pixelSize: 10
                                             verticalAlignment: Text.AlignTop
                                         }
                                         TextEdit {
@@ -1446,7 +1495,7 @@ ApplicationWindow {
                                             x: logTime.x + logTime.width + 7
                                             y: Math.round((parent.height - height) / 2)
                                             width: Math.max(0, parent.width - x)
-                                            text: model.text
+                                            text: Ui.text(model.text)
                                             color: level === "muted" ? root.textMuted : root.textMain
                                             font.pixelSize: 12
                                             wrapMode: TextEdit.Wrap
@@ -1455,7 +1504,7 @@ ApplicationWindow {
                                             selectByMouse: true
                                             selectByKeyboard: true
                                             persistentSelection: true
-                                            selectionColor: "#D8EAE3"
+                                            selectionColor: Ui.color("selection4")
                                             selectedTextColor: root.textMain
                                             MouseArea {
                                                 anchors.fill: parent
@@ -1465,9 +1514,9 @@ ApplicationWindow {
                                             Menu {
                                                 id: logContextMenu
                                                 objectName: "logContextMenu"
-                                                MenuItem { text: "复制"; enabled: logText.selectedText.length > 0; onTriggered: logText.copy() }
-                                                MenuItem { text: "选择本条"; onTriggered: { logText.forceActiveFocus(); logText.selectAll() } }
-                                                MenuItem { text: "复制全部记录"; onTriggered: controller.copyRunLogs() }
+                                                MenuItem { text: Ui.text("复制"); enabled: logText.selectedText.length > 0; onTriggered: logText.copy() }
+                                                MenuItem { text: Ui.text("选择本条"); onTriggered: { logText.forceActiveFocus(); logText.selectAll() } }
+                                                MenuItem { text: Ui.text("复制全部记录"); onTriggered: controller.copyRunLogs() }
                                             }
                                         }
                                     }
@@ -1490,7 +1539,7 @@ ApplicationWindow {
         width: 250
         padding: 9
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { radius: 11; color: "#FFFFFF"; border.color: root.border }
+        background: Rectangle { radius: 11; color: Ui.color("surface"); border.color: root.border }
         contentItem: ColumnLayout {
             spacing: 4
             AppButton {
@@ -1512,7 +1561,7 @@ ApplicationWindow {
             Text {
                 visible: controller.recentProjects.length > 0
                 Layout.fillWidth: true
-                text: "最近项目"
+                text: Ui.text("最近项目")
                 color: root.textMuted
                 font.pixelSize: 11
                 leftPadding: 8
@@ -1533,11 +1582,11 @@ ApplicationWindow {
         id: textFieldComponent
         RowLayout {
             spacing: 10
-            Text { Layout.preferredWidth: 145; text: field.label; color: root.textMain; font.pixelSize: 13 }
+            Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text(field.label); color: root.textMain; font.pixelSize: 13 }
             AppTextField {
                 Layout.fillWidth: true
                 text: field.value === undefined || field.value === null ? "" : String(field.value)
-                placeholderText: field.placeholder || ""
+                placeholderText: Ui.text(field.placeholder || "")
                 onTextEdited: controller.setFieldValue(field.id, text)
             }
         }
@@ -1547,12 +1596,16 @@ ApplicationWindow {
         id: choiceFieldComponent
         RowLayout {
             spacing: 10
-            Text { Layout.preferredWidth: 145; text: field.label; color: root.textMain; font.pixelSize: 13 }
+            Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text(field.label); color: root.textMain; font.pixelSize: 13 }
             AppComboBox {
                 id: combo
                 Layout.preferredWidth: Math.min(360, Math.max(220, implicitWidth))
                 model: field.options || []
                 textRole: "label"
+                optionDescriptions: field.id === "rename_mode" ? {
+                    "按 Excel 原文件名匹配": "将文件的完整原名称与 Excel 中的原文件名列匹配，使用同一行的新名称。",
+                    "按 Excel 人名顺序批量重命名": "按 Excel 行顺序分配名称，可在预览中调整对应关系。"
+                } : ({})
                 currentIndex: root.choiceIndex(field)
                 onActivated: controller.setFieldValue(field.id, field.options[index].value)
             }
@@ -1582,7 +1635,7 @@ ApplicationWindow {
         id: dateRangeFieldComponent
         RowLayout {
             spacing: 10
-            Text { Layout.preferredWidth: 145; text: field.label; color: root.textMain; font.pixelSize: 13; Layout.alignment: Qt.AlignTop }
+            Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text(field.label); color: root.textMain; font.pixelSize: 13; Layout.alignment: Qt.AlignTop }
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 6
@@ -1592,19 +1645,19 @@ ApplicationWindow {
                     AppTextField {
                         Layout.preferredWidth: 138
                         text: field.startValue === undefined || field.startValue === null ? "" : String(field.startValue)
-                        placeholderText: field.startPlaceholder || ""
+                        placeholderText: Ui.text(field.startPlaceholder || "")
                         onTextEdited: controller.setFieldValue(field.startId, text)
                         onEditingFinished: controller.normalizeDateField(field.startId, text)
                     }
-                    Text { text: "至"; color: root.textMuted; font.pixelSize: 12 }
+                    Text { text: Ui.text("至"); color: root.textMuted; font.pixelSize: 12 }
                     AppTextField {
                         Layout.preferredWidth: 138
                         text: field.endValue === undefined || field.endValue === null ? "" : String(field.endValue)
-                        placeholderText: field.endPlaceholder || ""
+                        placeholderText: Ui.text(field.endPlaceholder || "")
                         onTextEdited: controller.setFieldValue(field.endId, text)
                         onEditingFinished: controller.normalizeDateField(field.endId, text)
                     }
-                    Text { Layout.fillWidth: true; text: field.hint || ""; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+                    Text { Layout.fillWidth: true; text: Ui.text(field.hint || ""); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
                 }
                 Flow {
                     Layout.fillWidth: true
@@ -1614,7 +1667,7 @@ ApplicationWindow {
                         delegate: AppButton {
                             text: modelData.label
                             variant: "link"
-                            implicitWidth: 58
+                            implicitWidth: Math.max(58, contentItem.implicitWidth + 12)
                             implicitHeight: 28
                             onClicked: controller.applyDatePreset(field.presetGroup, modelData.value)
                         }
@@ -1623,9 +1676,9 @@ ApplicationWindow {
                 Text {
                     Layout.fillWidth: true
                     readonly property var feedback: controller.selectionFeedback[field.presetGroup + "_range"] || ({})
-                    visible: !!feedback.text; text: feedback.text || ""
+                    visible: !!feedback.text; text: Ui.text(feedback.text || "")
                     textFormat: Text.PlainText; wrapMode: Text.Wrap
-                    color: "#A63C2C"; font.pixelSize: 12
+                    color: Ui.color("error"); font.pixelSize: 12
                 }
             }
         }
@@ -1640,7 +1693,7 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
-                Text { Layout.preferredWidth: 66; text: "指定材料"; color: root.textMain; font.pixelSize: 13 }
+                Text { Layout.preferredWidth: 66; wrapMode: Text.Wrap; text: Ui.text("指定材料"); color: root.textMain; font.pixelSize: 13 }
                 AppButton { text: "全选"; variant: "link"; onClicked: controller.selectAllMaterials() }
                 AppButton { text: "取消全选"; variant: "link"; onClicked: controller.clearMaterials() }
                 Item { Layout.fillWidth: true }
@@ -1649,7 +1702,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.leftMargin: 74
                 spacing: 6
-                Text { text: "常用组合"; color: root.textFaint; font.pixelSize: 11 }
+                Text { text: Ui.text("常用组合"); color: root.textFaint; font.pixelSize: 11 }
                 AppComboBox {
                     id: materialCollectorPresetCombo
                     Layout.preferredWidth: 160
@@ -1661,7 +1714,7 @@ ApplicationWindow {
                 PresetMenuButton { backend: controller; presetName: materialCollectorPresetCombo.currentText }
                 Item { Layout.fillWidth: true }
             }
-            Text { Layout.fillWidth: true; Layout.leftMargin: 74; text: "选择组合后，点击“应用”才会更改材料勾选。"; color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
+            Text { Layout.fillWidth: true; Layout.leftMargin: 74; text: Ui.text("选择组合后，点击“应用”才会更改材料勾选。"); color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
             Flow {
                 Layout.fillWidth: true
                 Layout.leftMargin: 74
@@ -1679,7 +1732,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.leftMargin: 74
                 spacing: 6
-                Text { text: "自定义材料"; color: root.textFaint; font.pixelSize: 11 }
+                Text { text: Ui.text("自定义材料"); color: root.textFaint; font.pixelSize: 11 }
                 AppComboBox {
                     id: materialCollectorCustomCombo
                     visible: controller.customMaterials.length > 0
@@ -1698,7 +1751,7 @@ ApplicationWindow {
             Text {
                 Layout.fillWidth: true
                 Layout.leftMargin: 74
-                text: "自定义材料和预设会保存在本机；应用组合后仍可继续增减勾选。"
+                text: Ui.text("自定义材料和预设会保存在本机；应用组合后仍可继续增减勾选。")
                 color: root.textFaint
                 font.pixelSize: 11
                 wrapMode: Text.Wrap
@@ -1712,7 +1765,7 @@ ApplicationWindow {
             spacing: 7
             RowLayout {
                 Layout.fillWidth: true
-                Text { Layout.preferredWidth: 145; text: "常用组合"; color: root.textMain; font.pixelSize: 13 }
+                Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text("常用组合"); color: root.textMain; font.pixelSize: 13 }
                 AppComboBox {
                     id: presetCombo
                     Layout.preferredWidth: 190
@@ -1724,10 +1777,10 @@ ApplicationWindow {
                 PresetMenuButton { backend: controller; presetName: presetCombo.currentText }
                 Item { Layout.fillWidth: true }
             }
-            Text { Layout.fillWidth: true; Layout.leftMargin: 145; text: "选择组合后，点击“应用”才会更改材料勾选。"; color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
+            Text { Layout.fillWidth: true; Layout.leftMargin: 145; text: Ui.text("选择组合后，点击“应用”才会更改材料勾选。"); color: root.textFaint; font.pixelSize: 11; wrapMode: Text.Wrap }
             RowLayout {
                 Layout.fillWidth: true
-                Text { Layout.preferredWidth: 145; text: field.label; color: root.textMain; font.pixelSize: 13 }
+                Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text(field.label); color: root.textMain; font.pixelSize: 13 }
                 AppButton { text: "全选"; variant: "link"; onClicked: controller.selectAllMaterials() }
                 AppButton { text: "取消全选"; variant: "link"; onClicked: controller.clearMaterials() }
                 Item { Layout.fillWidth: true }
@@ -1837,7 +1890,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 34
                     radius: 8
-                    color: "#FFFFFF"
+                    color: Ui.color("surface")
                     border.color: root.border
                     RowLayout {
                         anchors.fill: parent
@@ -1851,14 +1904,14 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 Layout.preferredWidth: 1
-                                text: modelData.label
+                                text: Ui.text(modelData.label)
                                 hoverEnabled: true
                                 focusPolicy: Qt.StrongFocus
                                 Accessible.checkable: true
                                 Accessible.checked: selected
                                 onClicked: controller.setWorkspaceScope(modelData.value)
                                 contentItem: Text {
-                                    text: scopeButton.text
+                                    text: Ui.text(scopeButton.text)
                                     color: scopeButton.selected ? root.primary : root.textMuted
                                     font.pixelSize: 13
                                     font.weight: scopeButton.selected ? Font.DemiBold : Font.Normal
@@ -1881,20 +1934,20 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 38
                     leftPadding: 38
-                    placeholderText: "输入文件名"
-                    Accessible.name: "按文件名查找"
+                    placeholderText: Ui.text("输入文件名")
+                    Accessible.name: Ui.text("按文件名查找")
                     onTextEdited: controller.setWorkspaceSearch(text)
                     background: Rectangle {
                         radius: 9
-                        color: "#F7F6F4"
-                        border.color: workspaceSearchField.activeFocus ? root.primary : "#F0EFED"
+                        color: Ui.color("surface11")
+                        border.color: workspaceSearchField.activeFocus ? root.primary : Ui.color("surface2")
                     }
-                    Image {
+                    ThemedImage {
                         anchors.left: parent.left
                         anchors.leftMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
                         width: 16; height: 16
-                        source: "components/magnifying-glass.png"
+                        source: Qt.resolvedUrl("components/magnifying-glass.png")
                         sourceSize.width: 32; sourceSize.height: 32
                         opacity: 0.45
                     }
@@ -1907,14 +1960,14 @@ ApplicationWindow {
                         id: workspaceAddButton
                         text: "添加"
                         variant: "link"
-                        Layout.preferredWidth: 66
-                        Accessible.name: text
+                        Layout.preferredWidth: Math.max(66, implicitWidth)
+                        Accessible.name: Ui.text(text)
                         enabled: controller.projectWritable && !controller.busy && !controller.workspaceBusy
                         onClicked: workspaceAddMenu.open()
                         contentItem: RowLayout {
                             spacing: 7
-                            Image { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: "components/plus-circle-green.png"; sourceSize.width: 28; sourceSize.height: 28; opacity: workspaceAddButton.enabled ? 1 : 0.3 }
-                            Text { Layout.fillWidth: true; text: workspaceAddButton.text; color: workspaceAddButton.enabled ? root.primary : root.textDisabled; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+                            ThemedImage { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: Qt.resolvedUrl("components/plus-circle-green.png"); sourceSize.width: 28; sourceSize.height: 28; opacity: workspaceAddButton.enabled ? 1 : 0.3 }
+                            Text { Layout.fillWidth: true; text: Ui.text(workspaceAddButton.text); color: workspaceAddButton.enabled ? root.primary : root.textDisabled; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
                         }
                     }
                     AppButton { visible: controller.workspaceBusy; text: "取消导入"; variant: "link"; onClicked: controller.cancelWorkspaceImport() }
@@ -1923,13 +1976,13 @@ ApplicationWindow {
                         id: workspaceRefreshButton
                         text: "刷新"
                         variant: "link"
-                        Layout.preferredWidth: 66
-                        Accessible.name: text
+                        Layout.preferredWidth: Math.max(66, implicitWidth)
+                        Accessible.name: Ui.text(text)
                         onClicked: controller.refreshWorkspace()
                         contentItem: RowLayout {
                             spacing: 7
-                            Image { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: "components/arrows-clockwise-green.png"; sourceSize.width: 28; sourceSize.height: 28 }
-                            Text { Layout.fillWidth: true; text: workspaceRefreshButton.text; color: root.primary; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+                            ThemedImage { Layout.preferredWidth: 14; Layout.preferredHeight: 14; source: Qt.resolvedUrl("components/arrows-clockwise-green.png"); sourceSize.width: 28; sourceSize.height: 28 }
+                            Text { Layout.fillWidth: true; text: Ui.text(workspaceRefreshButton.text); color: root.primary; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
                         }
                     }
                 }
@@ -1969,8 +2022,8 @@ ApplicationWindow {
                                 anchors.leftMargin: 5 + depth * 15
                                 anchors.rightMargin: 5
                                 spacing: 4
-                                Text { Layout.preferredWidth: 12; text: isDir ? (expanded ? "▾" : "▸") : ""; color: root.textMuted; font.pixelSize: 10 }
-                                ToolIcon { Layout.preferredWidth: 16; Layout.preferredHeight: 16; iconId: isDir ? "folder_rename" : "social_security"; strokeColor: isDir ? root.primary : "#617381"; lineWidth: 1.15 }
+                                Text { Layout.preferredWidth: 12; text: Ui.text(isDir ? (expanded ? "▾" : "▸") : ""); color: root.textMuted; font.pixelSize: 10 }
+                                ToolIcon { Layout.preferredWidth: 16; Layout.preferredHeight: 16; iconId: isDir ? "folder_rename" : "social_security"; strokeColor: isDir ? root.primary : Ui.color("link5"); lineWidth: 1.15 }
                                 Text { Layout.fillWidth: true; text: name; color: root.textMain; font.pixelSize: 12; elide: Text.ElideMiddle; verticalAlignment: Text.AlignVCenter }
                             }
                             MouseArea {
@@ -2002,7 +2055,7 @@ ApplicationWindow {
                                 }
                                 onDoubleClicked: if (!startedDrag) controller.openWorkspaceRow(index)
                                 ToolTip.visible: containsMouse && !pressed
-                                ToolTip.text: path + "\n向左拖入资料区；单击选中，双击打开"
+                                ToolTip.text: Ui.text(path + "\n向左拖入资料区；单击选中，双击打开")
                                 ToolTip.delay: 600
                             }
                             MouseArea {
@@ -2019,7 +2072,7 @@ ApplicationWindow {
                     Text {
                         anchors.centerIn: parent
                         visible: workspaceList.count === 0
-                        text: controller.hasProject ? "当前范围还没有项目文件" : "请先打开工作项目"
+                        text: Ui.text(controller.hasProject ? "当前范围还没有项目文件" : "请先打开工作项目")
                         color: root.textFaint
                         font.pixelSize: 12
                         horizontalAlignment: Text.AlignHCenter
@@ -2027,14 +2080,15 @@ ApplicationWindow {
                 }
                 Card {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 126
+                    Layout.preferredHeight: Math.max(126, workspaceSelectionContent.implicitHeight + 20)
                     color: root.surface
                     ColumnLayout {
+                        id: workspaceSelectionContent
                         anchors.fill: parent
                         anchors.margins: 10
                         spacing: 3
-                        Text { Layout.fillWidth: true; text: controller.workspaceSelectionAvailable ? controller.workspaceSelectedName : "选择项目文件"; color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideMiddle }
-                        Text { Layout.fillWidth: true; text: controller.workspaceSelectedDetail; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
+                        Text { Layout.fillWidth: true; text: Ui.text(controller.workspaceSelectionAvailable ? controller.workspaceSelectedName : "选择项目文件"); color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideMiddle }
+                        Text { Layout.fillWidth: true; text: Ui.text(controller.workspaceSelectedDetail); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight }
                         AppButton {
                             text: "带入当前工具"; variant: "link"
                             enabled: controller.selectionEnabled && controller.workspaceSelectionAvailable
@@ -2070,7 +2124,7 @@ ApplicationWindow {
         contentItem: ColumnLayout {
             AppButton { Layout.fillWidth: true; text: "添加为待处理资料"; enabled: workspaceUseMenu.inputAllowed && controller.selectionEnabled; onClicked: { workspaceUseMenu.close(); controller.useWorkspaceSelection("input") } }
             AppButton { Layout.fillWidth: true; text: "设为" + controller.supportLabel; visible: controller.hasSupportField; enabled: workspaceUseMenu.supportAllowed && controller.selectionEnabled; onClicked: { workspaceUseMenu.close(); controller.useWorkspaceSelection("support") } }
-            Text { Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: root.textMuted; text: "仅带入选择，不移动原件。灰色选项表示该区域不支持此项。" }
+            Text { Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: root.textMuted; text: Ui.text("仅带入选择，不移动原件。灰色选项表示该区域不支持此项。") }
         }
     }
 
@@ -2099,7 +2153,7 @@ ApplicationWindow {
         modal: true
         interactive: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { color: "#FBFAF7"; border.color: root.border }
+        background: Rectangle { color: Ui.color("surface15"); border.color: root.border }
 
         ColumnLayout {
             anchors.fill: parent
@@ -2109,8 +2163,8 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 ColumnLayout {
                     Layout.fillWidth: true; spacing: 2
-                    Text { text: "旧版记录"; color: root.textMain; font.pixelSize: 19; font.weight: Font.DemiBold }
-                    Text { text: "查看升级前保存的上传资料和结果；新处理记录请在项目文件中查看。"; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                    Text { text: Ui.text("旧版记录"); color: root.textMain; font.pixelSize: 19; font.weight: Font.DemiBold }
+                    Text { text: Ui.text("查看升级前保存的上传资料和结果；新处理记录请在项目文件中查看。"); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 }
                 AppButton { text: "关闭"; variant: "link"; onClicked: historyDrawer.close() }
             }
@@ -2119,7 +2173,7 @@ ApplicationWindow {
                 AppTextField {
                     id: historySearch
                     Layout.fillWidth: true
-                    placeholderText: "按功能或文件名查找"
+                    placeholderText: Ui.text("按功能或文件名查找")
                     selectByMouse: true
                     onAccepted: controller.refreshHistory(text, historyTool.currentValue, historyDate.currentText)
                 }
@@ -2133,7 +2187,7 @@ ApplicationWindow {
                 AppComboBox { id: historyDate; Layout.preferredWidth: 125; model: controller.historyDateOptions }
                 AppButton { text: "查找"; onClicked: controller.refreshHistory(historySearch.text, historyTool.currentValue, historyDate.currentText) }
             }
-            Text { Layout.fillWidth: true; text: controller.historyMessage; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+            Text { Layout.fillWidth: true; text: Ui.text(controller.historyMessage); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -2141,7 +2195,7 @@ ApplicationWindow {
                 Card {
                     Layout.preferredWidth: Math.max(300, historyDrawer.width * 0.47)
                     Layout.fillHeight: true
-                    color: "#F8F7F3"
+                    color: Ui.color("surface12")
                     ListView {
                         id: historyList
                         anchors.fill: parent
@@ -2156,16 +2210,16 @@ ApplicationWindow {
                             width: historyList.width
                             height: 76
                             radius: 8
-                            color: historyList.currentIndex === index ? "#E1ECE8" : (historyMouse.containsMouse ? "#EFEDE8" : "transparent")
+                            color: historyList.currentIndex === index ? Ui.color("selection9") : (historyMouse.containsMouse ? Ui.color("border14") : "transparent")
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 8; spacing: 2
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Text { Layout.fillWidth: true; text: tool; color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight }
-                                    Text { text: status; color: status === "已完成" ? root.primary : "#A36D10"; font.pixelSize: 10 }
+                                    Text { Layout.fillWidth: true; text: Ui.text(tool); color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                                    Text { text: Ui.text(status); color: status === "已完成" ? root.primary : Ui.color("warning3"); font.pixelSize: 10 }
                                 }
-                                Text { Layout.fillWidth: true; text: time + " · " + inputs; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideMiddle }
-                                Text { Layout.fillWidth: true; text: "结果：" + outputs; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideMiddle }
+                                Text { Layout.fillWidth: true; text: Ui.text(time + " · " + inputs); color: root.textMuted; font.pixelSize: 10; elide: Text.ElideMiddle }
+                                Text { Layout.fillWidth: true; text: Ui.text("结果：" + outputs); color: root.textMuted; font.pixelSize: 10; elide: Text.ElideMiddle }
                             }
                             MouseArea {
                                 id: historyMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -2179,8 +2233,8 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 16; spacing: 10
-                        Text { Layout.fillWidth: true; text: controller.historyDetail.title || "选择一条记录查看详情"; color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
-                        Text { Layout.fillWidth: true; Layout.fillHeight: true; text: controller.historyDetail.body || "这里用于查看升级前由旧版本保存的处理记录。"; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap; verticalAlignment: Text.AlignTop }
+                        Text { Layout.fillWidth: true; text: Ui.text(controller.historyDetail.title || "选择一条记录查看详情"); color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
+                        Text { Layout.fillWidth: true; Layout.fillHeight: true; text: Ui.text(controller.historyDetail.body || "这里用于查看升级前由旧版本保存的处理记录。"); color: root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap; verticalAlignment: Text.AlignTop }
                         Flow {
                             Layout.fillWidth: true; spacing: 6
                             AppButton { text: "打开结果"; enabled: !!controller.historyDetail.canOpenOutput; onClicked: controller.openHistoryOutput() }
@@ -2198,7 +2252,7 @@ ApplicationWindow {
                 AppButton { text: "重新整理记录"; enabled: !controller.historyBusy; variant: "link"; onClicked: controller.rebuildHistoryIndex() }
                 Item { Layout.fillWidth: true }
                 AppButton { text: "上一页"; enabled: controller.historyHasPrevious && !controller.historyBusy; onClicked: controller.changeHistoryPage(-1) }
-                Text { text: controller.historyPageText; color: root.textMuted; font.pixelSize: 11 }
+                Text { text: Ui.text(controller.historyPageText); color: root.textMuted; font.pixelSize: 11 }
                 AppButton { text: "下一页"; enabled: controller.historyHasNext && !controller.historyBusy; onClicked: controller.changeHistoryPage(1) }
             }
         }
@@ -2210,21 +2264,21 @@ ApplicationWindow {
         anchors.centerIn: Overlay.overlay
         width: Math.min(780, root.settledWidth - 42)
         height: Math.min(610, root.settledHeight - 42)
-        title: "项目回收站"
+        title: Ui.text("项目回收站")
         closePolicy: controller.trashBusy ? Popup.NoAutoClose : Popup.CloseOnEscape
         closeText: "关闭"
         contentItem: ColumnLayout {
             spacing: 9
-            Text { Layout.fillWidth: true; text: "这里保存从当前项目移走的完整处理批次；恢复时不会覆盖已有资料。"; color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+            Text { Layout.fillWidth: true; text: Ui.text("这里保存从当前项目移走的完整处理批次；恢复时不会覆盖已有资料。"); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
             AppTextField {
-                Layout.fillWidth: true; placeholderText: "查找已移除的批次"; selectByMouse: true
+                Layout.fillWidth: true; placeholderText: Ui.text("查找已移除的批次"); selectByMouse: true
                 onTextEdited: controller.setTrashSearch(text)
             }
             RowLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true; spacing: 10
                 Card {
                     Layout.preferredWidth: Math.max(290, trashDialog.availableWidth * 0.48)
-                    Layout.fillHeight: true; color: "#F8F7F3"
+                    Layout.fillHeight: true; color: Ui.color("surface12")
                     ListView {
                         id: trashList
                         anchors.fill: parent; anchors.margins: 8; clip: true
@@ -2233,13 +2287,13 @@ ApplicationWindow {
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                         delegate: Rectangle {
                             width: trashList.width; height: 86; radius: 8
-                            color: trashList.currentIndex === index ? "#E1ECE8" : (trashMouse.containsMouse ? "#EFEDE8" : "transparent")
+                            color: trashList.currentIndex === index ? Ui.color("selection9") : (trashMouse.containsMouse ? Ui.color("border14") : "transparent")
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 8; spacing: 2
-                                Text { Layout.fillWidth: true; text: title; color: root.textMain; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight }
-                                Text { Layout.fillWidth: true; text: tool + " · " + status; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
-                                Text { Layout.fillWidth: true; text: "移入：" + deletedAt; color: root.textMuted; font.pixelSize: 10 }
-                                Text { Layout.fillWidth: true; text: counts + " · " + size; color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
+                                Text { Layout.fillWidth: true; text: Ui.text(title); color: root.textMain; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                                Text { Layout.fillWidth: true; text: Ui.text(tool) + " · " + Ui.text(status); color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
+                                Text { Layout.fillWidth: true; text: Ui.text("移入：" + deletedAt); color: root.textMuted; font.pixelSize: 10 }
+                                Text { Layout.fillWidth: true; text: Ui.text(counts + " · " + size); color: root.textMuted; font.pixelSize: 10; elide: Text.ElideRight }
                             }
                             MouseArea { id: trashMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: controller.selectTrashRow(index) }
                         }
@@ -2249,8 +2303,8 @@ ApplicationWindow {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 16; spacing: 10
-                        Text { text: controller.trashSelectedId ? "恢复到当前项目" : "请选择处理批次"; color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
-                        Text { Layout.fillWidth: true; text: controller.trashSelectedId ? "系统会核对完整清单并恢复到原业务目录；如有同名批次会自动使用新名称。" : "回收站为空，或当前筛选没有匹配结果。"; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap }
+                        Text { text: Ui.text(controller.trashSelectedId ? "恢复到当前项目" : "请选择处理批次"); color: root.textMain; font.pixelSize: 15; font.weight: Font.DemiBold }
+                        Text { Layout.fillWidth: true; text: Ui.text(controller.trashSelectedId ? "系统会核对完整清单并恢复到原业务目录；如有同名批次会自动使用新名称。" : "回收站为空，或当前筛选没有匹配结果。"); color: root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap }
                         Item { Layout.fillHeight: true }
                         AppButton { Layout.fillWidth: true; text: controller.trashBusy ? "正在处理…" : "恢复到项目"; enabled: !!controller.trashSelectedId && controller.projectWritable && !controller.trashBusy && !controller.busy && !controller.workspaceBusy; variant: "primary"; onClicked: controller.restoreSelectedTrash() }
                     }
@@ -2267,7 +2321,7 @@ ApplicationWindow {
         anchors.centerIn: Overlay.overlay
         width: Math.min(860, root.settledWidth - 48)
         height: Math.min(620, root.settledHeight - 48)
-        title: "使用教程"
+        title: Ui.text("使用教程")
         closeText: "关闭"
         property var selectedItem: ({ "toolId": "", "mode": "", "label": "", "lines": [] })
 
@@ -2330,7 +2384,7 @@ ApplicationWindow {
                                     leftPadding: 8
                                     topPadding: 5
                                     bottomPadding: 3
-                                    text: groupData.name
+                                    text: Ui.text(groupData.name)
                                     color: root.textDisabled
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
@@ -2361,7 +2415,7 @@ ApplicationWindow {
                                             Text {
                                                 width: parent.width - 32
                                                 height: parent.height
-                                                text: modelData.label
+                                                text: Ui.text(modelData.label)
                                                 color: helpDialog.isSelected(modelData) ? root.primary : root.textMain
                                                 font.pixelSize: 12
                                                 font.weight: helpDialog.isSelected(modelData) ? Font.DemiBold : Font.Normal
@@ -2402,7 +2456,7 @@ ApplicationWindow {
                         spacing: 11
                         Text {
                             width: parent.width
-                            text: helpDialog.selectedItem.label || ""
+                            text: Ui.text(helpDialog.selectedItem.label || "")
                             color: root.textMain
                             font.pixelSize: 17
                             font.weight: Font.DemiBold
@@ -2412,8 +2466,8 @@ ApplicationWindow {
                             model: helpDialog.selectedItem.lines || []
                             delegate: Text {
                                 width: parent.width
-                                text: modelData.text
-                                color: modelData.style === "warning" ? "#B06B13" : root.textMain
+                                text: Ui.text(modelData.text)
+                                color: modelData.style === "warning" ? Ui.color("warning5") : root.textMain
                                 font.pixelSize: 13
                                 font.weight: modelData.style === "strong" || modelData.style === "warning" ? Font.DemiBold : Font.Normal
                                 wrapMode: Text.Wrap
@@ -2434,13 +2488,13 @@ ApplicationWindow {
         width: Math.min(500, root.settledWidth - 48)
         property string promptText: ""
         property string actionToken: ""
-        title: "输入"
+        title: Ui.text("输入")
         acceptText: "确定"
         rejectText: "取消"
         onAccepted: controller.submitTextAction(actionToken, textInputField.text)
         contentItem: ColumnLayout {
             spacing: 9
-            Text { Layout.fillWidth: true; text: textInputDialog.promptText; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap }
+            Text { Layout.fillWidth: true; text: Ui.text(textInputDialog.promptText); color: root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap }
             AppTextField { id: textInputField; Layout.fillWidth: true; selectByMouse: true }
         }
         function request(titleText, prompt, initialValue, token) {
@@ -2474,9 +2528,9 @@ ApplicationWindow {
         width: Math.min(520, root.settledWidth - 48)
         property string bodyText: ""
         property string level: "info"
-        title: "提示"
+        title: Ui.text("提示")
         closeText: "知道了"
-        contentItem: Text { text: notificationDialog.bodyText; color: root.textMain; font.pixelSize: 13; wrapMode: Text.Wrap; textFormat: Text.PlainText; width: notificationDialog.availableWidth }
+        contentItem: Text { text: Ui.text(notificationDialog.bodyText); color: root.textMain; font.pixelSize: 13; wrapMode: Text.Wrap; textFormat: Text.PlainText; width: notificationDialog.availableWidth }
         function showMessage(titleText, messageText, levelText) {
             title = titleText
             bodyText = messageText
@@ -2492,10 +2546,10 @@ ApplicationWindow {
         width: Math.min(540, root.settledWidth - 48)
         property string bodyText: ""
         property string actionToken: ""
-        title: "确认"
+        title: Ui.text("确认")
         acceptText: "确定"
         rejectText: "取消"
-        contentItem: Text { text: confirmationDialog.bodyText; color: root.textMain; font.pixelSize: 13; wrapMode: Text.Wrap; textFormat: Text.PlainText; width: confirmationDialog.availableWidth }
+        contentItem: Text { text: Ui.text(confirmationDialog.bodyText); color: root.textMain; font.pixelSize: 13; wrapMode: Text.Wrap; textFormat: Text.PlainText; width: confirmationDialog.availableWidth }
         onAccepted: controller.confirmAction(actionToken, true)
         onRejected: controller.confirmAction(actionToken, false)
     }
@@ -2506,7 +2560,7 @@ ApplicationWindow {
         modal: true
         anchors.centerIn: Overlay.overlay
         width: Math.min(590, root.settledWidth - 48)
-        title: "新建工作项目"
+        title: Ui.text("新建工作项目")
         acceptText: "创建并打开"
         rejectText: "取消"
         property alias projectName: projectNameField.text
@@ -2514,10 +2568,10 @@ ApplicationWindow {
         onAccepted: controller.createProject(projectName, projectParent)
         contentItem: ColumnLayout {
             spacing: 10
-            Text { text: "项目是一套可随时打开、完整留存资料的工作文件夹。"; color: root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Text { text: "项目名称"; color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold }
+            Text { text: Ui.text("项目是一套可随时打开、完整留存资料的工作文件夹。"); color: root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Text { text: Ui.text("项目名称"); color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold }
             AppTextField { id: projectNameField; Layout.fillWidth: true; selectByMouse: true }
-            Text { text: "保存位置"; color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold }
+            Text { text: Ui.text("保存位置"); color: root.textMain; font.pixelSize: 13; font.weight: Font.DemiBold }
             RowLayout {
                 Layout.fillWidth: true
                 AppTextField { id: projectParentField; Layout.fillWidth: true; selectByMouse: true }
@@ -2526,6 +2580,8 @@ ApplicationWindow {
             Text { Layout.fillWidth: true; text: projectParentField.text && projectNameField.text ? (projectParentField.text + "/" + projectNameField.text) : ""; color: root.primary; font.pixelSize: 11; elide: Text.ElideMiddle }
         }
     }
+
+    AppearanceDialog { id: appearanceDialog; backend: controller.presentation }
 
     RegionCodeDialog { id: regionCodeDialog; backend: controller; anchors.centerIn: parent }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }

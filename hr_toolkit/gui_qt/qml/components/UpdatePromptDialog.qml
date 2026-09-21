@@ -30,8 +30,8 @@ Dialog {
     spacing: 16
     enter: Transition {}
     exit: Transition {}
-    Overlay.modal: Rectangle { color: "#33000000" }
-    background: Rectangle { color: "#F8F8F8"; radius: dialog.hasUpdate ? 16 : 24; border.color: "#D8D8D8" }
+    Overlay.modal: Rectangle { color: Ui.color("overlay13") }
+    background: Rectangle { color: Ui.color("surface13"); radius: dialog.hasUpdate ? 16 : 24; border.color: Ui.color("border5") }
     header: Item { implicitHeight: 0 }
 
     function showPrompt(value) { prompt = value; answered = false; open() }
@@ -51,8 +51,8 @@ Dialog {
                 width: dialog.availableWidth; visible: !dialog.hasUpdate; spacing: 12
                 Image { width: 56; height: 56; source: dialog.iconSource; fillMode: Image.PreserveAspectFit; smooth: true; sourceSize.width: 112; sourceSize.height: 112 }
                 Item { width: 1; height: 2 }
-                Text { width: parent.width; text: "没有新版本"; font.pixelSize: 14; font.bold: true; color: "#242424"; wrapMode: Text.Wrap }
-                Text { width: parent.width; text: "HR Toolkit v" + (dialog.prompt.currentVersion || "") + "\n目前没有可用的新版本。"; textFormat: Text.PlainText; font.pixelSize: 13; color: "#242424"; wrapMode: Text.Wrap }
+                Text { width: parent.width; text: Ui.text("没有新版本"); font.pixelSize: 14; font.bold: true; color: Ui.color("textStrong"); wrapMode: Text.Wrap }
+                Text { width: parent.width; text: "HR Toolkit v" + (dialog.prompt.currentVersion || "") + "\n" + Ui.text("目前没有可用的新版本。"); textFormat: Text.PlainText; font.pixelSize: 13; color: Ui.color("textStrong"); wrapMode: Text.Wrap }
             }
             Row {
                 id: updateSummaryRow
@@ -60,8 +60,8 @@ Dialog {
                 Image { width: 64; height: 64; source: dialog.iconSource; fillMode: Image.PreserveAspectFit; smooth: true; sourceSize.width: 128; sourceSize.height: 128 }
                 Column {
                     width: Math.max(0, updateSummaryRow.width - 64 - updateSummaryRow.spacing); spacing: 10
-                    Text { width: parent.width; text: "HR Toolkit 有新版本可用！"; font.pixelSize: 16; font.bold: true; color: "#242424"; wrapMode: Text.Wrap }
-                    Text { width: parent.width; text: "新版本为 v" + (dialog.prompt.version || "") + "，你当前使用的是 v" + (dialog.prompt.currentVersion || "") + "。是否现在更新？"; textFormat: Text.PlainText; font.pixelSize: 13; color: "#242424"; wrapMode: Text.Wrap }
+                    Text { width: parent.width; text: Ui.text("HR Toolkit 有新版本可用！"); font.pixelSize: 16; font.bold: true; color: Ui.color("textStrong"); wrapMode: Text.Wrap }
+                    Text { width: parent.width; text: Ui.text("新版本为 v" + (dialog.prompt.version || "") + "，你当前使用的是 v" + (dialog.prompt.currentVersion || "") + "。是否现在更新？"); textFormat: Text.PlainText; font.pixelSize: 13; color: Ui.color("textStrong"); wrapMode: Text.Wrap }
                 }
             }
             UpdateNotesView {
@@ -78,10 +78,10 @@ Dialog {
             Text {
                 id: updateDisclaimer
                 width: dialog.availableWidth; visible: dialog.hasUpdate && (!!dialog.prompt.mandatory || !!dialog.prompt.manual)
-                text: (dialog.prompt.manual ? "点击“下载更新”后会打开下载地址，请按安装提示完成更新。" : "")
+                text: Ui.text((dialog.prompt.manual ? "点击“下载更新”后会打开下载地址，请按安装提示完成更新。" : "")
                       + (dialog.prompt.manual && dialog.prompt.mandatory ? "\n" : "")
-                      + (dialog.prompt.mandatory ? "本次为必要更新；不更新将退出程序。" : "")
-                color: "#606060"; font.pixelSize: 12; wrapMode: Text.Wrap
+                      + (dialog.prompt.mandatory ? "本次为必要更新；不更新将退出程序。" : ""))
+                color: Ui.color("text4"); font.pixelSize: 12; wrapMode: Text.Wrap
             }
     }
     footer: Item {
@@ -97,10 +97,10 @@ Dialog {
                 objectName: "updatePromptPrimary"
                 width: dialog.hasUpdate ? 124 : buttonFlow.width
                 height: 30
-                text: !dialog.hasUpdate ? "好" : dialog.prompt.manual ? "下载更新" : "安装更新"
-                Accessible.name: text
-                background: Rectangle { radius: height / 2; color: primary.down ? "#005FCC" : primary.hovered ? "#0070E8" : "#007AFF"; border.width: primary.visualFocus ? 2 : 0; border.color: "#99C7FF" }
-                contentItem: Text { text: primary.text; color: "white"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                text: Ui.text(!dialog.hasUpdate ? "好" : dialog.prompt.manual ? "下载更新" : "安装更新")
+                Accessible.name: Ui.text(text)
+                background: Rectangle { radius: height / 2; color: primary.down ? Ui.color("link1") : primary.hovered ? Ui.color("link2") : Ui.color("link3"); border.width: primary.visualFocus ? 2 : 0; border.color: Ui.color("link6") }
+                contentItem: Text { text: Ui.text(primary.text); color: Ui.color("onLink"); font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 onClicked: dialog.choose(true)
             }
             Button {
@@ -108,10 +108,10 @@ Dialog {
                 objectName: "updatePromptSecondary"
                 visible: dialog.hasUpdate
                 width: 124; height: 30
-                text: dialog.prompt.mandatory ? "退出程序" : "暂不更新"
-                Accessible.name: text
-                background: Rectangle { radius: height / 2; color: secondary.down ? "#DEDEDE" : secondary.hovered ? "#E9E9E9" : "#EEEEEE"; border.width: secondary.visualFocus ? 2 : 0; border.color: "#99C7FF" }
-                contentItem: Text { text: secondary.text; color: "#242424"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                text: Ui.text(dialog.prompt.mandatory ? "退出程序" : "暂不更新")
+                Accessible.name: Ui.text(text)
+                background: Rectangle { radius: height / 2; color: secondary.down ? Ui.color("border7") : secondary.hovered ? Ui.color("border11") : Ui.color("surface1"); border.width: secondary.visualFocus ? 2 : 0; border.color: Ui.color("link6") }
+                contentItem: Text { text: Ui.text(secondary.text); color: Ui.color("textStrong"); font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 onClicked: dialog.choose(false)
             }
         }

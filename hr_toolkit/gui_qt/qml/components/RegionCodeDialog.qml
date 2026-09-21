@@ -8,7 +8,7 @@ AppDialog {
     property string project: ""
     property string errorText: ""
     property var rows: []
-    title: "地区编号维护"
+    title: Ui.text("地区编号维护")
     width: Math.min(560, parent.width - 32)
     height: Math.min(560, parent.height - 32)
     closeText: "关闭"
@@ -22,10 +22,10 @@ AppDialog {
     onOpened: { regionName.text = ""; regionCode.text = ""; reload() }
     contentItem: ColumnLayout {
         spacing: 10
-        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "仅保存当前项目的自定义配置。同编号或同地区优先使用自定义配置，删除后恢复内置规则。" }
+        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Ui.text("仅保存当前项目的自定义配置。同编号或同地区优先使用自定义配置，删除后恢复内置规则。") }
         RowLayout {
-            AppTextField { id: regionName; Layout.fillWidth: true; placeholderText: "地区名称" }
-            AppTextField { id: regionCode; Layout.preferredWidth: 100; placeholderText: "编号，如 01" }
+            AppTextField { id: regionName; Layout.fillWidth: true; placeholderText: Ui.text("地区名称") }
+            AppTextField { id: regionCode; Layout.preferredWidth: 100; placeholderText: Ui.text("编号，如 01") }
             AppButton {
                 text: "保存"
                 enabled: !!dialog.project && backend.selectionEnabled
@@ -36,7 +36,7 @@ AppDialog {
                 }
             }
         }
-        Label { visible: !!dialog.errorText; text: dialog.errorText; color: "#A63C2C"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { visible: !!dialog.errorText; text: Ui.text(dialog.errorText); color: Ui.color("error"); wrapMode: Text.Wrap; Layout.fillWidth: true }
         ListView {
             Layout.fillWidth: true; Layout.fillHeight: true; clip: true
             model: dialog.rows
@@ -44,8 +44,8 @@ AppDialog {
             delegate: RowLayout {
                 width: ListView.view.width; height: 42
                 Label { text: modelData.name; Layout.fillWidth: true; elide: Text.ElideRight }
-                Label { text: modelData.code; Layout.preferredWidth: 70 }
-                Label { text: modelData.custom ? "自定义" : "内置"; Layout.preferredWidth: 52 }
+                Label { text: Ui.text(modelData.code); Layout.preferredWidth: 70 }
+                Label { text: Ui.text(modelData.custom ? "自定义" : "内置"); Layout.preferredWidth: 52 }
                 AppButton { text: "修改"; variant: "link"; onClicked: { regionName.text = modelData.name; regionCode.text = modelData.code } }
                 AppButton {
                     text: "删除"; variant: "link"; enabled: modelData.custom && backend.selectionEnabled

@@ -17,18 +17,18 @@ Dialog {
     enter: Transition {}
     exit: Transition {}
 
-    Overlay.modal: Rectangle { color: "#66000000" }
+    Overlay.modal: Rectangle { color: Ui.color("overlay") }
 
     background: Rectangle {
-        color: "#FFFFFF"
+        color: Ui.color("surface")
         radius: 12
-        border.color: "#ECEAE4"
+        border.color: Ui.color("border")
         border.width: 1
     }
 
     header: Rectangle {
         implicitHeight: 54
-        color: "#FFFFFF"
+        color: Ui.color("surface")
         radius: 12
 
         Text {
@@ -37,8 +37,8 @@ Dialog {
             anchors.leftMargin: 18
             anchors.rightMargin: control.showCloseButton ? 52 : 18
             anchors.verticalCenter: parent.verticalCenter
-            text: control.title
-            color: "#292825"
+            text: Ui.text(control.title)
+            color: Ui.color("text")
             font.pixelSize: 16
             font.weight: Font.DemiBold
             elide: Text.ElideRight
@@ -49,7 +49,7 @@ Dialog {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: 1
-            color: "#F1EFE9"
+            color: Ui.color("divider")
         }
         AppButton {
             anchors.right: parent.right; anchors.rightMargin: 10
@@ -57,8 +57,8 @@ Dialog {
             visible: control.showCloseButton
             enabled: (control.closePolicy & Popup.CloseOnEscape) !== 0
             implicitWidth: 30; implicitHeight: 30; variant: "link"
-            Accessible.name: "关闭"
-            contentItem: Image { source: "x.png"; sourceSize.width: 28; sourceSize.height: 28; fillMode: Image.PreserveAspectFit }
+            Accessible.name: Ui.text("关闭")
+            contentItem: ThemedImage { source: "x.png"; sourceSize.width: 28; sourceSize.height: 28; fillMode: Image.PreserveAspectFit }
             onClicked: {
                 if (control.rejectText) control.reject()
                 else control.close()
@@ -69,7 +69,7 @@ Dialog {
     footer: Rectangle {
         visible: control.acceptText || control.rejectText || control.closeText
         implicitHeight: visible ? 58 : 0
-        color: "#FFFFFF"
+        color: Ui.color("surface")
         radius: 12
 
         Rectangle {
@@ -77,7 +77,7 @@ Dialog {
             anchors.right: parent.right
             anchors.top: parent.top
             height: 1
-            color: "#F1EFE9"
+            color: Ui.color("divider")
         }
 
         RowLayout {

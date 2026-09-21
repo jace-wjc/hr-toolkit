@@ -3,7 +3,7 @@ import QtQuick 2.15
 Canvas {
     id: borderCanvas
 
-    property color strokeColor: "#D0CBC0"
+    property color strokeColor: Ui.color("border3")
     property real cornerRadius: 12
 
     renderTarget: Canvas.Image
@@ -14,6 +14,8 @@ Canvas {
     onWidthChanged: requestPaint()
     onHeightChanged: requestPaint()
 
+    property color themeRepaintColor: Ui.color("text")
+    onThemeRepaintColorChanged: requestPaint()
     onPaint: {
         var context = getContext("2d")
         context.clearRect(0, 0, width, height)

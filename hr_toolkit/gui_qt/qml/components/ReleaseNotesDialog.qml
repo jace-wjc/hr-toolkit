@@ -20,8 +20,8 @@ Dialog {
     padding: 20; spacing: 18
     enter: Transition {}
     exit: Transition {}
-    background: Rectangle { color: "#F8F8F8"; radius: 16; border.color: "#D8D8D8" }
-    Overlay.modal: Rectangle { color: "#33000000" }
+    background: Rectangle { color: Ui.color("surface13"); radius: 16; border.color: Ui.color("border5") }
+    Overlay.modal: Rectangle { color: Ui.color("overlay13") }
     header: Item { implicitHeight: 0 }
     function showNotes(value) { details = value; open() }
     onOpened: { notesView.resetPosition(); done.forceActiveFocus() }
@@ -34,8 +34,8 @@ Dialog {
             Image { Layout.preferredWidth: 56; Layout.preferredHeight: 56; source: dialog.iconSource; sourceSize.width: 112; sourceSize.height: 112; fillMode: Image.PreserveAspectFit; smooth: true }
             ColumnLayout {
                 Layout.fillWidth: true; spacing: 8
-                Text { Layout.fillWidth: true; text: dialog.details.startup ? "本次更新" : "更新记录"; font.pixelSize: 18; font.bold: true; color: "#242424" }
-                Text { Layout.fillWidth: true; text: "当前版本：HR Toolkit v" + (dialog.details.currentVersion || ""); font.pixelSize: 13; color: "#606060"; wrapMode: Text.Wrap }
+                Text { Layout.fillWidth: true; text: Ui.text(dialog.details.startup ? "本次更新" : "更新记录"); font.pixelSize: 18; font.bold: true; color: Ui.color("textStrong") }
+                Text { Layout.fillWidth: true; text: Ui.text("当前版本：HR Toolkit v" + (dialog.details.currentVersion || "")); font.pixelSize: 13; color: Ui.color("text4"); wrapMode: Text.Wrap }
             }
         }
         UpdateNotesView {
@@ -53,9 +53,9 @@ Dialog {
             id: done
             objectName: "releaseNotesDone"
             anchors.right: parent.right; anchors.rightMargin: 20
-            width: 100; height: 30; text: "好"
-            background: Rectangle { radius: 15; color: done.down ? "#005FCC" : "#007AFF"; border.width: done.visualFocus ? 2 : 0; border.color: "#99C7FF" }
-            contentItem: Text { text: done.text; color: "white"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            width: 100; height: 30; text: Ui.text("好")
+            background: Rectangle { radius: 15; color: done.down ? Ui.color("link1") : Ui.color("link3"); border.width: done.visualFocus ? 2 : 0; border.color: Ui.color("link6") }
+            contentItem: Text { text: Ui.text(done.text); color: Ui.color("onLink"); font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
             onClicked: dialog.close()
         }
     }

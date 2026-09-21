@@ -145,6 +145,18 @@ def main() -> int:
     resize_backdrop = WindowsResizeBackdrop.install(root_window)
     resize_helpers_closed = False
 
+    def refresh_resize_backdrop() -> None:
+        nonlocal resize_backdrop
+        if resize_helpers_closed:
+            return
+        color = root_window.color()
+        resize_backdrop.close()
+        resize_backdrop = WindowsResizeBackdrop.install(
+            root_window, (color.red(), color.green(), color.blue())
+        )
+
+    root_window.colorChanged.connect(refresh_resize_backdrop)
+
     def close_resize_helpers() -> None:
         nonlocal resize_helpers_closed
         if resize_helpers_closed:

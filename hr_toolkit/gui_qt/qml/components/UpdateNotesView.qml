@@ -26,8 +26,8 @@ Rectangle {
     property int renderSlotCount: 0
     onVisibleRangeChanged: growRenderPool()
     implicitHeight: Math.min(Math.ceil(totalHeight) + 28, 320)
-    color: "#FFFFFF"
-    border.color: "#DDDDDD"
+    color: Ui.color("surface")
+    border.color: Ui.color("border6")
     radius: 8
 
     function buildRows() {
@@ -71,6 +71,7 @@ Rectangle {
             flick.contentY = Math.max(0, Math.min(flick.contentY, flick.contentHeight - flick.height))
         })
     }
+    Connections { target: Ui; function onLanguageChanged() { view.invalidateMeasurements() } }
     onEntriesChanged: resetPosition()
     onHistoryChanged: resetPosition()
     onRowsChanged: if (layoutReady) rebuildLayout()
@@ -107,7 +108,7 @@ Rectangle {
                 if (measured === undefined) measured = previous[key]
                 if (measured === undefined) {
                     var probe = row.heading ? headingMeasure : textMeasure
-                    probe.text = row.text
+                    probe.text = Ui.text(row.text)
                     measured = probe.implicitHeight
                 }
                 cache[key] = measured
@@ -179,7 +180,7 @@ Rectangle {
         boundsBehavior: Flickable.StopAtBounds
         activeFocusOnTab: true
         Accessible.role: Accessible.Pane
-        Accessible.name: "更新内容，可上下滚动"
+        Accessible.name: Ui.text("更新内容，可上下滚动")
         Keys.onPressed: function(event) {
             var next = contentY
             if (event.key === Qt.Key_Down) next += 40
@@ -251,9 +252,9 @@ Rectangle {
             contentItem: Rectangle {
                 implicitWidth: 6
                 radius: width / 2
-                color: bar.pressed ? "#707070" : bar.hovered ? "#888888" : "#B5B5B5"
+                color: bar.pressed ? Ui.color("muted1") : bar.hovered ? Ui.color("muted5") : Ui.color("border1")
             }
-            background: Rectangle { color: "#F3F3F3"; radius: width / 2 }
+            background: Rectangle { color: Ui.color("surface7"); radius: width / 2 }
         }
     }
 }

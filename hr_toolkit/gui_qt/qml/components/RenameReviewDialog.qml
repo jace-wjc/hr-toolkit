@@ -6,7 +6,7 @@ AppDialog {
     id: dialog
     objectName: "renameReviewDialog"
     property var backend
-    title: "批量改名 · 完整预览"
+    title: Ui.text("批量改名 · 完整预览")
     width: Math.min(parent.width - 24, 1280)
     height: Math.min(parent.height - 24, 800)
     anchors.centerIn: parent
@@ -26,18 +26,18 @@ AppDialog {
         spacing: 8
         Text {
             Layout.fillWidth: true
-            text: "勾选需要处理的项目；直接编辑名称。文件扩展名保持不变。原件保留，结果另存至项目。"
-            wrapMode: Text.Wrap; color: "#78766E"; font.pixelSize: 12
+            text: Ui.text("勾选需要处理的项目；直接编辑名称。文件扩展名保持不变。原件保留，结果另存至项目。")
+            wrapMode: Text.Wrap; color: Ui.color("muted"); font.pixelSize: 12
         }
         RowLayout {
             Layout.fillWidth: true
             TextField {
                 id: search; objectName: "renameSearch"
                 Layout.fillWidth: true
-                placeholderText: "搜索原名称、新名称、路径或问题"
+                placeholderText: Ui.text("搜索原名称、新名称、路径或问题")
                 onTextChanged: if (dialog.backend) dialog.backend.filterRows(text, statusFilter.currentValue || "all")
             }
-            ComboBox {
+            AppComboBox {
                 id: statusFilter; objectName: "renameStatusFilter"
                 Layout.preferredWidth: 125
                 textRole: "label"; valueRole: "value"
@@ -53,23 +53,23 @@ AppDialog {
         }
         Text {
             Layout.fillWidth: true
-            text: dialog.backend ? dialog.backend.summary + (dialog.backend.validating ? " · 正在校验…" : "") : ""
-            color: "#17715B"; font.pixelSize: 12
+            text: Ui.text(dialog.backend ? dialog.backend.summary + (dialog.backend.validating ? " · 正在校验…" : "") : "")
+            color: Ui.color("accent"); font.pixelSize: 12
         }
         ScrollView {
             Layout.fillWidth: true; Layout.preferredHeight: 55
             visible: dialog.backend && dialog.backend.warnings.length > 0
             clip: true
             TextArea {
-                text: dialog.backend ? dialog.backend.warnings : ""
+                text: Ui.text(dialog.backend ? dialog.backend.warnings : "")
                 readOnly: true; wrapMode: Text.Wrap; selectByMouse: true
-                color: "#936218"; font.pixelSize: 12
+                color: Ui.color("warning1"); font.pixelSize: 12
             }
         }
         Text {
             Layout.fillWidth: true
-            text: "当前项目 / 原名称                         拟用名称（可编辑）                         映射顺序"
-            font.pixelSize: 12; color: "#78766E"
+            text: Ui.text("当前项目 / 原名称                         拟用名称（可编辑）                         映射顺序")
+            font.pixelSize: 12; color: Ui.color("muted")
         }
         ListView {
             id: reviewList; objectName: "renameReviewList"
@@ -85,59 +85,59 @@ AppDialog {
                 property string oldName: model.source_name
                 property string newStem: model.editable_name
                 width: reviewList.width - 16; height: 98
-                color: model.status === "conflict" ? "#FFF3ED" : model.included ? "#FAF9F6" : "#F2F2F0"
-                border.color: model.status === "conflict" ? "#E7B397" : "#ECEAE4"
+                color: model.status === "conflict" ? Ui.color("surface18") : model.included ? Ui.color("input") : Ui.color("surface4")
+                border.color: model.status === "conflict" ? Ui.color("warning8") : Ui.color("border")
                 radius: 6
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 8; spacing: 4
                     RowLayout {
                         Layout.fillWidth: true
-                        CheckBox {
+                        AppCheckBox {
                             checked: model.included
-                            Accessible.name: "包含 " + row.oldName
+                            Accessible.name: Ui.text("包含 " + row.oldName)
                             onClicked: dialog.backend.includeRow(row.rowId, checked)
                         }
                         Text {
                             Layout.preferredWidth: Math.max(140, row.width * 0.30)
-                            text: model.order + ". " + (model.is_dir ? "[文件夹] " : "[文件] ") + row.oldName
-                            elide: Text.ElideMiddle; font.pixelSize: 12; color: "#292825"
+                            text: model.order + ". " + Ui.text(model.is_dir ? "[文件夹] " : "[文件] ") + row.oldName
+                            elide: Text.ElideMiddle; font.pixelSize: 12; color: Ui.color("text")
                             ToolTip.visible: sourceHover.containsMouse
                             ToolTip.text: row.oldName
                             MouseArea { id: sourceHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                         }
-                        TextField {
+                        AppTextField {
                             objectName: "renameNameEditor"
                             Layout.fillWidth: true; Layout.minimumWidth: 90
                             text: row.newStem
                             selectByMouse: true; font.pixelSize: 12
-                            Accessible.name: "拟用名称 " + row.oldName
+                            Accessible.name: Ui.text("拟用名称 " + row.oldName)
                             onTextEdited: dialog.backend.editName(row.rowId, text)
                         }
-                        Text { text: model.suffix; color: "#78766E"; font.pixelSize: 12 }
+                        Text { text: model.suffix; color: Ui.color("muted"); font.pixelSize: 12 }
                         AppButton {
-                            text: "上移"; variant: "link"; implicitWidth: 46
+                            text: "上移"; variant: "link"; implicitWidth: Math.max(46, contentItem.implicitWidth + 12)
                             enabled: dialog.backend && dialog.backend.canReorder && model.order > 1
-                            Accessible.name: "将此姓名映射上移"
+                            Accessible.name: Ui.text("将此姓名映射上移")
                             onClicked: dialog.backend.moveMapping(row.rowId, -1)
                         }
                         AppButton {
-                            text: "下移"; variant: "link"; implicitWidth: 46
+                            text: "下移"; variant: "link"; implicitWidth: Math.max(46, contentItem.implicitWidth + 12)
                             enabled: dialog.backend && dialog.backend.canReorder
-                            Accessible.name: "将此姓名映射下移"
+                            Accessible.name: Ui.text("将此姓名映射下移")
                             onClicked: dialog.backend.moveMapping(row.rowId, 1)
                         }
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: "相对路径：" + model.relative_path
-                        elide: Text.ElideMiddle; color: "#78766E"; font.pixelSize: 11
+                        text: Ui.text("相对路径：" + model.relative_path)
+                        elide: Text.ElideMiddle; color: Ui.color("muted"); font.pixelSize: 11
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: model.status_text + (model.issue ? " · " + model.issue : model.note ? " · " + model.note : "")
-                        elide: Text.ElideRight; color: model.status === "conflict" ? "#A34325" : "#78766E"; font.pixelSize: 11
+                        text: Ui.text(model.status_text) + (model.issue ? " · " + Ui.text(model.issue) : model.note ? " · " + Ui.text(model.note) : "")
+                        elide: Text.ElideRight; color: model.status === "conflict" ? Ui.color("warning2") : Ui.color("muted"); font.pixelSize: 11
                         ToolTip.visible: issueHover.containsMouse
-                        ToolTip.text: text
+                        ToolTip.text: Ui.text(text)
                         MouseArea { id: issueHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                     }
                 }
@@ -145,8 +145,8 @@ AppDialog {
         }
         Text {
             Layout.fillWidth: true
-            text: "Excel 顺序映射：上移/下移只移动姓名，文件位置和扩展名不变；搜索或筛选时禁用移动。所有已选项目校验通过后才能执行。"
-            wrapMode: Text.Wrap; font.pixelSize: 11; color: "#78766E"
+            text: Ui.text("Excel 顺序映射：上移/下移只移动姓名，文件位置和扩展名不变；搜索或筛选时禁用移动。所有已选项目校验通过后才能执行。")
+            wrapMode: Text.Wrap; font.pixelSize: 11; color: Ui.color("muted")
         }
         RowLayout {
             Layout.fillWidth: true

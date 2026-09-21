@@ -4,9 +4,9 @@ import QtQuick.Controls 2.15
 Button {
     id: control
     property string variant: "secondary"
-    property color primaryColor: "#17715B"
-    property color primaryPressedColor: "#125E4B"
-    property color textColor: variant === "primary" ? "#FFFFFF" : (variant === "link" ? primaryColor : "#292825")
+    property color primaryColor: Ui.color("accent")
+    property color primaryPressedColor: Ui.color("accentPressed")
+    property color textColor: variant === "primary" ? Ui.color("onAccent") : (variant === "link" ? primaryColor : Ui.color("text"))
 
     implicitHeight: variant === "link" ? 30 : 34
     implicitWidth: Math.max(variant === "link" ? 52 : 82, contentItem.implicitWidth + (variant === "link" ? 12 : 26))
@@ -17,8 +17,8 @@ Button {
     HoverHandler { cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
 
     contentItem: Text {
-        text: control.text
-        color: control.enabled ? control.textColor : "#B3B0A6"
+        text: Ui.text(control.text)
+        color: control.enabled ? control.textColor : Ui.color("disabledText")
         font.pixelSize: 13
         font.weight: control.variant === "primary" ? Font.DemiBold : Font.Normal
         horizontalAlignment: Text.AlignHCenter
@@ -30,16 +30,16 @@ Button {
         radius: 8
         color: {
             if (!control.enabled)
-                return control.variant === "link" ? "transparent" : "#F2F0EA"
+                return control.variant === "link" ? "transparent" : Ui.color("disabledSurface")
             if (control.variant === "primary")
-                return control.down ? control.primaryPressedColor : (control.hovered ? "#1B7B63" : control.primaryColor)
+                return control.down ? control.primaryPressedColor : (control.hovered ? Ui.color("accentHover") : control.primaryColor)
             if (control.variant === "tonal")
-                return control.down ? "#DCE8E3" : (control.hovered ? "#E0ECE7" : "#E4EFEA")
+                return control.down ? Ui.color("selection6") : (control.hovered ? Ui.color("selection8") : Ui.color("selection"))
             if (control.variant === "link")
-                return control.down ? "#E4EFEA" : (control.hovered ? "#F0EEE8" : "transparent")
-            return control.down ? "#EBE8E1" : (control.hovered ? "#F2F0EA" : "#FFFFFF")
+                return control.down ? Ui.color("selection") : (control.hovered ? Ui.color("hover") : "transparent")
+            return control.down ? Ui.color("pressed") : (control.hovered ? Ui.color("disabledSurface") : Ui.color("surface"))
         }
-        border.color: control.variant === "secondary" ? "#ECEAE4" : "transparent"
+        border.color: control.variant === "secondary" ? Ui.color("border") : "transparent"
         border.width: control.variant === "secondary" ? 1 : 0
     }
 }

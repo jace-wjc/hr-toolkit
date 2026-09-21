@@ -17,29 +17,29 @@ Item {
         sourceComponent: Button {
             id: versionButton
             anchors.fill: parent
-            text: modelData.text
-            Accessible.name: text + (modelData.expanded ? "，收起更新内容" : "，展开更新内容")
+            text: Ui.text(modelData.text)
+            Accessible.name: Ui.text(text + (modelData.expanded ? "，收起更新内容" : "，展开更新内容"))
             onClicked: row.versionClicked(modelData.version)
             background: Rectangle {
                 radius: 5
-                color: versionButton.hovered ? "#EEEEEB" : "#F6F6F4"
+                color: versionButton.hovered ? Ui.color("border13") : Ui.color("surface10")
                 border.width: versionButton.visualFocus ? 1 : 0
-                border.color: "#99C7FF"
+                border.color: Ui.color("link6")
             }
             contentItem: Item {
                 Text {
                     anchors.left: parent.left; anchors.leftMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
-                    text: versionButton.text
-                    font.pixelSize: 14; font.bold: true; color: "#242424"
+                    text: Ui.text(versionButton.text)
+                    font.pixelSize: 14; font.bold: true; color: Ui.color("textStrong")
                 }
                 Item {
                     anchors.right: parent.right; anchors.rightMargin: 10
                     anchors.verticalCenter: parent.verticalCenter
                     width: 8; height: 8
                     rotation: modelData.expanded ? 90 : 0
-                    Rectangle { x: 3; y: 0; width: 1; height: 5; color: "#606060"; rotation: -45 }
-                    Rectangle { x: 3; y: 3; width: 1; height: 5; color: "#606060"; rotation: 45 }
+                    Rectangle { x: 3; y: 0; width: 1; height: 5; color: Ui.color("text4"); rotation: -45 }
+                    Rectangle { x: 3; y: 3; width: 1; height: 5; color: Ui.color("text4"); rotation: 45 }
                 }
             }
         }
@@ -47,7 +47,7 @@ Item {
     Text {
         y: rowText.y
         visible: !modelData.heading
-        text: "•"; color: "#606060"; font.pixelSize: 13
+        text: Ui.text("•"); color: Ui.color("text4"); font.pixelSize: 13
     }
     Text {
         id: rowText
@@ -55,11 +55,11 @@ Item {
         x: modelData.heading ? 0 : 14
         y: modelData.heading && rowIndex > 0 ? 8 : 0
         width: Math.max(0, parent.width - x)
-        text: modelData.text
+        text: Ui.text(modelData.text)
         textFormat: Text.PlainText
         font.pixelSize: modelData.heading ? 14 : 13
         font.bold: modelData.heading
-        color: "#242424"
+        color: Ui.color("textStrong")
         wrapMode: Text.Wrap
         lineHeight: 1.2
     }

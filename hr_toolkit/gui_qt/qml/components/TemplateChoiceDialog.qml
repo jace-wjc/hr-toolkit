@@ -41,7 +41,7 @@ AppDialog {
     }, 0))
     property var columnChoices: makeColumns()
     property string problem: salaryMode ? salaryProblem() : selectionProblem()
-    title: profilesPage ? "已记住的选择" : rulesPage ? "模板设置" : sheetMode ? "确认工作表" : editingSaved ? "修改已记住的选择" : "确认列名"
+    title: Ui.text(profilesPage ? "已记住的选择" : rulesPage ? "模板设置" : sheetMode ? "确认工作表" : editingSaved ? "修改已记住的选择" : "确认列名")
     width: Math.min(parent ? parent.width - 24 : 900, 900)
     height: Math.min(parent ? parent.height - 24 : 790, 790)
     x: parent ? (parent.width - width) / 2 : 0
@@ -57,7 +57,7 @@ AppDialog {
         if (text.normalize) text = text.normalize("NFKC")
         return text.replace(/\s/g, "").toLowerCase()
     }
-    function fieldLabel(name) { return (role.field_labels || {})[name] || name }
+    function fieldLabel(name) { return Ui.text((role.field_labels || {})[name] || name) }
     function readingModeLabel(option) {
         var labels = {attendance_summary: "每人一行", attendance: "每天一条考勤记录",
                       weekly: "按周报记录读取", monthly: "按月报记录读取", _ignore: "本次不读取"}
@@ -95,13 +95,13 @@ AppDialog {
         return values.length ? values.join("、") : "下方几行没有内容，请核对原表"
     }
     function makeColumns() {
-        if (salaryMode) return [{col: 0, label: "请选择原表中的列"}].concat((salaryGroup.columns || []).map(function(c) {
+        if (salaryMode) return [{col: 0, label: Ui.text("请选择原表中的列")}].concat((salaryGroup.columns || []).map(function(c) {
             return {col: c.column, label: c.display + " · " + c.samples}
         }))
         var values = sheet.rows[headerRow - 1] || []
-        var result = [{col: 0, label: "请选择原表中的列"}]
+        var result = [{col: 0, label: Ui.text("请选择原表中的列")}]
         for (var i = 0; i < values.length; i++)
-            if (values[i]) result.push({col: i + 1, label: letter(i + 1) + "列 · " + values[i] + (editingSaved ? "" : " · " + sample(i + 1))})
+            if (values[i]) result.push({col: i + 1, label: Ui.text("第 {0} 列").replace("{0}", letter(i + 1)) + " · " + values[i] + (editingSaved ? "" : " · " + sample(i + 1))})
         return result
     }
     function resetChoices() {
@@ -424,9 +424,9 @@ AppDialog {
             Layout.fillWidth: true; Layout.fillHeight: true; visible: dialog.profilesPage
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap
-                text: "这些选择会用于当前工具中工作表名和表头相同的文件。列的含义变了，请修改或删除；删除后按原有名称识别，不认识的列会重新询问。"
+                text: Ui.text("这些选择会用于当前工具中工作表名和表头相同的文件。列的含义变了，请修改或删除；删除后按原有名称识别，不认识的列会重新询问。")
             }
-            Label { visible: dialog.backend && !dialog.backend.templateSavedProfileCount; text: "还没有记住任何选择。确认列名时默认仅本次使用。"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { visible: dialog.backend && !dialog.backend.templateSavedProfileCount; text: Ui.text("还没有记住任何选择。确认列名时默认仅本次使用。"); wrapMode: Text.Wrap; Layout.fillWidth: true }
             ScrollView {
                 Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
                 Column {
@@ -436,15 +436,15 @@ AppDialog {
                         delegate: ColumnLayout {
                             property var savedProfile: modelData
                             width: parent.width; spacing: 6
-                            Label { Layout.fillWidth: true; text: savedProfile.label + " · " + savedProfile.sheet + " · 第 " + savedProfile.row + " 行"; font.bold: true; textFormat: Text.PlainText; wrapMode: Text.Wrap }
-                            Label { Layout.fillWidth: true; visible: !!savedProfile.file; text: "首次确认文件：" + savedProfile.file; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: "#77746D" }
-                            Label { Layout.fillWidth: true; text: savedProfile.description; textFormat: Text.PlainText; wrapMode: Text.Wrap }
-                            Label { Layout.fillWidth: true; visible: !savedProfile.editable; text: "旧版或跳过记录可直接删除；重新处理文件时再选择。"; color: "#77746D"; wrapMode: Text.Wrap }
+                            Label { Layout.fillWidth: true; text: Ui.text(savedProfile.label + " · " + savedProfile.sheet + " · 第 " + savedProfile.row + " 行"); font.bold: true; textFormat: Text.PlainText; wrapMode: Text.Wrap }
+                            Label { Layout.fillWidth: true; visible: !!savedProfile.file; text: Ui.text("首次确认文件：" + savedProfile.file); textFormat: Text.PlainText; wrapMode: Text.Wrap; color: Ui.color("muted3") }
+                            Label { Layout.fillWidth: true; text: Ui.text(savedProfile.description); textFormat: Text.PlainText; wrapMode: Text.Wrap }
+                            Label { Layout.fillWidth: true; visible: !savedProfile.editable; text: Ui.text("旧版或跳过记录可直接删除；重新处理文件时再选择。"); color: Ui.color("muted3"); wrapMode: Text.Wrap }
                             RowLayout {
                                 AppButton { text: "修改"; visible: savedProfile.editable; enabled: !dialog.working; onClicked: dialog.backend.editTemplateProfile(savedProfile.key) }
                                 AppButton { text: "删除"; enabled: !dialog.working; onClicked: dialog.backend.deleteTemplateProfile(savedProfile.key) }
                             }
-                            Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: "#E3E0D8" }
+                            Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Ui.color("border9") }
                         }
                     }
                 }
@@ -453,7 +453,7 @@ AppDialog {
         Label {
             Layout.fillWidth: true; Layout.fillHeight: true; visible: !dialog.rulesPage && !dialog.profilesPage && !dialog.hasDocument
             wrapMode: Text.Wrap
-            text: "开始处理时，工具会自动检查已选择的资料。能识别的直接使用，需要你确认的会显示在这里。\n\n如果只是想添加、修改或删除列名，请切换到“常用名称管理”。"
+            text: Ui.text("开始处理时，工具会自动检查已选择的资料。能识别的直接使用，需要你确认的会显示在这里。\n\n如果只是想添加、修改或删除列名，请切换到“常用名称管理”。")
         }
         Flickable {
         id: problemViewport
@@ -471,11 +471,11 @@ AppDialog {
             ColumnLayout {
                 id: salaryFilesSection
                 Layout.fillWidth: true; visible: dialog.salaryMode
-                Label { text: "本次模板（相同模板只需确认一次）"; font.bold: true; font.pixelSize: 14 }
+                Label { text: Ui.text("本次模板（相同模板只需确认一次）"); font.bold: true; font.pixelSize: 14 }
                 AppComboBox {
                     id: templatePicker
                     Layout.fillWidth: true
-                    Accessible.name: "选择本次需要确认的模板"
+                    Accessible.name: Ui.text("选择本次需要确认的模板")
                     model: dialog.salaryRevision >= 0 ? dialog.salaryGroups.map(function(g, i) {
                         var ready = !g.sheet_needs_confirmation && Object.keys(g.selections || {}).every(function(k) { return !!g.selections[k] })
                         return "模板 " + (i + 1) + " · " + (g.role === "summary" ? "已有汇总表" : "工资明细") + " · " + g.files.length + " 个文件 · " + (g.skip ? "已跳过" : ready ? "已选齐" : "待确认")
@@ -489,7 +489,7 @@ AppDialog {
                     delegate: ColumnLayout {
                         property var focusControl: modelData.skippable ? issueCheck : issueText
                         Layout.fillWidth: true
-                        Label { id: issueText; Layout.fillWidth: true; wrapMode: Text.Wrap; text: modelData.name + "：" + modelData.message; textFormat: Text.PlainText; color: "#A26713" }
+                        Label { id: issueText; Layout.fillWidth: true; wrapMode: Text.Wrap; text: Ui.text(modelData.name + "：" + modelData.message); textFormat: Text.PlainText; color: Ui.color("warning") }
                         AppCheckBox {
                             id: issueCheck
                             text: modelData.skippable ? "本次跳过这个文件（结果中会列明）" : "此文件需要处理后重新选择，不能跳过"
@@ -508,9 +508,9 @@ AppDialog {
             ColumnLayout {
                 id: sheetConfirmation
                 Layout.fillWidth: true; visible: dialog.sheetMode; spacing: 12
-                Label { Layout.fillWidth: true; text: "请选择需要读取的工作表"; font.bold: true; wrapMode: Text.Wrap }
-                Label { Layout.fillWidth: true; text: "文件：" + (dialog.mappingData.file || "当前文件"); textFormat: Text.PlainText; wrapMode: Text.Wrap }
-                Label { Layout.fillWidth: true; text: dialog.mappingData.message || ""; textFormat: Text.PlainText; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: Ui.text("请选择需要读取的工作表"); font.bold: true; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: Ui.text("文件：" + (dialog.mappingData.file || "当前文件")); textFormat: Text.PlainText; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: Ui.text(dialog.mappingData.message || ""); textFormat: Text.PlainText; wrapMode: Text.Wrap }
                 AppComboBox {
                     Layout.fillWidth: true; visible: !!dialog.mappingData.alternatives
                     model: dialog.mappingData.roles.map(function(r) { return r.label })
@@ -522,97 +522,99 @@ AppDialog {
                     model: dialog.sheetRequests()
                     delegate: ColumnLayout {
                         property var requestItem: modelData
-                        property var options: [{label: "请选择 Excel 底部的工作表", value: undefined}].concat(
+                        property var options: [{label: Ui.text("请选择 Excel 底部的工作表"), value: undefined}].concat(
                             dialog.mappingData.sheets.map(function(s) { return {label: s.name, value: s.name} }),
-                            requestItem.optional ? [{label: "本次没有这类工作表", value: null}] : [])
+                            requestItem.optional ? [{label: Ui.text("本次没有这类工作表"), value: null}] : [])
                         property int selectedIndex: {
                             for (var i = 1; i < options.length; i++)
                                 if (options[i].value === dialog.sheetSelections[requestItem.key]) return i
                             return 0
                         }
                         Layout.fillWidth: true
-                        Label { text: requestItem.label + "数据所在页"; textFormat: Text.PlainText }
+                        Label { text: Ui.text(requestItem.label + "数据所在页"); textFormat: Text.PlainText }
                         AppComboBox {
                             Layout.fillWidth: true; model: parent.options; textRole: "label"
+                            translateOptions: false
                             currentIndex: parent.selectedIndex
                             onActivated: function(index) { dialog.selectSheetForRole(requestItem.key, model[index].value) }
                         }
                         Label {
-                            Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; color: "#77746D"
-                            text: {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText; color: Ui.color("muted3")
+                            text: Ui.text((function() {
                                 var name = dialog.sheetSelections[requestItem.key]
                                 var pages = dialog.mappingData.sheets.filter(function(s) { return s.name === name })
                                 return pages.length ? "内容预览：" + pages[0].rows.slice(0, 5).map(function(row) {
                                     return row.filter(function(v) { return !!v }).slice(0, 6).join(" · ")
                                 }).filter(function(row) { return !!row }).join("\n") : ""
-                            }
+                            })())
                         }
                     }
                 }
-                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "只确认工作表位置，不修改原文件。确认后会检查对应列；缺少资料的选择仅本次有效。"; color: "#77746D" }
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Ui.text("只确认工作表位置，不修改原文件。确认后会检查对应列；缺少资料的选择仅本次有效。"); color: Ui.color("muted3") }
             }
             ColumnLayout {
                 Layout.fillWidth: true; visible: !dialog.sheetMode
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                text: dialog.columnConfirmationHeading()
+                text: Ui.text(dialog.columnConfirmationHeading())
                 font.bold: true; font.pixelSize: 16
             }
             Text {
                 Layout.fillWidth: true
-                text: dialog.editingSaved ? "修改后仅保存选择，不会开始处理文件。" : "请选出未识别内容所在的列。下拉选项里有原表内容，方便核对。"
-                color: "#55534D"; font.pixelSize: 13; wrapMode: Text.Wrap
+                text: Ui.text(dialog.editingSaved ? "修改后仅保存选择，不会开始处理文件。" : "请选出未识别内容所在的列。下拉选项里有原表内容，方便核对。")
+                color: Ui.color("text2"); font.pixelSize: 13; wrapMode: Text.Wrap
             }
             Text {
                 Layout.fillWidth: true
-                text: "文件：" + (dialog.mappingData.file || "本次选择的资料")
-                textFormat: Text.PlainText; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#77746D"
+                text: Ui.text("文件：" + (dialog.mappingData.file || "本次选择的资料"))
+                textFormat: Text.PlainText; wrapMode: Text.Wrap; font.pixelSize: 12; color: Ui.color("muted3")
             }
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                text: "所在工作表：" + (dialog.sheet.name || "未选择")
-                font.pixelSize: 12; color: "#77746D"
+                text: Ui.text("所在工作表：" + (dialog.sheet.name || "未选择"))
+                font.pixelSize: 12; color: Ui.color("muted3")
             }
             RowLayout {
                 Layout.fillWidth: true; visible: !!dialog.role.key
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                    text: (dialog.role.key === "attendance_summary" || dialog.role.key === "attendance" ? "数据排列方式：" : "读取方式：") + dialog.readingModeLabel(dialog.role)
-                    font.pixelSize: 12; color: "#55534D"
+                    text: Ui.text((dialog.role.key === "attendance_summary" || dialog.role.key === "attendance" ? "数据排列方式：" : "读取方式：") + dialog.readingModeLabel(dialog.role))
+                    font.pixelSize: 12; color: Ui.color("text2")
                 }
                 AppButton {
                     text: dialog.roleDetailsExpanded ? "收起" : "修改"
                     variant: "link"; visible: dialog.mappingData.roles.length > 1
-                    Accessible.name: "修改数据读取方式"
+                    Accessible.name: Ui.text("修改数据读取方式")
                     onClicked: dialog.roleDetailsExpanded = !dialog.roleDetailsExpanded
                 }
             }
             ColumnLayout {
                 Layout.fillWidth: true
                 visible: dialog.mappingData.roles.length > 1 && (dialog.roleDetailsExpanded || !dialog.role.key)
-                Label { text: "按数据的排列方式选择" }
+                Label { text: Ui.text("按数据的排列方式选择") }
                 AppComboBox {
                     id: rolePicker
                     Layout.fillWidth: true
-                    Accessible.name: "数据读取方式"
+                    Accessible.name: Ui.text("数据读取方式")
                     model: dialog.mappingData.roles.map(function(r) { return dialog.readingModeLabel(r) })
                     currentIndex: dialog.roleIndex
                     displayText: currentIndex >= 0 ? currentText : "请选择数据的读取方式"
                     onActivated: function(index) { dialog.roleIndex = index; dialog.suggestRow(); dialog.roleDetailsExpanded = false }
                 }
             }
-            Label { visible: dialog.mappingData.sheets.length > 1; text: "读取哪个工作表（Excel 底部的标签）" }
+            Label { visible: dialog.mappingData.sheets.length > 1; text: Ui.text("读取哪个工作表（Excel 底部的标签）") }
             AppComboBox {
                 id: sheetPicker
                 Layout.fillWidth: true; visible: dialog.mappingData.sheets.length > 1
-                Accessible.name: "读取哪个工作表"
+                Accessible.name: Ui.text("读取哪个工作表")
+                translateOptions: false
                 model: dialog.mappingData.sheets.map(function(s) { return s.name })
                 currentIndex: dialog.sheetIndex
                 onActivated: function(index) { dialog.changeSheet(index) }
             }
             Label {
-                Layout.fillWidth: true; wrapMode: Text.Wrap; visible: dialog.skipping; color: "#A26713"
-                text: "这张工作表将不参与本次处理。请确认它不是需要统计的业务数据。"
+                Layout.fillWidth: true; wrapMode: Text.Wrap; visible: dialog.skipping; color: Ui.color("warning")
+                text: Ui.text("这张工作表将不参与本次处理。请确认它不是需要统计的业务数据。")
             }
             ColumnLayout {
                 id: sourceSection
@@ -626,17 +628,17 @@ AppDialog {
                 ColumnLayout {
                 Layout.fillWidth: true; spacing: 8
                 visible: dialog.salaryMode || dialog.detailsExpanded || !dialog.headerRow
-                Label { text: "点选写着列名的那一行"; font.bold: true; font.pixelSize: 14 }
+                Label { text: Ui.text("点选写着列名的那一行"); font.bold: true; font.pixelSize: 14 }
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap
-                    text: dialog.headerRow ? "当前选中第 " + dialog.headerRow + " 行，请核对。选错了，点另一行即可。"
-                                           : "例如写着“姓名、身份证号码、公司”的那一行，不是标题或人员数据。"
-                    color: dialog.headerRow ? "#17715B" : "#A26713"; font.pixelSize: 12
+                    text: Ui.text(dialog.headerRow ? "当前选中第 " + dialog.headerRow + " 行，请核对。选错了，点另一行即可。"
+                                           : "例如写着“姓名、身份证号码、公司”的那一行，不是标题或人员数据。")
+                    color: dialog.headerRow ? Ui.color("accent") : Ui.color("warning"); font.pixelSize: 12
                 }
                 RowLayout {
                     Layout.fillWidth: true
                     AppButton { text: "前几列"; enabled: dialog.columnPage > 0; onClicked: dialog.columnPage-- }
-                    Label { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: dialog.letter(dialog.columnPage * dialog.pageSize + 1) + "—" + dialog.letter(Math.min(dialog.columnCount, (dialog.columnPage + 1) * dialog.pageSize)) + "列" }
+                    Label { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: Ui.text(dialog.letter(dialog.columnPage * dialog.pageSize + 1) + "—" + dialog.letter(Math.min(dialog.columnCount, (dialog.columnPage + 1) * dialog.pageSize)) + "列") }
                     AppButton { text: "后几列"; enabled: (dialog.columnPage + 1) * dialog.pageSize < dialog.columnCount; onClicked: dialog.columnPage++ }
                 }
                 // 只创建可见行和少量列，避免老电脑一次绘制上万格。
@@ -653,40 +655,40 @@ AppDialog {
                         property var values: modelData
                         property bool selectedRow: sourceRow >= dialog.headerRow && sourceRow <= (dialog.salaryMode ? dialog.headerBottom : dialog.headerRow)
                         width: preview.width - 12; height: 36; padding: 0
-                        Accessible.name: "第 " + sourceRow + " 行，点击设为列名行"
+                        Accessible.name: Ui.text("第 " + sourceRow + " 行，点击设为列名行")
                         onClicked: dialog.selectRow(sourceRow)
-                        background: Rectangle { color: previewRow.selectedRow ? "#E4EFEA" : (previewRow.hovered ? "#F0EEE8" : "#FAF9F6"); border.color: "#E3E0D8" }
+                        background: Rectangle { color: previewRow.selectedRow ? Ui.color("selection") : (previewRow.hovered ? Ui.color("hover") : Ui.color("input")); border.color: Ui.color("border9") }
                         contentItem: Row {
-                            Text { width: 42; height: 36; text: previewRow.sourceRow; font.bold: dialog.headerRow === previewRow.sourceRow; verticalAlignment: Text.AlignVCenter; horizontalAlignment: Text.AlignHCenter; color: "#17715B" }
+                            Text { width: 42; height: 36; text: Ui.text(previewRow.sourceRow); font.bold: dialog.headerRow === previewRow.sourceRow; verticalAlignment: Text.AlignVCenter; horizontalAlignment: Text.AlignHCenter; color: Ui.color("accent") }
                             Repeater {
                                 model: dialog.pageSize
                                 Text {
                                     width: Math.max(1, (previewRow.width - 42) / dialog.pageSize); height: 36
                                     text: previewRow.values[dialog.columnPage * dialog.pageSize + index] || ""
                                     textFormat: Text.PlainText; elide: Text.ElideRight; leftPadding: 6; rightPadding: 6
-                                    verticalAlignment: Text.AlignVCenter; color: "#292825"; font.pixelSize: 12
+                                    verticalAlignment: Text.AlignVCenter; color: Ui.color("text"); font.pixelSize: 12
                                 }
                             }
                         }
                     }
                 }
-                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: dialog.salaryMode ? "预览为已读取的前几行。列名占多行或位置更靠后时，可在下面调整后读取。" : "预览仅显示前 30 行、前 512 列。这里找不到列名时，请返回检查原文件；不会修改原表。"; color: "#77746D"; font.pixelSize: 11 }
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Ui.text(dialog.salaryMode ? "预览为已读取的前几行。列名占多行或位置更靠后时，可在下面调整后读取。" : "预览仅显示前 30 行、前 512 列。这里找不到列名时，请返回检查原文件；不会修改原表。"); color: Ui.color("muted3"); font.pixelSize: 11 }
                 Flow {
                     Layout.fillWidth: true; Layout.preferredHeight: childrenRect.height
                     visible: dialog.salaryMode; spacing: 6
-                    Label { text: "列名从第"; height: 36; verticalAlignment: Text.AlignVCenter }
+                    Label { text: Ui.text("列名从第"); height: 36; verticalAlignment: Text.AlignVCenter }
                     SpinBox { from: 1; to: 200; value: dialog.headerRow || 1; editable: true; width: 110; height: 36; onValueModified: { dialog.headerRow = value; dialog.headerBottom = Math.max(value, Math.min(dialog.headerBottom, value + 5)); confirmed.checked = false } }
-                    Label { text: "行，到第"; height: 36; verticalAlignment: Text.AlignVCenter }
+                    Label { text: Ui.text("行，到第"); height: 36; verticalAlignment: Text.AlignVCenter }
                     SpinBox { from: Math.max(1, dialog.headerRow); to: Math.min(200, from + 5); value: dialog.headerBottom || 1; editable: true; width: 110; height: 36; onValueModified: { dialog.headerBottom = value; confirmed.checked = false } }
-                    Label { text: "行"; height: 36; verticalAlignment: Text.AlignVCenter }
+                    Label { text: Ui.text("行"); height: 36; verticalAlignment: Text.AlignVCenter }
                     AppButton { id: readHeadersButton; text: "读取这些列名"; onClicked: dialog.backend.rescanSalaryHeader(dialog.salaryGroup.group_id, dialog.sheet.name, dialog.headerRow, dialog.headerBottom, dialog.salaryPayload()) }
                     AppButton { text: "恢复自动识别"; onClicked: dialog.backend.resetSalaryHeader(dialog.salaryGroup.group_id, dialog.salaryPayload()) }
                 }
                 }
-                Label { text: dialog.editingSaved ? "修改对应列" : "需要你确认的列"; font.bold: true; font.pixelSize: 14 }
-                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !dialog.salaryMode && dialog.recognizedCount() > 0; text: "另有 " + dialog.recognizedCount() + " 项已识别，可展开下方选项查看或修改。"; color: "#17715B"; font.pixelSize: 12 }
-                AppTextField { id: search; Layout.fillWidth: true; visible: extra.checked && Object.keys(dialog.role.fields).length > 8; placeholderText: "要找哪一项？例如：公司、金额"; Accessible.name: "查找需要对应的内容" }
-                AppTextField { id: columnSearch; Layout.fillWidth: true; visible: dialog.columnChoices.length > 16; placeholderText: "原表列太多？输入列名或内容，缩小下拉选项范围"; Accessible.name: "筛选原表中的列" }
+                Label { text: Ui.text(dialog.editingSaved ? "修改对应列" : "需要你确认的列"); font.bold: true; font.pixelSize: 14 }
+                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !dialog.salaryMode && dialog.recognizedCount() > 0; text: Ui.text("另有 " + dialog.recognizedCount() + " 项已识别，可展开下方选项查看或修改。"); color: Ui.color("accent"); font.pixelSize: 12 }
+                AppTextField { id: search; Layout.fillWidth: true; visible: extra.checked && Object.keys(dialog.role.fields).length > 8; placeholderText: Ui.text("要找哪一项？例如：公司、金额"); Accessible.name: Ui.text("查找需要对应的内容") }
+                AppTextField { id: columnSearch; Layout.fillWidth: true; visible: dialog.columnChoices.length > 16; placeholderText: Ui.text("原表列太多？输入列名或内容，缩小下拉选项范围"); Accessible.name: Ui.text("筛选原表中的列") }
                 AppCheckBox { id: extra; text: "查看已识别和其他可选列"; onToggled: if (!checked) search.text = "" }
                 Repeater {
                     id: fieldRepeater
@@ -698,40 +700,41 @@ AppDialog {
                         visible: ((dialog.salaryMode && requiredField) || dialog.attentionFields.indexOf(fieldName) >= 0 || extra.checked || search.text.length > 0)
                                  && (!search.text || dialog.fieldLabel(fieldName).toLowerCase().indexOf(search.text.toLowerCase()) >= 0)
                         Layout.fillWidth: true; spacing: 4
-                        Label { text: dialog.fieldLabel(fieldName) + "对应列" + (requiredField ? "（必须选择）" : "（可不选）"); textFormat: Text.PlainText; font.pixelSize: 13 }
+                        Label { text: Ui.text(dialog.fieldLabel(fieldName) + "对应列" + (requiredField ? "（必须选择）" : "（可不选）")); textFormat: Text.PlainText; font.pixelSize: 13 }
                         AppComboBox {
                             id: fieldEditor
                             Layout.fillWidth: true; enabled: dialog.headerRow > 0 && !dialog.salaryNeedsRead()
-                            Accessible.name: "选择“" + dialog.fieldLabel(fieldName) + "”在原表中的列"
+                            Accessible.name: Ui.text("选择“" + dialog.fieldLabel(fieldName) + "”在原表中的列")
                             model: dialog.filteredColumns(fieldName); textRole: "label"
+                            translateOptions: false
                             currentIndex: dialog.filteredIndex(fieldName, model)
-                            displayText: currentIndex > 0 ? currentText : (requiredField ? "请选择“" + dialog.fieldLabel(fieldName) + "”所在列" : "不指定，保留原来的读取方式")
+                            displayText: currentIndex > 0 ? currentText : Ui.text(requiredField ? "请选择“" + dialog.fieldLabel(fieldName) + "”所在列" : "不指定，保留原来的读取方式")
                             onActivated: function(index) { dialog.chooseColumn(fieldName, model[index].col) }
                         }
-                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !!dialog.chosen[fieldName] && !dialog.editingSaved; text: "原表内容示例：" + dialog.sample(dialog.chosen[fieldName]); textFormat: Text.PlainText; color: "#77746D"; font.pixelSize: 12; maximumLineCount: 2; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !!dialog.chosen[fieldName] && !dialog.editingSaved; text: Ui.text("原表内容示例：" + dialog.sample(dialog.chosen[fieldName])); textFormat: Text.PlainText; color: Ui.color("muted3"); font.pixelSize: 12; maximumLineCount: 2; elide: Text.ElideRight }
                     }
                 }
             }
             }
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                text: dialog.problem || (dialog.editingSaved ? "请核对后保存修改。" : "选择已齐全，请核对后继续。")
-                color: dialog.problem ? "#A26713" : "#17715B"; font.pixelSize: 13
+                text: Ui.text(dialog.problem || (dialog.editingSaved ? "请核对后保存修改。" : "选择已齐全，请核对后继续。"))
+                color: dialog.problem ? Ui.color("warning") : Ui.color("accent"); font.pixelSize: 13
             }
         }
     }
     }
     footer: Rectangle {
         implicitHeight: actions.implicitHeight + 24
-        color: "#FAF9F6"; radius: 12
+        color: Ui.color("input"); radius: 12
         ColumnLayout {
             id: actions
             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
             anchors.margins: 12; spacing: 6
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
-                text: dialog.working ? "正在读取，请稍候…" : dialog.profilesPage ? "修改或删除已记住的选择，不会修改原文件和已有结果。" : dialog.rulesPage ? "常用名称对当前工具长期生效；如“222”含义会变，请使用本次文件确认。" : !dialog.hasDocument ? "原文件不会被修改。" : dialog.problem || (!confirmed.checked ? (dialog.sheetMode ? "请核对工作表选择。" : "请核对所选列的含义。") : "已完成核对，可以继续。")
-                textFormat: Text.PlainText; color: dialog.problem ? "#A26713" : "#17715B"; font.pixelSize: 12
+                text: Ui.text(dialog.working ? "正在读取，请稍候…" : dialog.profilesPage ? "修改或删除已记住的选择，不会修改原文件和已有结果。" : dialog.rulesPage ? "常用名称对当前工具长期生效；如“222”含义会变，请使用本次文件确认。" : !dialog.hasDocument ? "原文件不会被修改。" : dialog.problem || (!confirmed.checked ? (dialog.sheetMode ? "请核对工作表选择。" : "请核对所选列的含义。") : "已完成核对，可以继续。"))
+                textFormat: Text.PlainText; color: dialog.problem ? Ui.color("warning") : Ui.color("accent"); font.pixelSize: 12
             }
             AppCheckBox {
                 id: confirmed

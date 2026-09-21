@@ -22,14 +22,14 @@ AppButton {
         y: control.height + 4
         width: 218; padding: 8
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { color: "#FFFFFF"; radius: 9; border.color: "#ECEAE4" }
+        background: Rectangle { color: Ui.color("surface"); radius: 9; border.color: Ui.color("border") }
         contentItem: ColumnLayout {
             spacing: 3
             AppButton { Layout.fillWidth: true; text: "保存当前为新预设"; onClicked: { menu.close(); control.backend.requestCreateMaterialPreset() } }
             AppButton { Layout.fillWidth: true; text: "用当前勾选更新预设"; enabled: control.customPreset; onClicked: { menu.close(); control.backend.updateMaterialPreset(control.menuPreset) } }
             AppButton { Layout.fillWidth: true; text: "重命名预设"; enabled: control.customPreset; onClicked: { menu.close(); control.backend.requestRenameMaterialPreset(control.menuPreset) } }
             AppButton { Layout.fillWidth: true; text: "删除预设"; enabled: control.customPreset; onClicked: { menu.close(); control.backend.requestDeleteMaterialPreset(control.menuPreset) } }
-            Text { Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: "#858278"; text: "内置预设保持不变；删除仍需确认。" }
+            Text { Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: Ui.color("muted4"); text: Ui.text("内置预设保持不变；删除仍需确认。") }
         }
     }
 }

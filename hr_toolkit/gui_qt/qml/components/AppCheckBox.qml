@@ -18,17 +18,19 @@ CheckBox {
         radius: 3
         x: control.leftPadding
         y: (control.height - height) / 2
-        color: !control.enabled ? "#F2F0EA" : (control.checked ? "#17715B" : "#FFFFFF")
+        color: !control.enabled ? Ui.color("disabledSurface") : (control.checked ? Ui.color("accent") : Ui.color("surface"))
         border.width: 1
-        border.color: !control.enabled ? "#D8D5CB" : (control.checked ? "#17715B" : (control.activeFocus ? "#17715B" : "#B9B6AE"))
+        border.color: !control.enabled ? Ui.color("border4") : (control.checked ? Ui.color("accent") : (control.activeFocus ? Ui.color("accent") : Ui.color("border2")))
 
         Canvas {
             anchors.fill: parent
             visible: control.checked
+            property color themeRepaintColor: control.enabled ? Ui.color("onAccent") : Ui.color("disabledText")
+            onThemeRepaintColorChanged: requestPaint()
             onPaint: {
                 var context = getContext("2d")
                 context.clearRect(0, 0, width, height)
-                context.strokeStyle = "#FFFFFF"
+                context.strokeStyle = control.enabled ? Ui.color("onAccent") : Ui.color("disabledText")
                 context.lineWidth = 1.7
                 context.lineCap = "round"
                 context.lineJoin = "round"
@@ -43,8 +45,8 @@ CheckBox {
 
     contentItem: Text {
         leftPadding: control.indicator.width + control.spacing
-        text: control.text
-        color: control.enabled ? "#292825" : "#B3B0A6"
+        text: Ui.text(control.text)
+        color: control.enabled ? Ui.color("text") : Ui.color("disabledText")
         font.pixelSize: 13
         verticalAlignment: Text.AlignVCenter
         wrapMode: Text.Wrap

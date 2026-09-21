@@ -36,7 +36,7 @@ include = ["hr_toolkit*"]
 
 [tool.setuptools.package-data]
 "hr_toolkit.templates" = ["*.xlsx"]
-"hr_toolkit.gui_qt" = ["qml/*.qml", "qml/components/*.qml", "qml/components/*.svg", "qml/components/*.png", "qml/components/*LICENSE.txt"]
+"hr_toolkit.gui_qt" = ["qml/*.qml", "qml/components/*.qml", "qml/components/*.js", "qml/components/qmldir", "qml/components/*.svg", "qml/components/*.png", "qml/components/*LICENSE.txt"]
 
 [tool.setuptools.dynamic]
 version = { attr = "hr_toolkit.__version__" }

@@ -21,8 +21,8 @@ Dialog {
     enter: Transition {}
     exit: Transition {}
     header: Item { implicitHeight: 0 }
-    background: Rectangle { radius: 16; color: "#F8F8F8"; border.color: "#D8D8D8" }
-    Overlay.modal: Rectangle { color: "#33000000" }
+    background: Rectangle { radius: 16; color: Ui.color("surface13"); border.color: Ui.color("border5") }
+    Overlay.modal: Rectangle { color: Ui.color("overlay13") }
     contentItem: RowLayout {
         spacing: 16
         Image {
@@ -35,23 +35,23 @@ Dialog {
             Layout.fillWidth: true; spacing: 9
             Text {
                 Layout.fillWidth: true
-                text: dialog.phase === "verifying" ? "正在校验更新…"
+                text: Ui.text(dialog.phase === "verifying" ? "正在校验更新…"
                       : dialog.phase === "launching" ? "正在打开安装程序…"
                       : dialog.phase === "cancelling" ? "正在取消更新…"
-                      : dialog.phase === "preparing" ? "正在准备更新…" : "正在下载更新…"
-                font.pixelSize: 14; font.bold: true; color: "#242424"; wrapMode: Text.Wrap
+                      : dialog.phase === "preparing" ? "正在准备更新…" : "正在下载更新…")
+                font.pixelSize: 14; font.bold: true; color: Ui.color("textStrong"); wrapMode: Text.Wrap
             }
             ProgressBar {
                 id: bar
                 Layout.fillWidth: true
                 indeterminate: dialog.progress < 0
                 from: 0; to: 1; value: Math.max(0, dialog.progress)
-                background: Rectangle { implicitHeight: 6; radius: 3; color: "#DEDEDE" }
+                background: Rectangle { implicitHeight: 6; radius: 3; color: Ui.color("border7") }
                 contentItem: Item {
                     implicitHeight: 6; clip: true
                     Rectangle {
                         id: fill
-                        height: parent.height; radius: 3; color: "#007AFF"
+                        height: parent.height; radius: 3; color: Ui.color("link3")
                         width: bar.indeterminate ? parent.width * 0.28 : parent.width * bar.visualPosition
                         x: 0
                         SequentialAnimation on x {
@@ -66,18 +66,18 @@ Dialog {
             RowLayout {
                 Layout.fillWidth: true; spacing: 10
                 Text {
-                    Layout.fillWidth: true; text: dialog.statusText
-                    font.pixelSize: 12; color: "#606060"; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                    Layout.fillWidth: true; text: Ui.text(dialog.statusText)
+                    font.pixelSize: 12; color: Ui.color("text4"); wrapMode: Text.Wrap; textFormat: Text.PlainText
                 }
                 Button {
                     id: cancel
                     Layout.preferredWidth: 88; Layout.preferredHeight: 26
                     visible: dialog.canCancel || dialog.phase === "cancelling"
                     enabled: dialog.canCancel
-                    text: dialog.phase === "cancelling" ? "正在取消…" : "取消"
-                    Accessible.name: text
-                    background: Rectangle { radius: 6; color: cancel.down ? "#DEDEDE" : "#EEEEEE"; border.width: cancel.visualFocus ? 2 : 0; border.color: "#99C7FF" }
-                    contentItem: Text { text: cancel.text; font.pixelSize: 13; color: cancel.enabled ? "#242424" : "#888888"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    text: Ui.text(dialog.phase === "cancelling" ? "正在取消…" : "取消")
+                    Accessible.name: Ui.text(text)
+                    background: Rectangle { radius: 6; color: cancel.down ? Ui.color("border7") : Ui.color("surface1"); border.width: cancel.visualFocus ? 2 : 0; border.color: Ui.color("link6") }
+                    contentItem: Text { text: Ui.text(cancel.text); font.pixelSize: 13; color: cancel.enabled ? Ui.color("textStrong") : Ui.color("muted5"); horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     onClicked: dialog.cancelRequested()
                 }
             }

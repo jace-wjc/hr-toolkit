@@ -94,7 +94,7 @@ class WindowsResizeBackdrop:
         return self._active
 
     @classmethod
-    def install(cls, window) -> "WindowsResizeBackdrop":
+    def install(cls, window, background_rgb=WINDOW_BACKGROUND_RGB) -> "WindowsResizeBackdrop":
         backdrop = cls()
         if not sys.platform.startswith("win"):
             return backdrop
@@ -135,7 +135,7 @@ class WindowsResizeBackdrop:
             gdi32.DeleteObject.argtypes = (wintypes.HANDLE,)
             gdi32.DeleteObject.restype = wintypes.BOOL
 
-            color_ref = _windows_colorref(*WINDOW_BACKGROUND_RGB)
+            color_ref = _windows_colorref(*background_rgb)
             brush = int(gdi32.CreateSolidBrush(color_ref) or 0)
             if not brush:
                 return backdrop

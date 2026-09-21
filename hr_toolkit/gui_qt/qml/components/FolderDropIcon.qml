@@ -6,7 +6,7 @@ Rectangle {
     implicitWidth: 34
     implicitHeight: 34
     radius: 9
-    color: "#E4EFEA"
+    color: Ui.color("selection")
 
     Canvas {
         anchors.centerIn: parent
@@ -14,10 +14,12 @@ Rectangle {
         height: 18
         renderTarget: Canvas.Image
         renderStrategy: Canvas.Cooperative
+        property color themeRepaintColor: Ui.color("text")
+        onThemeRepaintColorChanged: requestPaint()
         onPaint: {
             var context = getContext("2d")
             context.clearRect(0, 0, width, height)
-            context.strokeStyle = "#17715B"
+            context.strokeStyle = Ui.color("accent")
             context.lineWidth = 1.7
             context.lineCap = "round"
             context.lineJoin = "round"

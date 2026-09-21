@@ -12,8 +12,8 @@ Rectangle {
     property real fraction: total > 0 ? Math.max(0, Math.min(1, completed / total)) : 0
     implicitHeight: progressContent.implicitHeight + 28
     radius: 8
-    color: "#F3F7F4"
-    border.color: "#DCE6DF"
+    color: Ui.color("surface8")
+    border.color: Ui.color("selection5")
 
     ColumnLayout {
         id: progressContent
@@ -24,12 +24,12 @@ Rectangle {
         spacing: 8
         RowLayout {
             Layout.fillWidth: true
-            Text { text: "当前阶段进度"; color: "#253B30"; font.pixelSize: 13; font.bold: true }
+            Text { text: Ui.text("当前阶段进度"); color: Ui.color("accent3"); font.pixelSize: 13; font.bold: true }
             Item { Layout.fillWidth: true }
             Text {
                 objectName: "materialProgressCount"
-                text: progressPanel.total > 0 ? progressPanel.completed + "/" + progressPanel.total + "（" + Math.floor(progressPanel.fraction * 100) + "%）" : "正在确定工作量"
-                color: "#39624A"
+                text: Ui.text(progressPanel.total > 0 ? progressPanel.completed + "/" + progressPanel.total + "（" + Math.floor(progressPanel.fraction * 100) + "%）" : "正在确定工作量")
+                color: Ui.color("accent7")
                 font.pixelSize: 12
             }
         }
@@ -37,30 +37,30 @@ Rectangle {
             Layout.fillWidth: true
             height: 7
             radius: 3
-            color: "#DEE7E0"
+            color: Ui.color("selection7")
             Rectangle {
                 objectName: "materialProgressFill"
                 width: parent.width * progressPanel.fraction
                 height: parent.height
                 radius: 3
-                color: "#287950"
+                color: Ui.color("accent4")
                 // 无计时器补进度或插值动画；宽度仅由业务完成数驱动。
             }
         }
         Text {
             Layout.fillWidth: true
-            text: progressPanel.message
+            text: Ui.text(progressPanel.message)
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
-            color: "#344C3D"
+            color: Ui.color("accent5")
             font.pixelSize: 12
         }
         Text {
             Layout.fillWidth: true
-            text: "已用 " + progressPanel.elapsedSeconds + " 秒" + (progressPanel.active ? " · 距上次进度更新 " + progressPanel.waitSeconds + " 秒；单份资料识别期间计数保持不变" : "")
+            text: Ui.text("已用 " + progressPanel.elapsedSeconds + " 秒" + (progressPanel.active ? " · 距上次进度更新 " + progressPanel.waitSeconds + " 秒；单份资料识别期间计数保持不变" : ""))
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
-            color: "#708176"
+            color: Ui.color("muted2")
             font.pixelSize: 11
         }
     }

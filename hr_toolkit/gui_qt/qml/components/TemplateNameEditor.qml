@@ -113,8 +113,8 @@ Item {
         spacing: 10
         Text {
             Layout.fillWidth: true
-            text: "系统内置名称始终保留，不能取消、修改或删除。你添加的名称可以修改、删除，点击底部保存后生效；取消则不保存本次修改。同一工具的不同项目共用，不改原文件。"
-            wrapMode: Text.Wrap; color: "#55534D"; font.pixelSize: 12
+            text: Ui.text("系统内置名称始终保留，不能取消、修改或删除。你添加的名称可以修改、删除，点击底部保存后生效；取消则不保存本次修改。同一工具的不同项目共用，不改原文件。")
+            wrapMode: Text.Wrap; color: Ui.color("text2"); font.pixelSize: 12
         }
         RowLayout {
             AppButton { text: "列名设置"; variant: dialog.kindFilter === "fields" ? "primary" : "secondary"; onClicked: dialog.setKind("fields") }
@@ -128,23 +128,23 @@ Item {
         }
         Text {
             Layout.fillWidth: true
-            text: dialog.revision >= 0 ? "生效名称：" + ((dialog.currentSection.selected || []).join("、") || "沿用系统自动识别") : ""
-            color: "#187A65"; font.pixelSize: 12; wrapMode: Text.Wrap; textFormat: Text.PlainText
+            text: Ui.text(dialog.revision >= 0 ? "生效名称：" + ((dialog.currentSection.selected || []).join("、") || Ui.text("沿用系统自动识别")) : "")
+            color: Ui.color("accent1"); font.pixelSize: 12; wrapMode: Text.Wrap; textFormat: Text.PlainText
         }
         Text {
             Layout.fillWidth: true
             visible: dialog.currentSection.kind === "sheets"
-            text: dialog.currentSection.builtinRule || "系统原有工作表识别始终保留；自定义名称作为补充。"
-            wrapMode: Text.Wrap; color: "#77746D"; font.pixelSize: 11
+            text: Ui.text(dialog.currentSection.builtinRule || "系统原有工作表识别始终保留；自定义名称作为补充。")
+            wrapMode: Text.Wrap; color: Ui.color("muted3"); font.pixelSize: 11
         }
         RowLayout {
             Layout.fillWidth: true
-            AppTextField { id: newName; Layout.fillWidth: true; placeholderText: dialog.editingName ? "输入修改后的名称" : (dialog.kindFilter === "sheets" ? "添加页名，例如1、2、增员表" : "添加自定义名称，例如名字、name"); onAccepted: dialog.addName() }
+            AppTextField { id: newName; Layout.fillWidth: true; placeholderText: Ui.text(dialog.editingName ? "输入修改后的名称" : (dialog.kindFilter === "sheets" ? "添加页名，例如1、2、增员表" : "添加自定义名称，例如名字、name")); onAccepted: dialog.addName() }
             AppButton { text: dialog.editingName ? "确认修改" : "添加"; onClicked: dialog.addName() }
             AppButton { text: "取消修改"; visible: !!dialog.editingName; onClicked: dialog.cancelEdit() }
         }
-        Text { Layout.fillWidth: true; visible: !!dialog.editError; text: dialog.editError; color: "#A26713"; wrapMode: Text.Wrap; textFormat: Text.PlainText }
-        AppTextField { id: search; Layout.fillWidth: true; placeholderText: "查找当前资料中的名称，最多显示 100 项" }
+        Text { Layout.fillWidth: true; visible: !!dialog.editError; text: Ui.text(dialog.editError); color: Ui.color("warning"); wrapMode: Text.Wrap; textFormat: Text.PlainText }
+        AppTextField { id: search; Layout.fillWidth: true; placeholderText: Ui.text("查找当前资料中的名称，最多显示 100 项") }
         ScrollView {
             Layout.fillWidth: true; Layout.fillHeight: true
             clip: true
@@ -158,7 +158,7 @@ Item {
                         width: parent.width
                         AppCheckBox {
                             Layout.fillWidth: true
-                            text: aliasName + (dialog.isBuiltin(aliasName) ? "（系统内置）" : dialog.selected(aliasName) ? "（自定义）" : "（原表候选，勾选添加）")
+                            text: aliasName + " " + Ui.text(dialog.isBuiltin(aliasName) ? "（系统内置）" : dialog.selected(aliasName) ? "（自定义）" : "（原表候选，勾选添加）")
                             checked: dialog.isBuiltin(aliasName) || dialog.selected(aliasName)
                             enabled: !dialog.isBuiltin(aliasName) && !dialog.selected(aliasName)
                             onToggled: if (checked) dialog.toggle(aliasName, true)

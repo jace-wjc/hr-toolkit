@@ -15,7 +15,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GUI = "qt_controller qt_entrypoint qt_form_specs material_collector_gui project_creation_gui"
+GUI = "presentation qt_controller qt_entrypoint qt_form_specs material_collector_gui project_creation_gui"
 STORE = "project_store project_store_lite history_store project_run run_coordinator " + GUI
 PROCESS = "background_process run_coordinator project_run performance_regressions " + GUI
 BUSINESS = (
@@ -34,7 +34,7 @@ WIN7 = set((
     "salary_split social_security tool_registry paths pdf_backend_compat "
     "release_metadata background_process qt_controller qt_entrypoint qt_form_specs "
     "run_coordinator material_preferences material_collector_gui project_creation_gui "
-    "ci_scope"
+    "ci_scope presentation"
 ).split())
 PIN_TEST = (
     "tests.test_windows_packaging.WindowsPackagingTests."
@@ -86,6 +86,9 @@ ROUTES = {
     "hr_toolkit/gui_qt/rename_review.py": "rename_review rename_plan qt_controller",
     "hr_toolkit/gui_qt/qml/components/RenameReviewDialog.qml": "rename_review",
     "tests/qt_rename_review_probe.py": "rename_review",
+    "tests/qt_presentation_probe.py": "presentation",
+    "hr_toolkit/gui_qt/presentation.py": "presentation " + GUI,
+    "hr_toolkit/gui_qt/translations_en.py": "presentation " + GUI,
     "hr_toolkit/tools/salary_headers.py": "salary_merge salary_split output_regression",
     "hr_toolkit/tools/registry.py": "tool_registry " + BUSINESS + " " + GUI,
     "hr_toolkit/tools/__init__.py": BUSINESS,

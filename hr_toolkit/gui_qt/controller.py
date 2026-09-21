@@ -80,6 +80,7 @@ from .models import HistoryModel, InputFileModel, LogModel, TrashModel, Workspac
 from .input_selection import selection_hint, selection_mode, validate_selection
 from .drop_paths import local_drop_paths, native_mime_paths, text_paths
 from .rename_review import RenameReview
+from .presentation import Presentation
 
 
 NAV_GROUPS = (
@@ -249,6 +250,8 @@ class AppController(QObject):
         self._incoming_progress = None
         self._run_coordinator = ProjectRunCoordinator()
         self._preview_cancel_event: threading.Event | None = None
+        self._presentation = Presentation(self)
+        self._presentation.preferencesChanged.connect(self._save_workspace_preferences)
         self._rename_review = RenameReview(self)
         self._rename_review.confirmed.connect(self._execute_reviewed_rename)
         self._rename_review_invocation = None
@@ -898,7 +901,7 @@ class AppController(QObject):
     @Slot()
     def copyResultNotices(self) -> None:
         if self.canOpenLastResult:
-            QGuiApplication.clipboard().setText("\n".join(str(row["text"]) for row in self._result_notice_rows))
+            QGuiApplication.clipboard().setText("\n".join(self._presentation.translate(str(row["text"]), self._presentation.language) for row in self._result_notice_rows))
 
     @Property(str, notify=specChanged)
     def lastRunText(self) -> str:
@@ -1548,12 +1551,12 @@ class AppController(QObject):
         file_filter = f"Excel 或压缩包 (*.xlsx *.xls {ARCHIVE_FILE_DIALOG_PATTERN});;所有文件 (*)"
         initial_dir = self._file_dialog_initial_dir()
         if self._spec.input_mode == "excel_single":
-            filename, _selected = QFileDialog.getOpenFileName(
+            filename, _selected = self._presentation.file_dialog(QFileDialog.getOpenFileName,
                 parent, self._spec.input_drop_title, initial_dir, "Excel 工作簿 (*.xlsx *.xls);;所有文件 (*)"
             )
             paths = [Path(filename)] if filename else []
         else:
-            filenames, _selected = QFileDialog.getOpenFileNames(
+            filenames, _selected = self._presentation.file_dialog(QFileDialog.getOpenFileNames,
                 parent, self._spec.input_drop_title, initial_dir, file_filter
             )
             paths = [Path(filename) for filename in filenames]
@@ -1572,7 +1575,7 @@ class AppController(QObject):
     def _choose_input_folder(self, *, append: bool) -> None:
         if not self.selectionEnabled or not self.inputAllowsFolder:
             return
-        selected = QFileDialog.getExistingDirectory(
+        selected = self._presentation.file_dialog(QFileDialog.getExistingDirectory,
             self._dialog_parent(), self._spec.input_drop_title, self._file_dialog_initial_dir()
         )
         if selected:
@@ -1676,7 +1679,7 @@ class AppController(QObject):
         file_filter = "Excel 工作簿 (*.xlsx *.xls);;所有文件 (*)"
         if self._spec.support_mode == "excel_archive_or_folder":
             file_filter = f"Excel 或压缩包 (*.xlsx *.xls {ARCHIVE_FILE_DIALOG_PATTERN});;所有文件 (*)"
-        filename, _selected = QFileDialog.getOpenFileName(
+        filename, _selected = self._presentation.file_dialog(QFileDialog.getOpenFileName,
             self._dialog_parent(), self._spec.support_label, self._file_dialog_initial_dir(), file_filter
         )
         if filename:
@@ -1687,7 +1690,7 @@ class AppController(QObject):
     def chooseSupportFolder(self) -> None:
         if not self.selectionEnabled or not self.hasSupportField or not self.supportAllowsFolder:
             return
-        selected = QFileDialog.getExistingDirectory(
+        selected = self._presentation.file_dialog(QFileDialog.getExistingDirectory,
             self._dialog_parent(), self._spec.support_label, self._file_dialog_initial_dir()
         )
         if selected:
@@ -1714,7 +1717,7 @@ class AppController(QObject):
             pass
         if not initial:
             initial = self._file_dialog_initial_dir(role="new_project")
-        selected = QFileDialog.getExistingDirectory(
+        selected = self._presentation.file_dialog(QFileDialog.getExistingDirectory,
             self._dialog_parent(), "选择项目保存位置", initial
         )
         if selected:
@@ -1770,7 +1773,7 @@ class AppController(QObject):
                 "error",
             )
             return
-        selected = QFileDialog.getExistingDirectory(
+        selected = self._presentation.file_dialog(QFileDialog.getExistingDirectory,
             self._dialog_parent(), "打开工作项目", self._file_dialog_initial_dir()
         )
         if selected:
@@ -1920,6 +1923,7 @@ class AppController(QObject):
             return
         self._startup_loading = False
         self._set_busy(False)
+        self._presentation.restore(state.get("theme"), state.get("language"))
         self._recent_projects = recent
         if self._startup_cancelled:
             # A cancelled disk check must not discard unexamined history.
@@ -2003,6 +2007,8 @@ class AppController(QObject):
                 "salary_header_profiles": self._salary_header_profiles,
                 "header_name_rules": self._header_name_rules,
                 "release_notes_seen_version": self._release_notes_seen_version,
+                "theme": self._presentation.theme,
+                "language": self._presentation.language,
             }
         )
         # Re-read on every call to preserve external settings changes, but do
@@ -2491,7 +2497,7 @@ class AppController(QObject):
     def importWorkspaceFiles(self) -> None:
         if not self.projectWritable or self._busy or self._workspace_busy:
             return
-        names, _selected = QFileDialog.getOpenFileNames(
+        names, _selected = self._presentation.file_dialog(QFileDialog.getOpenFileNames,
             self._dialog_parent(), "选择本次处理的文件", self._file_dialog_initial_dir(), "所有文件 (*)"
         )
         if names:
@@ -2502,7 +2508,7 @@ class AppController(QObject):
     def importWorkspaceFolder(self) -> None:
         if not self.projectWritable or self._busy or self._workspace_busy:
             return
-        selected = QFileDialog.getExistingDirectory(
+        selected = self._presentation.file_dialog(QFileDialog.getExistingDirectory,
             self._dialog_parent(), "选择本次处理的文件夹", self._file_dialog_initial_dir()
         )
         if selected:
@@ -4126,6 +4132,10 @@ class AppController(QObject):
         self.notificationRequested.emit("预览失败", "改名预览格式无效，请重新预览。", "error")
 
     @constant_property(QObject)
+    def presentation(self):
+        return self._presentation
+
+    @constant_property(QObject)
     def renameReview(self):
         return self._rename_review
 
@@ -4429,7 +4439,7 @@ class AppController(QObject):
     def copyRunLogs(self) -> None:
         self._flush_logs()
         text = "\n".join(
-            f"{item.get('time', '')} {item.get('text', '')}".strip()
+            "{} {}".format(item.get("time", ""), self._presentation.translate(item.get("text", ""), self._presentation.language)).strip()
             for item in self._log_model.items()
         )
         QGuiApplication.clipboard().setText(text)

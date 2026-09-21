@@ -43,14 +43,14 @@ Item {
         anchors.fill: parent
         radius: 12
         visible: dropTarget.highlighted
-        color: dropTarget.feedback.pending ? "#F5F6F6" : dropTarget.feedback.accepted ? "#F0F7F3" : "#FFF4F1"
+        color: dropTarget.feedback.pending ? Ui.color("surface9") : dropTarget.feedback.accepted ? Ui.color("surface3") : Ui.color("surface19")
         border.width: 2
-        border.color: dropTarget.feedback.pending ? "#929B9B" : dropTarget.feedback.accepted ? "#17715B" : "#B34A36"
+        border.color: dropTarget.feedback.pending ? Ui.color("muted6") : dropTarget.feedback.accepted ? Ui.color("accent") : Ui.color("warning6")
         Text {
             anchors.fill: parent; anchors.margins: 12
-            text: dropTarget.feedback.message
+            text: Ui.text(dropTarget.feedback.message)
             textFormat: Text.PlainText
-            color: dropTarget.feedback.pending ? "#555D5D" : dropTarget.feedback.accepted ? "#17715B" : "#A63C2C"
+            color: dropTarget.feedback.pending ? Ui.color("text3") : dropTarget.feedback.accepted ? Ui.color("accent") : Ui.color("error")
             font.pixelSize: 13; font.bold: true
             wrapMode: Text.Wrap
             maximumLineCount: 3; elide: Text.ElideRight
