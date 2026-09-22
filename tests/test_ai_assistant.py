@@ -1337,21 +1337,20 @@ class AiReliabilityRegressionTests(unittest.TestCase):
     def test_stop_interrupts_a_blocked_socket_read(self):
         import socket
         import threading
-        from types import SimpleNamespace
         left, right = socket.socketpair()
-        bound = threading.Event()
+        reading = threading.Event()
         control = ai_client.StreamControl()
         class Response:
             def __init__(self):
                 self.reader = left.makefile("rb")
-                self.fp = SimpleNamespace(raw=SimpleNamespace(_sock=left))
+                self.fp = self.reader
             def __enter__(self):
-                bound.set()
                 return self
             def __exit__(self, *args):
                 self.reader.close()
                 left.close()
             def readline(self, size):
+                reading.set()
                 return self.reader.readline(size)
         result, errors = [], []
         def run():
@@ -1363,14 +1362,94 @@ class AiReliabilityRegressionTests(unittest.TestCase):
         worker = threading.Thread(target=run, daemon=True)
         worker.start()
         try:
-            self.assertTrue(bound.wait(1))
+            self.assertTrue(reading.wait(1))
             control.cancel()
             worker.join(1)
             self.assertFalse(worker.is_alive(), "Stop did not unblock the response read")
             self.assertEqual(errors, [])
             self.assertEqual(result, [])
         finally:
+            control.cancel()
             right.close()
+            worker.join(1)
+            left.close()
+
+    def test_stream_cancellation_preserves_buffered_chunked_http_data(self):
+        import http.client
+        import socket
+        left, right = socket.socketpair()
+        left.settimeout(1)
+        event = b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
+        chunks = b"%x\r\n" % len(event) + event + b"\r\n"
+        end = b"data: [DONE]\n\n"
+        chunks += b"%x\r\n" % len(end) + end + b"\r\n0\r\n\r\n"
+        try:
+            right.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + chunks)
+            response = http.client.HTTPResponse(left)
+            response.begin()
+            self.assertEqual(list(ai_client.stream_chat([], endpoint="https://example.com", api_key="key",
+                             model="model", opener=lambda *a, **k: response)), ["hello"])
+            self.assertTrue(response.closed)
+        finally:
+            right.close()
+            left.close()
+
+    def test_cancellable_socket_preserves_timeout_and_tls_retry_directions(self):
+        import socket
+        import ssl
+        import threading
+        from unittest.mock import Mock, patch
+        transport = Mock()
+        transport.gettimeout.return_value = 30
+        transport.recv_into.side_effect = [ssl.SSLWantReadError(), ssl.SSLWantWriteError(), 3]
+        reader = ai_client._CancellableSocket(transport, threading.Event())
+        with patch.object(ai_client.select, "select") as wait:
+            self.assertEqual(reader.recv_into(bytearray(3)), 3)
+            self.assertEqual(wait.call_args_list[0].args[:2], ([transport], []))
+            self.assertEqual(wait.call_args_list[1].args[:2], ([], [transport]))
+        transport.setblocking.assert_called_once_with(False)
+        transport.gettimeout.return_value = 0.05
+        transport.recv_into.side_effect = BlockingIOError()
+        reader = ai_client._CancellableSocket(transport, threading.Event())
+        with patch.object(ai_client.time, "monotonic", side_effect=[1, 2]):
+            with self.assertRaises(socket.timeout):
+                reader.recv_into(bytearray(3))
+
+    def test_stop_interrupts_a_partial_http_event_without_losing_worker_cleanup(self):
+        import http.client
+        import socket
+        import threading
+        left, right = socket.socketpair()
+        left.settimeout(5)
+        control = ai_client.StreamControl()
+        reading = threading.Event()
+        errors = []
+        class Response(http.client.HTTPResponse):
+            def readline(self, size=-1):
+                reading.set()
+                return super().readline(size)
+        response = Response(left)
+        right.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\ndata: {"choices":')
+        response.begin()
+        def run():
+            try:
+                list(ai_client.stream_chat([], endpoint="https://example.com", api_key="key",
+                     model="model", opener=lambda *a, **k: response, control=control))
+            except Exception as exc:
+                errors.append(exc)
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(reading.wait(1))
+            control.cancel()
+            worker.join(1)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+            self.assertTrue(response.closed)
+        finally:
+            control.cancel()
+            right.close()
+            worker.join(1)
             left.close()
 
     def test_history_does_not_persist_rendered_html_and_recovers_interrupted_turn(self):

@@ -11,6 +11,8 @@ import json
 import ssl
 import socket
 import threading
+import select
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Iterator, List, Optional, Sequence
@@ -27,8 +29,39 @@ CONNECTIVITY_TIMEOUT_SECONDS = 30.0
 MAX_REPLY_CHARS = 100000
 
 
+class _CancellableSocket:
+    """Keep SocketIO buffering, but never enter an uninterruptible recv call."""
+
+    def __init__(self, sock, stopped):
+        self._socket = sock
+        self._stopped = stopped
+        self._timeout = sock.gettimeout()
+        sock.setblocking(False)
+
+    def __getattr__(self, name):
+        return getattr(self._socket, name)
+
+    def recv_into(self, buffer):
+        deadline = None if self._timeout is None else time.monotonic() + self._timeout
+        while True:
+            if self._stopped.is_set():
+                raise OSError("AI response cancelled")
+            try:
+                # Try first: TLS may have decrypted data buffered even when
+                # select reports no new bytes on the underlying connection.
+                return self._socket.recv_into(buffer)
+            except ssl.SSLWantWriteError:
+                readers, writers = [], [self._socket]
+            except (ssl.SSLWantReadError, BlockingIOError, InterruptedError):
+                readers, writers = [self._socket], []
+            remaining = 0.1 if deadline is None else min(0.1, deadline - time.monotonic())
+            if remaining <= 0:
+                raise socket.timeout("timed out")
+            select.select(readers, writers, [], remaining)
+
+
 class StreamControl:
-    """One request's cancellation state; socket shutdown unblocks urllib reads.
+    """One request's cancellation state, checked by the response's raw reader.
 
     Connection establishment is bounded by the transport timeout. The response
     remains owned and closed by the worker, never by the GUI thread.
@@ -36,28 +69,16 @@ class StreamControl:
 
     def __init__(self):
         self.stopped = threading.Event()
-        self._lock = threading.Lock()
-        self._socket = None
 
     def bind(self, response):
-        with self._lock:
-            self._socket = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
-        if self.stopped.is_set():
-            self.cancel()
+        raw = getattr(getattr(response, "fp", None), "raw", None)
+        if isinstance(raw, socket.SocketIO) and raw._sock is not None:
+            # Do not replace/detach the BufferedReader: it may already contain
+            # bytes read with the HTTP headers, including partial SSE events.
+            raw._sock = _CancellableSocket(raw._sock, self.stopped)
 
     def cancel(self):
         self.stopped.set()
-        with self._lock:
-            sock = self._socket
-        if sock is not None:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-
-    def release(self):
-        with self._lock:
-            self._socket = None
 
 
 class ChatError(RuntimeError):
@@ -388,8 +409,6 @@ def stream_chat(
         if control.stopped.is_set():
             return
         raise ChatError(f"读取 AI 回复时中断：{exc}") from exc
-    finally:
-        control.release()
     if control.stopped.is_set():
         return
     if saw_content and not completed:
