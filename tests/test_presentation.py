@@ -27,8 +27,15 @@ class PresentationTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QCoreApplication.instance() or QCoreApplication([])
 
+    def view(self):
+        value = Presentation()
+        # Detach installed catalogs even when Qt or translation caches keep
+        # the view alive beyond this test. Do not depend on GC timing.
+        self.addCleanup(value.setLanguage, "en_US")
+        return value
+
     def test_preferences_validate_and_do_not_override_early_user_choice(self):
-        view = Presentation()
+        view = self.view()
         self.assertEqual((view.theme, view.language), ("light", "zh_CN"))
         view.restore("unknown", "unknown")
         self.assertEqual((view.theme, view.language), ("light", "zh_CN"))
@@ -44,7 +51,7 @@ class PresentationTests(unittest.TestCase):
     def test_catalog_placeholders_are_valid_and_cover_form_labels(self):
         from hr_toolkit.gui_qt.translations_en import MESSAGES
         from hr_toolkit.gui_qt.form_specs import _SPEC_MAP
-        view = Presentation()
+        view = self.view()
         for source, target in MESSAGES.items():
             with self.subTest(source=source):
                 slots = set(re.findall(r"\{\d+\}", source))
@@ -73,7 +80,7 @@ class PresentationTests(unittest.TestCase):
                     self.assertNotEqual(view.translate(source, "en_US"), source, source)
 
     def test_display_translation_preserves_data_and_nested_messages(self):
-        view = Presentation()
+        view = self.view()
         from hr_toolkit.gui_qt.form_specs import SPECS
         for spec in SPECS:
             for instruction in (spec.input_drop_title, spec.support_button):
@@ -96,7 +103,7 @@ class PresentationTests(unittest.TestCase):
         self.assertNotRegex(nested.replace("张三.pdf", ""), r"[\u3400-\u9fff]")
 
     def test_file_picker_uses_current_language_and_preserves_paths(self):
-        view = Presentation()
+        view = self.view()
         view.setLanguage("en_US")
         picker = Mock(return_value=("C:/资料/姓名.xlsx", ""))
         result = view.file_dialog(picker, None, "选择文件", "C:/资料", "Excel 文件 (*.xlsx *.xls)")
@@ -111,7 +118,7 @@ class PresentationTests(unittest.TestCase):
         # wheel and modern Qt6 wheels without requiring both bindings at once.
         for major, catalog in ((5, 'qt_zh_CN'), (6, 'qtbase_zh_CN')):
             with self.subTest(qt=major):
-                view = Presentation()
+                view = self.view()
                 app = Mock()
                 translators = []
 
@@ -174,7 +181,7 @@ class PresentationTests(unittest.TestCase):
     def test_installed_qt_catalog_translates_real_standard_buttons(self):
         # Exercise the production loader and the catalog shipped with the CI
         # runtime. File existence or a mocked successful load is insufficient.
-        view = Presentation()
+        view = self.view()
         try:
             for locale in ('en_US', 'zh_CN', 'en_US', 'zh_CN'):
                 view.setLanguage(locale)

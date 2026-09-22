@@ -56,6 +56,9 @@ class QtControllerTests(unittest.TestCase):
     def controller(self):
         value = AppController()
         value._save_workspace_preferences = lambda: None
+        # Qt translators are application-global; a closed controller can stay
+        # alive in Python/Qt references until after the next test has started.
+        self.addCleanup(lambda controller=value: controller.presentation.setLanguage("en_US"))
         return value
 
     def test_replace_text_fields_keep_type_and_restore_existing_mode_labels(self) -> None:
