@@ -393,6 +393,124 @@ class QtControllerTests(unittest.TestCase):
         controller.setMaterialPresetName(name)
         self.assertEqual(controller._form_states[controller._state_key()], before)
 
+    def test_waiting_hint_follows_the_attachment_kind(self) -> None:
+        """等待首个字的提示按这一轮实际发出的附件走，不是一串写死的话。"""
+        controller = self.controller()
+        self.addCleanup(controller.close)
+
+        controller._ai_attach_status_phrases([{"kind": "image"}])
+        joined = "".join(controller.aiStatusPhrases)
+        self.assertIn("图", joined)
+        self.assertNotIn("表格", joined, "发了图却提示正在读取表格")
+
+        controller._ai_attach_status_phrases([{"kind": "sheet"}])
+        joined = "".join(controller.aiStatusPhrases)
+        self.assertNotIn("图", joined, "只发了表格却提示在看图")
+        self.assertTrue(any(marker in joined for marker in ("表格", "表头", "数据")))
+
+        controller._ai_attach_status_phrases([{"kind": "image"}, {"kind": "sheet"}])
+        self.assertIn("图", "".join(controller.aiStatusPhrases))
+
+        controller._ai_attach_status_phrases([])
+        joined = "".join(controller.aiStatusPhrases)
+        self.assertNotIn("表格", joined)
+        self.assertNotIn("图", joined)
+
+        # 连着几轮不该是同一套措辞（否则等于还是死文案）。
+        rounds = []
+        for _ in range(5):
+            controller._ai_attach_status_phrases([{"kind": "sheet"}])
+            rounds.append(tuple(controller.aiStatusPhrases))
+        self.assertGreater(len(set(rounds)), 1)
+
+    def test_waiting_hint_signals_a_change_each_turn(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        seen = []
+        controller.aiStatusChanged.connect(lambda: seen.append(controller.aiStatusPhrases))
+        controller._ai_attach_status_phrases([{"kind": "image"}])
+        controller._ai_attach_status_phrases([{"kind": "image"}])
+        self.assertEqual(len(seen), 2)
+        self.assertTrue(all(phrases for phrases in seen))
+
+    def _isolated_controller(self, folder):
+        """AI 设置落到临时文件，别动用户真实的 ai-assistant.json。"""
+        path = Path(folder) / "ai-assistant.json"
+        patcher = patch("hr_toolkit.ai.config.default_settings_path", return_value=path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        return controller
+
+    def test_switching_provider_keeps_each_providers_own_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            controller = self._isolated_controller(folder)
+
+            self.assertTrue(controller.aiSaveSettings("minimax", "sk-minimax-key-1234", "MiniMax-M3", ""))
+            self.assertTrue(controller.aiAddModel("我的自建模型"))
+            self.assertEqual(controller.aiActiveProvider, "minimax")
+
+            # 切到 DeepSeek：改用 DeepSeek 自己的 Key 与模型。
+            self.assertTrue(controller.aiSelectProvider("deepseek"))
+            self.assertEqual(controller.aiActiveProvider, "deepseek")
+            self.assertEqual(controller.aiActiveModel, "deepseek-chat")
+            self.assertEqual(controller.aiApiKeyFor("deepseek"), "")
+            names = [row["value"] for row in controller.aiModelOptions]
+            self.assertNotIn("我的自建模型", names, "串到了别家的模型列表")
+
+            # 在 DeepSeek 里换个模型
+            self.assertTrue(controller.aiSelectModel("deepseek-reasoner"))
+
+            # MiniMax 那边的 Key 与自建模型原样还在（切换不是「覆盖」）。
+            self.assertEqual(controller.aiApiKeyFor("minimax"), "sk-minimax-key-1234")
+            self.assertIn("我的自建模型", controller.aiModelChoicesFor("minimax"))
+
+            # 切回 MiniMax：停在离开时那个模型（自建模型加完就切过去了）。
+            self.assertTrue(controller.aiSelectProvider("minimax"))
+            self.assertEqual(controller.aiActiveModel, "我的自建模型")
+            self.assertIn("我的自建模型", [row["value"] for row in controller.aiModelOptions])
+
+            # 再回 DeepSeek：刚才换的 reasoner 也还在。
+            self.assertTrue(controller.aiSelectProvider("deepseek"))
+            self.assertEqual(controller.aiActiveModel, "deepseek-reasoner")
+
+            # 未知服务商不能把配置改坏。
+            self.assertFalse(controller.aiSelectProvider("not-a-provider"))
+            self.assertEqual(controller.aiActiveProvider, "deepseek")
+
+    def test_provider_menu_marks_the_active_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            controller = self._isolated_controller(folder)
+            values = [row["value"] for row in controller.aiProviderMenuOptions]
+            self.assertEqual(values, ["deepseek", "minimax", "glm", "qwen"])
+
+            def selected():
+                return [row["value"] for row in controller.aiProviderMenuOptions if row["selected"]]
+
+            self.assertEqual(selected(), ["minimax"])
+            self.assertTrue(controller.aiSelectProvider("glm"))
+            self.assertEqual(selected(), ["glm"])
+            # 标签要能翻译（设置里的下拉框和面板菜单都靠它显示）。
+            labels = {row["value"]: row["label"] for row in controller.aiProviderMenuOptions}
+            self.assertEqual(labels["glm"], "智谱 GLM")
+            self.assertEqual(labels["qwen"], "通义千问")
+
+    def test_model_choices_are_per_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            controller = self._isolated_controller(folder)
+            self.assertIn("MiniMax-M3", controller.aiModelChoicesFor("minimax"))
+            self.assertIn("glm-4.6", controller.aiModelChoicesFor("glm"))
+            self.assertIn("qwen-plus", controller.aiModelChoicesFor("qwen"))
+            self.assertIn("deepseek-chat", controller.aiModelChoicesFor("deepseek"))
+            self.assertNotIn("MiniMax-M3", controller.aiModelChoicesFor("glm"))
+            self.assertNotIn("glm-4.6", controller.aiModelChoicesFor("qwen"))
+            self.assertEqual(controller.aiModelChoicesFor("not-a-provider"), [])
+            # 「添加模型」输入框的示例跟着服务商走。
+            self.assertEqual(controller.aiProviderDefaultModel, "MiniMax-M3")
+            controller.aiSelectProvider("glm")
+            self.assertEqual(controller.aiProviderDefaultModel, "glm-4.6")
+
     def test_workspace_transfer_captures_path_and_rejects_changed_context(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

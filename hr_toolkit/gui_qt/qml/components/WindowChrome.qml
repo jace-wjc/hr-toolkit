@@ -13,7 +13,11 @@ Item {
     property bool workspaceExpanded: false
     property bool workspaceAutoHidden: false
     property real workspacePanelLeft: 0
+    property real aiPanelLeft: 0
     signal workspaceToggleRequested()
+    // 右上角这排按钮要避开的右侧停靠面板（项目栏 / Sage）左边缘；
+    // 面板都收起时它等于窗口右边缘。
+    readonly property real rightPanelLeft: Math.min(workspacePanelLeft, aiPanelLeft)
     readonly property bool triggerHovered: sidebarButton.hovered
     height: 40
 
@@ -21,9 +25,16 @@ Item {
         if (window.visibility === Window.Maximized) window.showNormal()
         else window.showMaximized()
     }
+    // 拖拽区只铺到右侧停靠面板的左边缘为止：面板自己的表头按钮就落在这条
+    // 40px 高、全宽的带子里，铺满整宽会把它们的点击全部吃掉（表面看就是
+    // 「顶部按钮全部点击无效」）。面板收起时 rightPanelLeft 等于窗口右边缘，
+    // 这里自然退化成整宽。
     MouseArea {
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
         anchors.leftMargin: chrome.nativeMac ? 80 : 0
+        width: Math.max(0, chrome.rightPanelLeft - (chrome.nativeMac ? 80 : 0))
         onPressed: chrome.window.startSystemMove()
         onDoubleClicked: chrome.toggleMaximized()
     }
@@ -60,7 +71,7 @@ Item {
         objectName: "workspaceToggleButton"
         anchors.right: parent.right
         anchors.rightMargin: Math.max(chrome.systemButtons ? 148 : chrome.nativeWindows ? 16 : 10,
-                                      chrome.width - chrome.workspacePanelLeft + 10)
+                                      chrome.width - chrome.rightPanelLeft + 10)
         y: chrome.nativeMac || chrome.nativeWindows ? 5 : 9; width: 32; height: 30
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus

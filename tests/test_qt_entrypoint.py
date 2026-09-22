@@ -85,6 +85,21 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("responsive workspace: non-overlap, animation, hysteresis, restore, focus and core widths OK", completed.stdout)
 
+    def test_ai_assistant_panel_and_popups_instantiate_without_layout_loops(self) -> None:
+        self._qt_compat_or_skip()
+        probe = Path(__file__).with_name("qt_ai_assistant_probe.py")
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", str(probe)],
+            cwd=str(probe.resolve().parents[1]),
+            env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "HR_TOOLKIT_SKIP_UPDATE": "1"},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", timeout=60, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        # 两个浮层（历史对话 / 模型切换）宽度写死了，一旦退回绑定环这里会超时或报 binding loop
+        self.assertIn("AI probe OK", completed.stdout)
+        self.assertNotIn("binding loop", completed.stdout.lower() + completed.stderr.lower())
+
     def test_qml_dialog_signals_have_named_parameters_on_both_qt_versions(self) -> None:
         self._qt_compat_or_skip()
         from hr_toolkit.gui_qt.controller import AppController
@@ -552,7 +567,11 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("Layout.preferredWidth: reservedWidth", panel)
         self.assertIn("Behavior on reveal", panel)
         self.assertNotIn("settledWidth", panel)
-        self.assertIn("chrome.width - chrome.workspacePanelLeft + 10", chrome)
+        # 右上角这排按钮要避开右侧停靠面板：项目栏与 Sage 谁更靠左就避谁。
+        self.assertIn("readonly property real rightPanelLeft: Math.min(workspacePanelLeft, aiPanelLeft)", chrome)
+        self.assertIn("chrome.width - chrome.rightPanelLeft + 10", chrome)
+        # 拖拽区同样必须止于面板左边缘，否则全宽的 40px 带子会把面板表头的点击吃掉。
+        self.assertIn("width: Math.max(0, chrome.rightPanelLeft - (chrome.nativeMac ? 80 : 0))", chrome)
         self.assertNotIn("width: Math.min(340, root.settledWidth - 24)", source)
         self.assertNotIn("Math.max(360, root.width * 0.38)", source)
         self.assertIn("enter: Transition {}", source)

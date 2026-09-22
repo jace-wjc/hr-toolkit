@@ -10,6 +10,9 @@ Dialog {
     property string closeText: ""
     property bool acceptButtonEnabled: true
     property bool showCloseButton: false
+    // 桌面端习惯：标题栏按住可以拖着走。默认关闭，需要自行设 x/y 的对话框才打开
+    // （用 anchors 定位的对话框拖不动，所以做成显式开关而不是全局行为）。
+    property bool movable: false
 
     modal: true
     padding: 18
@@ -50,6 +53,25 @@ Dialog {
             anchors.bottom: parent.bottom
             height: 1
             color: Ui.color("divider")
+        }
+        MouseArea {
+            id: dragArea
+            anchors.fill: parent
+            enabled: control.movable
+            hoverEnabled: control.movable
+            cursorShape: enabled ? Qt.OpenHandCursor : Qt.ArrowCursor
+            property real pressX: 0
+            property real pressY: 0
+            onPressed: function(mouse) {
+                pressX = mouse.x
+                pressY = mouse.y
+            }
+            onPositionChanged: function(mouse) {
+                if (!pressed)
+                    return
+                control.x += mouse.x - pressX
+                control.y += mouse.y - pressY
+            }
         }
         AppButton {
             anchors.right: parent.right; anchors.rightMargin: 10

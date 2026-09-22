@@ -61,6 +61,38 @@ ApplicationWindow {
             windowMoveSettle.restart()
         }
     }
+    // Sage 面板停靠在主 RowLayout 右侧（见 AiSidePanel），中间内容区随之收窄而不被遮挡。
+    property bool aiPanelRequested: false
+    function toggleAiPanel() {
+        if (!aiPanelRequested) {
+            aiPanelRequested = true
+            return
+        }
+        // 已展开：先展开收起的窄轨，再点才真的关掉——避免「点一下就没影了」。
+        if (aiPanelLoader.item && aiPanelLoader.item.collapsed) {
+            aiPanelLoader.item.expand()
+            return
+        }
+        aiPanelRequested = false
+    }
+    function openAiWindow() {
+        aiPanelRequested = false
+        aiWindowLoader.active = true
+        if (aiWindowLoader.item) {
+            aiWindowLoader.item.visible = true
+            aiWindowLoader.item.raise()
+        }
+    }
+    // 右侧停靠面板（项目栏 / Sage）的左边缘。两者都收起时等于窗口右边缘——
+    // 它们都是 RowLayout 的子项，收起后仍占一个 0 宽的槽，x 恰好落在右边界。
+    readonly property real rightPanelLeft: Math.min(workspaceDrawer.x, aiPanelLoader.x)
+    readonly property bool rightPanelOpen: rightPanelLeft < width - 1
+    Shortcut { sequence: "Ctrl+K"; onActivated: root.toggleAiPanel() }
+    // 与项目栏互斥：两者都停靠右侧，同开会把中间内容挤到低于最小宽度。
+    onAiPanelRequestedChanged: {
+        if (aiPanelRequested && controller.workspaceExpanded)
+            controller.setWorkspaceExpanded(false)
+    }
     onXChanged: noteWindowMotion()
     onYChanged: noteWindowMotion()
     Timer {
@@ -126,7 +158,7 @@ ApplicationWindow {
         objectName: "appearanceButton"
         anchors.top: parent.top; anchors.topMargin: 8
         anchors.right: parent.right
-        anchors.rightMargin: workspaceDrawer.opened ? root.width - workspaceDrawer.x + 54 : 54
+        anchors.rightMargin: root.rightPanelOpen ? root.width - root.rightPanelLeft + 54 : 54
         z: 31
         text: "设置"; variant: "link"
         ToolTip.visible: hovered
@@ -153,7 +185,10 @@ ApplicationWindow {
         workspaceExpanded: workspaceDrawer.opened
         workspaceAutoHidden: workspaceDrawer.requestedOpen && workspaceDrawer.autoCollapsed
         workspacePanelLeft: workspaceDrawer.x
+        aiPanelLeft: aiPanelLoader.x
         onWorkspaceToggleRequested: {
+            // Sage 与项目栏互斥：两者都停靠在右侧，同时展开会把中间内容挤得太窄。
+            if (root.aiPanelRequested) root.aiPanelRequested = false
             if (controller.workspaceExpanded) workspaceDrawer.close()
             else workspaceDrawer.open()
         }
@@ -452,6 +487,43 @@ ApplicationWindow {
                     MouseArea { id: historyNavMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { controller.requestHistory(); historyDrawer.open() } }
                 }
                 Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 6; color: Ui.color("border12") }
+                AppButton {
+                    id: sidebarAiButton
+                    objectName: "sidebarAiButton"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 32
+                    text: "Sage"
+                    variant: "link"
+                    leftPadding: 9
+                    rightPadding: 9
+                    Accessible.name: Ui.text("Sage")
+                    ToolTip.visible: hovered
+                    // 全角括号会让这句整串都不含汉字，翻译表按设计只处理含汉字的串，
+                    // 于是英文界面永远不会被翻译；写成半角括号两种语言都直接可用。
+                    ToolTip.text: Ui.text("Sage (Ctrl+K)")
+                    onClicked: root.toggleAiPanel()
+                    contentItem: RowLayout {
+                        spacing: 8
+                        Item {
+                            Layout.preferredWidth: 18
+                            Layout.fillHeight: true
+                            ToolIcon {
+                                anchors.centerIn: parent
+                                width: 16; height: 16
+                                iconId: "ai_spark"
+                                strokeColor: sidebarAiButton.enabled ? root.textMain : root.textDisabled
+                            }
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: Ui.text(sidebarAiButton.text)
+                            color: sidebarAiButton.enabled ? root.textMain : root.textDisabled
+                            font.pixelSize: 13
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
                 AppButton {
                     id: sidebarUpdateCheckButton
                     objectName: "sidebarUpdateCheckButton"
@@ -1529,6 +1601,33 @@ ApplicationWindow {
             }
 
         }
+
+        // Sage 停靠面板：必须写在 workspaceLayout 里才是它的布局子项，
+        // 只有这样 Loader 上的 Layout.* 才会生效、中间内容区才会随之收窄
+        //（写在 ApplicationWindow 下会被当成普通子项，直接盖在内容上面）。
+        // 用 Loader 保持懒加载——没打开时宽度为 0，AI 的配置/历史文件不会被拖进启动路径。
+        Loader {
+            id: aiPanelLoader
+            objectName: "aiPanelLoader"
+            active: root.aiPanelRequested
+            // Loader 本身才是布局子项，所以预留宽度必须挂在 Loader 上，
+            // 挂在被加载的项上不会生效。
+            readonly property real reserved: item ? item.reservedWidth : 0
+            Layout.fillHeight: true
+            Layout.minimumWidth: reserved
+            Layout.preferredWidth: reserved
+            Layout.maximumWidth: reserved
+            sourceComponent: AiSidePanel {
+                id: aiPanel
+                requestedOpen: root.aiPanelRequested
+                availableWidth: workspaceLayout.width - (sidebar.pinned ? sidebar.width : 0)
+                liveAvailableWidth: workspaceLayout.width - sidebar.reservedWidth
+                onCloseRequested: root.aiPanelRequested = false
+                onSettingsRequested: aiSettingsDialog.open()
+                onDetachRequested: root.openAiWindow()
+                onCollapseRequested: aiPanel.collapsed = !aiPanel.collapsed
+            }
+        }
     }
 
     Popup {
@@ -2582,6 +2681,32 @@ ApplicationWindow {
     }
 
     AppearanceDialog { id: appearanceDialog; backend: controller.presentation }
+    AiSettingsDialog { id: aiSettingsDialog; objectName: "aiSettingsDialog" }
+
+    Loader {
+        id: aiWindowLoader
+        objectName: "aiWindowLoader"
+        active: false
+        sourceComponent: Window {
+            id: aiWindow
+            width: 460
+            height: 620
+            minimumWidth: 360
+            minimumHeight: 460
+            title: "Sage"
+            color: Ui.color("window")
+            visible: false
+            onClosing: visible = false
+            AiChatPanel {
+                anchors.fill: parent
+                showDetachButton: false
+                // 独立窗口里没有「停靠列」可收，收起按钮没有意义。
+                showCollapseButton: false
+                onCloseRequested: aiWindow.close()
+                onSettingsRequested: aiSettingsDialog.open()
+            }
+        }
+    }
 
     RegionCodeDialog { id: regionCodeDialog; backend: controller; anchors.centerIn: parent }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }

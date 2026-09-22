@@ -274,3 +274,32 @@ class TrashModel(ObjectListModel):
             ),
             parent,
         )
+
+
+class AiChatModel(ObjectListModel):
+    """一条消息一行。
+
+    ``content`` 是模型原文（Markdown，复制时用它），``html`` 是渲染后的
+    富文本（Qt 的 HTML 子集，见 :mod:`hr_toolkit.ai.markdown`），
+    ``attachments`` 是这条消息携带的表格（随消息走，不再挂在待发区）。
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(
+            ("role", "content", "html", "streaming", "time", "attachments", "apiContent"),
+            parent,
+        )
+
+
+class AiAttachmentModel(ObjectListModel):
+    """待发附件一行。``kind`` 区分表格与图片，``preview`` 是图片的本地路径（QML 显示缩略图）。"""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(("name", "summary", "path", "kind", "preview"), parent)
+
+
+class AiConversationModel(ObjectListModel):
+    """对话历史列表（按更新时间倒序）。"""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(("id", "title", "updated", "preview", "active"), parent)

@@ -76,7 +76,17 @@ from .form_specs import (
     spec_for,
     variants_for,
 )
-from .models import HistoryModel, InputFileModel, LogModel, TrashModel, WorkspaceModel, ObjectListModel
+from .models import (
+    AiAttachmentModel,
+    AiChatModel,
+    AiConversationModel,
+    HistoryModel,
+    InputFileModel,
+    LogModel,
+    TrashModel,
+    WorkspaceModel,
+    ObjectListModel,
+)
 from .input_selection import selection_hint, selection_mode, validate_selection
 from .drop_paths import local_drop_paths, native_mime_paths, text_paths
 from .rename_review import RenameReview
@@ -178,6 +188,13 @@ class AppController(QObject):
     _dropPreviewResult = Signal(object, str)
     _invocationReady = Signal(object, object, bool)
     _startupReady = Signal(object, object, object)
+    aiChanged = Signal()
+    aiSettingsChanged = Signal()
+    aiStatusChanged = Signal()
+    aiHistoryChanged = Signal()
+    aiTestFinished = Signal(bool, str)
+    _aiDeltaIncoming = Signal(str)
+    _aiFinishedIncoming = Signal(bool, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -395,6 +412,25 @@ class AppController(QObject):
         self._incoming_progress_timer = QTimer(self)
         self._incoming_progress_timer.setInterval(100)
         self._incoming_progress_timer.timeout.connect(self._drain_run_progress)
+
+        self._ai_session = None
+        self._ai_settings = None
+        self._ai_chat_model = AiChatModel(self)
+        self._ai_attachment_model = AiAttachmentModel(self)
+        self._ai_conversation_model = AiConversationModel(self)
+        self._ai_conversation_store = None
+        self._ai_conversation = None
+        self._ai_busy = False
+        self._ai_draft = ""
+        self._ai_history_query = ""
+        # 等待首个字时轮流显示的状态文案：按这一轮实际发出去的附件类型生成，
+        # 每轮换一组（见 hr_toolkit.ai.status）。
+        self._ai_status_phrases: list[str] = []
+        self._ai_status_seq = 0
+        self._aiDeltaIncoming.connect(self._apply_ai_delta)
+        self._aiFinishedIncoming.connect(self._apply_ai_finished)
+        # 主题切换后要重算富文本里的表格/代码底色，否则暗色下会白底黑字。
+        self._presentation.changed.connect(self._rerender_ai_messages)
 
     def _state_key(self) -> tuple[str, str]:
         return self._spec.nav_id, self._spec.variant
@@ -4453,6 +4489,885 @@ class AppController(QObject):
             self._flush_logs()
         elif hasattr(self, "_log_flush_timer") and not self._log_flush_timer.isActive():
             self._log_flush_timer.start(50)
+
+    # ------------------------------------------------------------------
+    # AI 智能助手：云端对话 + 表格分析 + 工具指导。
+    # AI 模块全部懒加载，不进入启动路径；网络请求在守护线程中执行。
+    # ------------------------------------------------------------------
+    def _ai_settings_obj(self):
+        if self._ai_settings is None:
+            from hr_toolkit.ai.config import load_ai_settings
+
+            self._ai_settings = load_ai_settings()
+        return self._ai_settings
+
+    def _ai_session_obj(self):
+        if self._ai_session is None:
+            from hr_toolkit.ai.assistant import AiAssistantSession
+
+            self._ai_session = AiAssistantSession(self._ai_settings_obj())
+        return self._ai_session
+
+    # ---- 对话历史 -----------------------------------------------------
+    def _ai_store_obj(self):
+        if self._ai_conversation_store is None:
+            from hr_toolkit.ai.history import ConversationStore
+
+            self._ai_conversation_store = ConversationStore()
+        return self._ai_conversation_store
+
+    def _ai_dark_theme(self) -> bool:
+        return str(getattr(self._presentation, "theme", "light")) == "dark"
+
+    def _ai_render(self, text: str) -> str:
+        """Markdown → Qt 富文本；主题变了要重算（表格/代码底色随主题）。"""
+        from hr_toolkit.ai.markdown import render_markdown_html
+
+        return render_markdown_html(
+            text, dark=self._ai_dark_theme(), font_family=self._ai_ui_font_family()
+        )
+
+    @staticmethod
+    def _ai_ui_font_family() -> str:
+        """当前界面字体。
+
+        Qt 富文本的表格单元格不继承控件字体，模型给的 Markdown 表格如果不显式
+        带上字族，表里的中文会掉到另一套字去（看着像等宽宽体），跟正文对不上。
+        """
+        application = QGuiApplication.instance()
+        if application is None:
+            return ""
+        try:
+            return str(application.font().family() or "")
+        except Exception:  # pragma: no cover - 只在异常 Qt 环境里兜底
+            return ""
+
+    def _ai_refresh_history(self) -> None:
+        current = self._ai_conversation.conversation_id if self._ai_conversation else ""
+        self._ai_conversation_model.set_items(
+            [dict(summary, active=summary["id"] == current)
+             for summary in self._ai_store_obj().summaries(query=self._ai_history_query)]
+        )
+        self.aiHistoryChanged.emit()
+
+    def _ai_ensure_conversation(self, title_hint: str = ""):
+        if self._ai_conversation is None:
+            from hr_toolkit.ai.history import make_title
+
+            self._ai_conversation = self._ai_store_obj().create(
+                make_title(title_hint) if title_hint else ""
+            )
+        return self._ai_conversation
+
+    def _ai_sync_conversation(self) -> None:
+        """把面板上现有的消息写回当前对话并落盘；空对话直接丢弃不占历史。"""
+        if self._ai_conversation is None:
+            return
+        rows = self._ai_chat_model.items()
+        store = self._ai_store_obj()
+        if not rows:
+            store.remove(self._ai_conversation.conversation_id)
+            self._ai_refresh_history()
+            return
+        self._ai_conversation.messages = rows
+        store.upsert(self._ai_conversation)
+        self._ai_refresh_history()
+
+    def _ai_restore_record(self, record) -> None:
+        rows = []
+        for item in record.messages:
+            content = str(item.get("content") or "")
+            rows.append(
+                {
+                    "role": str(item.get("role") or "assistant"),
+                    "content": content,
+                    "html": self._ai_render(content) if item.get("role") == "assistant" else "",
+                    "streaming": False,
+                    "time": str(item.get("time") or ""),
+                    "attachments": item.get("attachments") or [],
+                }
+            )
+        self._ai_chat_model.set_items(rows)
+        self._ai_attachment_model.clear()
+        self._ai_session_obj().load_history(record.messages)
+        self._ai_conversation = record
+        self._ai_draft = str(getattr(record, "draft", "") or "")
+        self._ai_prune_image_cache()
+        self.aiChanged.emit()
+
+    def _ai_prune_image_cache(self) -> None:
+        """清掉不再引用的粘贴图片：缓存目录不该无限长大。"""
+        if self._ai_session is None:
+            return
+        try:
+            from hr_toolkit.ai.images import prune_image_cache
+
+            prune_image_cache(self._ai_session.retained_image_paths())
+        except Exception:
+            return
+
+    @Slot()
+    def aiActivate(self) -> None:
+        """面板打开时恢复最近一次对话（AI 模块保持懒加载，不进启动路径）。"""
+        if self._ai_busy or self._ai_conversation is not None or len(self._ai_chat_model) > 0:
+            return
+        record = self._ai_store_obj().latest()
+        if record is not None and record.messages:
+            self._ai_restore_record(record)
+            self.aiChanged.emit()
+        self._ai_refresh_history()
+
+    @Slot()
+    def _rerender_ai_messages(self) -> None:
+        for row in range(len(self._ai_chat_model)):
+            item = self._ai_chat_model.item_at(row)
+            if item is None or item.get("role") != "assistant":
+                continue
+            item["html"] = self._ai_render(item.get("content") or "")
+            self._ai_chat_model.update_at(row, item)
+
+    @constant_property(QObject)
+    def aiChatModel(self):
+        return self._ai_chat_model
+
+    @constant_property(QObject)
+    def aiAttachmentModel(self):
+        return self._ai_attachment_model
+
+    @Property(bool, notify=aiChanged)
+    def aiHasPendingImage(self) -> bool:
+        """待发附件里有没有图：决定要不要提示「当前模型读不了图」。
+
+        只在真的要发图时才提醒，平时不占一行位置。
+        """
+        if self._ai_session is None:
+            return False
+        return any(item.is_image for item in self._ai_session.pending_attachments())
+
+    @constant_property(QObject)
+    def aiConversationModel(self):
+        return self._ai_conversation_model
+
+    @Slot(str)
+    def aiCopyMessage(self, text: str) -> None:
+        from .compat import QApplication
+
+        board = QApplication.clipboard()
+        if board is not None:
+            board.setText(str(text or ""))
+
+    @Slot(result=str)
+    def aiCurrentConversationTitle(self) -> str:
+        if self._ai_conversation is None:
+            return ""
+        return self._ai_conversation.title
+
+    @Slot()
+    def aiNewConversation(self) -> None:
+        if self._ai_busy:
+            return
+        self._ai_sync_conversation()
+        self._ai_conversation = None
+        self._ai_chat_model.clear()
+        self._ai_attachment_model.clear()
+        self._ai_draft = ""
+        self._ai_session_obj().reset_conversation()
+        self._ai_refresh_history()
+        self.aiChanged.emit()
+
+    @Slot(str)
+    def aiOpenConversation(self, conversation_id: str) -> None:
+        if self._ai_busy:
+            return
+        record = self._ai_store_obj().get(str(conversation_id))
+        if record is None:
+            return
+        if self._ai_conversation is not None:
+            self._ai_sync_conversation()
+        self._ai_restore_record(record)
+        self._ai_refresh_history()
+        self.aiChanged.emit()
+
+    @Slot(str)
+    def aiDeleteConversation(self, conversation_id: str) -> None:
+        if self._ai_busy:
+            return
+        target = str(conversation_id)
+        if self._ai_conversation is not None and self._ai_conversation.conversation_id == target:
+            self._ai_conversation = None
+            self._ai_chat_model.clear()
+            self._ai_attachment_model.clear()
+            self._ai_draft = ""
+            self._ai_session_obj().reset_conversation()
+        self._ai_store_obj().remove(target)
+        self._ai_refresh_history()
+        self.aiChanged.emit()
+
+    @Slot(str, str, result=bool)
+    def aiRenameConversation(self, conversation_id: str, title: str) -> bool:
+        if not str(title or "").strip():
+            return False
+        ok = self._ai_store_obj().rename(str(conversation_id), title)
+        if ok and self._ai_conversation is not None:
+            if self._ai_conversation.conversation_id == str(conversation_id):
+                self._ai_conversation.title = str(title).strip()
+        self._ai_refresh_history()
+        self.aiHistoryChanged.emit()
+        return ok
+
+    @Slot(str)
+    def aiSearchHistory(self, query: str) -> None:
+        """按标题或正文过滤历史列表；空串恢复全部。"""
+        self._ai_history_query = str(query or "").strip()
+        self._ai_refresh_history()
+
+    @Slot(str)
+    def aiSaveDraft(self, text: str) -> None:
+        """记住输入框草稿：切走再回来不丢。只在已有对话时落盘。"""
+        self._ai_draft = str(text or "")
+        if self._ai_conversation is not None:
+            self._ai_store_obj().set_draft(
+                self._ai_conversation.conversation_id, self._ai_draft
+            )
+
+    @Property(str, notify=aiChanged)
+    def aiDraft(self) -> str:
+        return self._ai_draft
+
+    @Property(str, notify=aiChanged)
+    def aiConversationId(self) -> str:
+        return self._ai_conversation.conversation_id if self._ai_conversation else ""
+
+    @Slot(int, str)
+    def aiEditMessage(self, row: int, text: str) -> None:
+        """编辑并重发：从这条用户消息起截断，用新内容重新问一次。"""
+        if self._ai_busy:
+            return
+        index = int(row)
+        if index < 0 or index >= len(self._ai_chat_model):
+            return
+        item = self._ai_chat_model.item_at(index)
+        if item is None or item.get("role") != "user":
+            return
+        question = str(text or "").strip()
+        if not question:
+            return
+        remaining = self._ai_chat_model.items()[:index]
+        attachment_rows = item.get("attachments") or []
+        while len(self._ai_chat_model) > index:
+            self._ai_chat_model.remove_at(len(self._ai_chat_model) - 1)
+        self._ai_session_obj().load_history(remaining)
+        if not remaining:
+            # 把标题也换掉，否则第一条被编辑后标题还是旧问题。
+            self._ai_conversation = None
+        self._ai_begin_turn(question, attachment_rows, [])
+
+    @Property("QVariantList", notify=aiSettingsChanged)
+    def aiModelOptions(self):
+        """当前服务商可切换的模型（面板里的模型菜单）。带 vision 标记。"""
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset()
+            config = settings.provider_config()
+        except Exception:
+            return []
+        from hr_toolkit.ai.config import model_supports_vision
+
+        current = config.resolved_model(preset)
+        return [
+            {
+                "value": name,
+                "label": name,
+                "selected": name == current,
+                "vision": model_supports_vision(preset.provider_id, name),
+                # 正在用的模型不给删，否则会把当前配置删空。
+                "removable": name != current,
+            }
+            for name in config.model_choices(preset)
+        ]
+
+    @Property(bool, notify=aiSettingsChanged)
+    def aiVisionCapable(self) -> bool:
+        """当前模型能否读图（启发式，仅用于界面提示，不拦截请求）。"""
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset()
+            config = settings.provider_config()
+        except Exception:
+            return False
+        from hr_toolkit.ai.config import model_supports_vision
+
+        return bool(model_supports_vision(preset.provider_id, config.resolved_model(preset)))
+
+    @Property(str, notify=aiSettingsChanged)
+    def aiVisionHint(self) -> str:
+        """模型不吃图时给一句可操作的提示。"""
+        if self.aiVisionCapable:
+            return ""
+        return "当前模型可能读不了图片，请在模型菜单切换到带 VL / Vision 的视觉模型。"
+
+    @Slot(str, result=bool)
+    def aiSelectProvider(self, provider: str) -> bool:
+        """切换服务商。
+
+        每个服务商各有自己的 Key / 模型 / 用户自建模型列表，所以这里只动
+        ``active_provider``；切换过去时那家原来配好的东西原样还在。
+        """
+        from hr_toolkit.ai.config import AiConfigError, save_ai_settings
+
+        key = str(provider or "").strip()
+        if not key:
+            return False
+        try:
+            settings = self._ai_settings_obj()
+            if key == settings.active_provider:
+                return True
+            preset = settings.preset(key)  # 未知 id 会抛 AiConfigError
+            settings.provider_config(key)  # 确保这一家的配置节存在
+            settings.active_provider = preset.provider_id
+            save_ai_settings(settings)
+        except (AiConfigError, OSError):
+            return False
+        if self._ai_session is not None:
+            self._ai_session.refresh_settings(settings)
+        self.aiSettingsChanged.emit()
+        return True
+
+    @Slot(str, result="QVariantList")
+    def aiModelChoicesFor(self, provider: str) -> list:
+        """某个服务商可选的模型名（当前在用的 + 预置/自建列表，去重保序）。"""
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset(str(provider or "").strip())
+            return list(settings.provider_config(preset.provider_id).model_choices(preset))
+        except Exception:
+            return []
+
+    @Slot(str, result=bool)
+    def aiSelectModel(self, model: str) -> bool:
+        name = str(model or "").strip()
+        if not name:
+            return False
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset()
+            config = settings.provider_config()
+        except Exception:
+            return False
+        if name == config.resolved_model(preset):
+            return True
+        from hr_toolkit.ai.config import AiConfigError, save_ai_settings, validate_model
+
+        try:
+            config.model = validate_model(name)
+            save_ai_settings(settings)
+        except (AiConfigError, OSError) as exc:
+            self.aiTestFinished.emit(False, str(exc))
+            return False
+        if self._ai_session is not None:
+            self._ai_session.refresh_settings(settings)
+        self.aiSettingsChanged.emit()
+        return True
+
+    @Slot(str, result=bool)
+    def aiAddModel(self, model: str) -> bool:
+        """把用户自己填的模型加进当前服务商的模型列表（可加多个）。"""
+        from hr_toolkit.ai.config import AiConfigError, save_ai_settings
+
+        name = str(model or "").strip()
+        if not name:
+            return False
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset()
+            config = settings.provider_config()
+            if not config.add_model(preset, name):
+                self.aiTestFinished.emit(False, f"模型「{name}」已经在列表里了。")
+                return False
+            save_ai_settings(settings)
+        except (AiConfigError, OSError) as exc:
+            self.aiTestFinished.emit(False, str(exc))
+            return False
+        if self._ai_session is not None:
+            self._ai_session.refresh_settings(settings)
+        # 加完直接切过去：用户加它就是为了用它。
+        return self.aiSelectModel(name)
+
+    @Slot(str, result=bool)
+    def aiRemoveModel(self, model: str) -> bool:
+        """从列表里移除一个模型；正在用的那个不允许移除。"""
+        from hr_toolkit.ai.config import AiConfigError, save_ai_settings
+
+        name = str(model or "").strip()
+        if not name:
+            return False
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset()
+            config = settings.provider_config()
+            if name == config.resolved_model(preset):
+                self.aiTestFinished.emit(False, "这是正在使用的模型，请先切换到别的模型。")
+                return False
+            if not config.remove_model(preset, name):
+                self.aiTestFinished.emit(False, f"列表里没有模型「{name}」。")
+                return False
+            save_ai_settings(settings)
+        except (AiConfigError, OSError) as exc:
+            self.aiTestFinished.emit(False, str(exc))
+            return False
+        if self._ai_session is not None:
+            self._ai_session.refresh_settings(settings)
+        self.aiSettingsChanged.emit()
+        return True
+
+    @Property(bool, notify=aiChanged)
+    def aiBusy(self) -> bool:
+        return self._ai_busy
+
+    @Property(bool, notify=aiSettingsChanged)
+    def aiReady(self) -> bool:
+        return self._ai_settings_obj().is_ready()
+
+    @Property(str, notify=aiSettingsChanged)
+    def aiSetupMessage(self) -> str:
+        return "；".join(self._ai_settings_obj().problems())
+
+    @Property(str, notify=aiSettingsChanged)
+    def aiActiveProvider(self) -> str:
+        return self._ai_settings_obj().active_provider
+
+    @Property(str, notify=aiSettingsChanged)
+    def aiActiveProviderLabel(self) -> str:
+        return self._ai_settings_obj().preset().label
+
+    @Property(str, notify=aiSettingsChanged)
+    def aiActiveModel(self) -> str:
+        settings = self._ai_settings_obj()
+        return settings.provider_config().resolved_model(settings.preset())
+
+    @Property(str, notify=aiSettingsChanged)
+    def aiProviderDefaultModel(self) -> str:
+        """当前服务商的官方默认模型；用作「添加模型」输入框的示例。"""
+        return self._ai_settings_obj().preset().default_model
+
+    @Property(str, notify=aiSettingsChanged)
+    def aiModelsNote(self) -> str:
+        """模型菜单底部那句来源说明，省得用户对着一串模型名不知道是什么。"""
+        return self._ai_settings_obj().preset().models_note
+
+    @Property("QVariantList", notify=aiStatusChanged)
+    def aiStatusPhrases(self):
+        """等待首个字时轮流显示的提示，按这一轮实际发出的附件类型生成。"""
+        from hr_toolkit.ai.status import default_status_phrases
+
+        return list(self._ai_status_phrases) or default_status_phrases()
+
+    @Property("QVariantList", notify=aiSettingsChanged)
+    def aiProviderOptions(self):
+        from hr_toolkit.ai.config import PROVIDER_PRESETS
+
+        return [
+            {"value": preset.provider_id, "label": preset.label}
+            for preset in PROVIDER_PRESETS.values()
+        ]
+
+    @Property("QVariantList", notify=aiSettingsChanged)
+    def aiProviderMenuOptions(self):
+        """面板模型菜单顶部那一组服务商行：当前生效的那家打勾。"""
+        from hr_toolkit.ai.config import PROVIDER_PRESETS
+
+        active = self._ai_settings_obj().active_provider
+        return [
+            {
+                "value": preset.provider_id,
+                "label": preset.label,
+                "selected": preset.provider_id == active,
+            }
+            for preset in PROVIDER_PRESETS.values()
+        ]
+
+    @Property("QVariantList", notify=aiChanged)
+    def aiSuggestions(self):
+        return [
+            "对比我附加的两张表的差异",
+            "谁的增长值更好？",
+            "工资怎么按入职公司拆分？",
+            "周报几点算超时？",
+        ]
+
+    @Slot(str, str, str, str)
+    def aiSaveSettings(self, provider: str, api_key: str, model: str, endpoint: str) -> bool:
+        from hr_toolkit.ai.config import AiConfigError, save_ai_settings
+
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset(str(provider).strip() or "minimax")
+            settings.active_provider = preset.provider_id
+            config = settings.provider_config(preset.provider_id)
+            from hr_toolkit.ai.config import normalize_api_key, validate_endpoint, validate_model
+
+            config.api_key = normalize_api_key(api_key)
+            config.model = validate_model(str(model or "").strip() or preset.default_model)
+            endpoint_text = str(endpoint or "").strip()
+            config.endpoint = validate_endpoint(endpoint_text) if endpoint_text else ""
+            save_ai_settings(settings)
+        except (AiConfigError, OSError) as exc:
+            self.aiTestFinished.emit(False, str(exc))
+            return False
+        session = self._ai_session
+        if session is not None:
+            session.refresh_settings(settings)
+        self.aiSettingsChanged.emit()
+        return True
+
+    @Slot(result=str)
+    def aiCurrentApiKey(self) -> str:
+        return self._ai_settings_obj().provider_config().api_key
+
+    @Slot(str, result=str)
+    def aiApiKeyFor(self, provider: str) -> str:
+        try:
+            return self._ai_settings_obj().provider_config(str(provider)).api_key
+        except Exception:
+            return ""
+
+    @Slot(str, result=str)
+    def aiEndpointFor(self, provider: str) -> str:
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset(str(provider))
+            return settings.provider_config(str(provider)).resolved_endpoint(preset)
+        except Exception:
+            return ""
+
+    @Slot(str, result=str)
+    def aiModelFor(self, provider: str) -> str:
+        try:
+            settings = self._ai_settings_obj()
+            preset = settings.preset(str(provider))
+            return settings.provider_config(str(provider)).resolved_model(preset)
+        except Exception:
+            return ""
+
+    @Slot()
+    def aiTestConnection(self) -> None:
+        settings = self._ai_settings_obj()
+
+        def worker() -> None:
+            from hr_toolkit.ai.client import ChatError, test_connection
+
+            try:
+                reply = test_connection(settings)
+            except ChatError as exc:
+                self.aiTestFinished.emit(False, str(exc))
+            except Exception as exc:  # 防御：不友好的底层错误也转成可读提示
+                self.aiTestFinished.emit(False, f"连接测试失败：{exc}")
+            else:
+                self.aiTestFinished.emit(True, "连接成功" + (f"：{reply}" if reply else ""))
+
+        threading.Thread(target=worker, daemon=True, name="HRToolkit-ai-test").start()
+
+    @Slot(str)
+    def aiSendMessage(self, text: str) -> None:
+        question = str(text or "").strip()
+        if self._ai_busy:
+            return
+        if not question and self._ai_attachment_model.rowCount() == 0:
+            return
+        settings = self._ai_settings_obj()
+        if not settings.is_ready():
+            self.aiSettingsChanged.emit()
+            return
+        # 附件跟着这条消息走：快照进消息行，待发区清空，用户才看得出确实发出去了。
+        sent = self._ai_session_obj().consume_pending()
+        attachment_rows = [item.as_model_row() for item in sent]
+        if not question and not attachment_rows:
+            return
+        self._ai_begin_turn(question, attachment_rows, sent)
+
+    def _ai_attach_status_phrases(self, attachment_rows) -> None:
+        """按这一轮实际发出去的附件换一组「等待首个字」的提示。
+
+        发的是图就别再写「正在读取表格」——照抄一句与事实不符的提示，用户一眼
+        就看得出是假的。每轮换一个种子，相邻两次提问的措辞也不一样。
+        """
+        from hr_toolkit.ai.status import build_status_phrases
+
+        self._ai_status_seq += 1
+        self._ai_status_phrases = build_status_phrases(
+            [
+                str(row.get("kind") or "")
+                for row in (attachment_rows or [])
+                if isinstance(row, dict)
+            ],
+            seed=self._ai_status_seq,
+        )
+        self.aiStatusChanged.emit()
+
+    def _ai_begin_turn(self, question: str, attachment_rows, sent_attachments) -> None:
+        session = self._ai_session_obj()
+        self._ai_ensure_conversation(question)
+        self._ai_attach_status_phrases(attachment_rows)
+        self._ai_chat_model.append(
+            {
+                "role": "user",
+                "content": question if question else "（请分析附加的表格）",
+                "html": "",
+                "streaming": False,
+                "time": datetime.now().strftime("%H:%M"),
+                "attachments": list(attachment_rows or []),
+            },
+            maximum=200,
+        )
+        self._ai_attachment_model.clear()
+        self._ai_chat_model.append(
+            {"role": "assistant", "content": "", "html": "", "streaming": True,
+             "time": datetime.now().strftime("%H:%M"), "attachments": []},
+            maximum=200,
+        )
+        self._ai_busy = True
+        self._ai_draft = ""
+        self.aiChanged.emit()
+        self._ai_sync_conversation()
+        self._ai_prune_image_cache()
+
+        def worker() -> None:
+            from hr_toolkit.ai.client import ChatError
+
+            buffer: list[str] = []
+            last_flush = time.monotonic()
+
+            def flush() -> None:
+                nonlocal last_flush
+                if buffer:
+                    self._aiDeltaIncoming.emit("".join(buffer))
+                    buffer.clear()
+                last_flush = time.monotonic()
+
+            try:
+                for delta in session.ask(question, list(sent_attachments or [])):
+                    buffer.append(delta)
+                    if time.monotonic() - last_flush >= 0.06:
+                        flush()
+                flush()
+                self._aiFinishedIncoming.emit(True, "")
+            except ChatError as exc:
+                flush()
+                self._aiFinishedIncoming.emit(False, str(exc))
+            except Exception as exc:
+                flush()
+                runlog.log_exception("AI 助手请求失败", exc)
+                self._aiFinishedIncoming.emit(False, "请求失败，请稍后重试。")
+
+        threading.Thread(target=worker, daemon=True, name="HRToolkit-ai-chat").start()
+
+    @Slot()
+    def aiRegenerate(self) -> None:
+        """重新生成最后一条回答：退掉最后的一问一答，用同一条问题再问一次。"""
+        if self._ai_busy or len(self._ai_chat_model) < 2:
+            return
+        last_row = self._ai_chat_model.item_at(len(self._ai_chat_model) - 1)
+        question_row = self._ai_chat_model.item_at(len(self._ai_chat_model) - 2)
+        if last_row is None or question_row is None:
+            return
+        if last_row.get("role") != "assistant" or question_row.get("role") != "user":
+            return
+        question = str(question_row.get("content") or "")
+        attachment_rows = question_row.get("attachments") or []
+        self._ai_chat_model.remove_at(len(self._ai_chat_model) - 1)
+        self._ai_chat_model.remove_at(len(self._ai_chat_model) - 1)
+        # 用剩下的消息行重建上下文：带附件的用户行存了 apiContent（表格正文），
+        # 所以重问时模型仍然看得见原来的表格。
+        self._ai_session_obj().load_history(self._ai_chat_model.items())
+        self._ai_begin_turn(question, attachment_rows, [])
+
+    @Slot()
+    def aiStopGenerating(self) -> None:
+        if self._ai_session is not None:
+            self._ai_session.request_stop()
+
+    @Slot()
+    def aiClearConversation(self) -> None:
+        self.aiNewConversation()
+
+    @Slot()
+    def aiChooseAttachments(self) -> None:
+        from hr_toolkit.gui_qt.image_input import ATTACH_FILE_FILTER
+
+        parent = self._dialog_parent()
+        filenames, _selected = self._presentation.file_dialog(
+            QFileDialog.getOpenFileNames,
+            parent,
+            "选择要分析的表格或图片",
+            self._file_dialog_initial_dir(),
+            ATTACH_FILE_FILTER,
+        )
+        if filenames:
+            self.aiAttachPaths([str(name) for name in filenames])
+
+    @Slot(result=bool)
+    def aiClipboardHasImage(self) -> bool:
+        """剪贴板里有没有图：输入框据此决定 Ctrl+V 是粘图还是粘文字。"""
+        try:
+            from hr_toolkit.gui_qt.image_input import clipboard_has_image
+        except ImportError:
+            return False
+        return bool(clipboard_has_image())
+
+    @Slot(result=bool)
+    def aiPasteImage(self) -> bool:
+        """把剪贴板里的图附加进来；剪贴板没有图返回 False，让普通文本粘贴继续。"""
+        try:
+            from hr_toolkit.gui_qt.image_input import clipboard_image_payload
+        except ImportError:
+            return False
+        try:
+            payload = clipboard_image_payload()
+        except ValueError as exc:
+            self.notificationRequested.emit("图片粘贴", str(exc), "warning")
+            return True
+        if not payload:
+            return False
+        self._ai_attach_image_payload(
+            name=payload["name"],
+            data=payload["data"],
+            mime=payload["mime"],
+            width=payload["width"],
+            height=payload["height"],
+            cached=payload.get("cached_path"),
+        )
+        return True
+
+    def _ai_attach_image_payload(
+        self, *, name, data, mime, width, height, cached=None
+    ) -> bool:
+        session = self._ai_session_obj()
+        try:
+            row = session.add_image(
+                name=name,
+                data=data,
+                mime=mime,
+                width=width,
+                height=height,
+                path=cached,
+            )
+        except ValueError as exc:
+            self.notificationRequested.emit("图片附件", str(exc), "warning")
+            return False
+        self._ai_attachment_model.append(row)
+        self.aiChanged.emit()
+        return True
+
+    @Slot("QVariantList")
+    def aiAttachPaths(self, paths) -> None:
+        """表格走解析管道，图片走压缩管道；两类混选也能一次加完。
+
+        ``paths`` 可能来自拖拽（QUrl）也可能来自文件对话框（字符串），
+        统一走 ``local_drop_paths`` 归一化：``file://`` 前缀、Windows 的
+        ``/D:/`` 盘符形式都在那里处理，这里不重复造一套。
+        """
+        from hr_toolkit.ai import images as image_support
+
+        session = self._ai_session_obj()
+        added = 0
+        errors: list[str] = []
+        for raw in paths or []:
+            try:
+                resolved = local_drop_paths([raw])
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            if not resolved:
+                continue
+            path = resolved[0]
+            try:
+                if image_support.is_image_filename(path.name):
+                    self._ai_attach_image_file(str(path))
+                else:
+                    row = session.add_attachment(str(path))
+                    self._ai_attachment_model.append(row)
+                added += 1
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+        if added:
+            self.aiChanged.emit()
+        if errors:
+            self.notificationRequested.emit("附件解析", "\n".join(errors[:3]), "warning")
+
+    def _ai_attach_image_file(self, path: str) -> None:
+        from hr_toolkit.gui_qt.image_input import load_image_file
+
+        payload = load_image_file(path)
+        session = self._ai_session_obj()
+        row = session.add_image(
+            name=payload["name"],
+            data=payload["data"],
+            mime=payload["mime"],
+            width=payload["width"],
+            height=payload["height"],
+            path=payload.get("cached_path"),
+        )
+        self._ai_attachment_model.append(row)
+
+    @Slot(str)
+    def aiOpenImage(self, path: str) -> None:
+        """用系统看图程序打开附件原图。"""
+        target = str(path or "").strip()
+        if not target:
+            return
+        if target.startswith("file://"):
+            target = target[len("file://"):]
+        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+
+    @Slot(int)
+    def aiRemoveAttachment(self, row: int) -> None:
+        if self._ai_session is not None:
+            self._ai_session.remove_attachment(int(row))
+        self._ai_attachment_model.remove_at(int(row))
+        self.aiChanged.emit()
+
+    @Slot()
+    def aiClearAttachments(self) -> None:
+        if self._ai_session is not None:
+            self._ai_session.clear_attachments()
+        self._ai_attachment_model.clear()
+        self.aiChanged.emit()
+
+    @Slot(str)
+    def _apply_ai_delta(self, text: str) -> None:
+        row = len(self._ai_chat_model) - 1
+        item = self._ai_chat_model.item_at(row)
+        if not item:
+            return
+        item["content"] = (item.get("content") or "") + str(text)
+        item["html"] = self._ai_render(item["content"])
+        self._ai_chat_model.update_at(row, item)
+
+    @Slot(bool, str)
+    def _apply_ai_finished(self, ok: bool, error: str) -> None:
+        row = len(self._ai_chat_model) - 1
+        item = self._ai_chat_model.item_at(row)
+        if item is not None and item.get("role") == "assistant":
+            if not ok:
+                existing = item.get("content") or ""
+                item["content"] = (
+                    existing + "\n\n" if existing else ""
+                ) + "⚠ " + str(error or "请求失败")
+            item["streaming"] = False
+            item["html"] = self._ai_render(item.get("content") or "")
+            self._ai_chat_model.update_at(row, item)
+        # 用户行记下真正发给模型的正文（含表格），历史恢复与重新生成都要用它。
+        question_row = row - 1
+        if question_row >= 0 and self._ai_session is not None:
+            context_body = getattr(self._ai_session, "last_context_body", "")
+            question_item = self._ai_chat_model.item_at(question_row)
+            if question_item is not None and question_item.get("role") == "user" and context_body:
+                question_item["apiContent"] = context_body
+                self._ai_chat_model.update_at(question_row, question_item)
+        self._ai_busy = False
+        self.aiChanged.emit()
+        self._ai_sync_conversation()
 
     @Slot()
     def openLastResult(self) -> None:
