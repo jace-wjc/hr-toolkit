@@ -517,13 +517,13 @@ class QtControllerTests(unittest.TestCase):
             # 切到 DeepSeek：改用 DeepSeek 自己的 Key 与模型。
             self.assertTrue(controller.aiSelectProvider("deepseek"))
             self.assertEqual(controller.aiActiveProvider, "deepseek")
-            self.assertEqual(controller.aiActiveModel, "deepseek-chat")
+            self.assertEqual(controller.aiActiveModel, "deepseek-flash")
             self.assertEqual(controller.aiApiKeyFor("deepseek"), "")
             names = [row["value"] for row in controller.aiModelOptions]
             self.assertNotIn("我的自建模型", names, "串到了别家的模型列表")
 
             # 在 DeepSeek 里换个模型
-            self.assertTrue(controller.aiSelectModel("deepseek-reasoner"))
+            self.assertTrue(controller.aiSelectModel("deepseek-v4-pro"))
 
             # MiniMax 那边的 Key 与自建模型原样还在（切换不是「覆盖」）。
             self.assertEqual(controller.aiApiKeyFor("minimax"), "sk-minimax-key-1234")
@@ -536,7 +536,7 @@ class QtControllerTests(unittest.TestCase):
 
             # 再回 DeepSeek：刚才换的 reasoner 也还在。
             self.assertTrue(controller.aiSelectProvider("deepseek"))
-            self.assertEqual(controller.aiActiveModel, "deepseek-reasoner")
+            self.assertEqual(controller.aiActiveModel, "deepseek-v4-pro")
 
             # 未知服务商不能把配置改坏。
             self.assertFalse(controller.aiSelectProvider("not-a-provider"))
@@ -563,16 +563,16 @@ class QtControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             controller = self._isolated_controller(folder)
             self.assertIn("MiniMax-M3", controller.aiModelChoicesFor("minimax"))
-            self.assertIn("glm-4.6", controller.aiModelChoicesFor("glm"))
-            self.assertIn("qwen-plus", controller.aiModelChoicesFor("qwen"))
-            self.assertIn("deepseek-chat", controller.aiModelChoicesFor("deepseek"))
+            self.assertIn("glm-5.3", controller.aiModelChoicesFor("glm"))
+            self.assertIn("qwen3.7-plus", controller.aiModelChoicesFor("qwen"))
+            self.assertIn("deepseek-flash", controller.aiModelChoicesFor("deepseek"))
             self.assertNotIn("MiniMax-M3", controller.aiModelChoicesFor("glm"))
             self.assertNotIn("glm-4.6", controller.aiModelChoicesFor("qwen"))
             self.assertEqual(controller.aiModelChoicesFor("not-a-provider"), [])
             # 「添加模型」输入框的示例跟着服务商走。
             self.assertEqual(controller.aiProviderDefaultModel, "MiniMax-M3")
             controller.aiSelectProvider("glm")
-            self.assertEqual(controller.aiProviderDefaultModel, "glm-4.6")
+            self.assertEqual(controller.aiProviderDefaultModel, "glm-5.3")
 
     def test_workspace_transfer_captures_path_and_rejects_changed_context(self) -> None:
         controller = self.controller()

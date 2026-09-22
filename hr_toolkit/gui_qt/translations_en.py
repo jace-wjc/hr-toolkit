@@ -1,6 +1,9 @@
 """US English display catalog. Numbered placeholders preserve source data."""
 
 MESSAGES = {
+ 'GLM-5.3-Flash 和 GLM-5.3-FlashX 支持图片；GLM-5.3 仅支持文字。': 'GLM-5.3-Flash and GLM-5.3-FlashX support images. GLM-5.3 is text-only.',
+ 'Qwen3.7-Plus、Qwen3.8-Max / Flash 和 Qwen-VL 支持图片。': 'Qwen3.7-Plus, Qwen3.8-Max / Flash, and Qwen-VL support images.',
+ 'deepseek-flash 对应 V4.1 Flash；deepseek-v4-pro 对应 V4 Pro 0813。V4 Flash 0731 已下线，deepseek-v4-flash 仅为兼容名称，当前转至 V4.1 Flash。': 'deepseek-flash is V4.1 Flash; deepseek-v4-pro is V4 Pro 0813. V4 Flash 0731 has been retired. deepseek-v4-flash is a compatibility alias currently routed to V4.1 Flash.',
  '最近使用': 'Recent',
  '打开文件': 'Open File',
  '打开文件夹': 'Open Folder',
@@ -3161,8 +3164,6 @@ MESSAGES = {
  '添加模型…': 'Add model...',
  '模型名称，例如 MiniMax-M3': 'Model name, e.g. MiniMax-M3',
  'MiniMax-M3 支持图片，M2.x 系列只认文字。': 'MiniMax-M3 reads images; the M2.x line is text only.',
- 'GLM-4.6V、GLM-5.3-Flash、GLM-4V-Flash 能读图，其余为纯文本。': 'GLM-4.6V, GLM-5.3-Flash and GLM-4V-Flash read images; the rest are text only.',
- 'Qwen-VL 系列能读图，Qwen3-Max / Plus / Flash 只认文字。': 'The Qwen-VL line reads images; Qwen3-Max / Plus / Flash are text only.',
  '智谱 GLM': 'Zhipu GLM',
  '通义千问': 'Qwen',
  '可选：': 'Available: ',

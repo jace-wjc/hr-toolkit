@@ -218,12 +218,12 @@ class AiConfigTests(unittest.TestCase):
             PROVIDER_PRESETS["glm"].endpoint,
             "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         )
-        self.assertEqual(PROVIDER_PRESETS["glm"].default_model, "glm-4.6")
+        self.assertEqual(PROVIDER_PRESETS["glm"].default_model, "glm-5.3")
         self.assertEqual(
             PROVIDER_PRESETS["qwen"].endpoint,
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
         )
-        self.assertEqual(PROVIDER_PRESETS["qwen"].default_model, "qwen-plus")
+        self.assertEqual(PROVIDER_PRESETS["qwen"].default_model, "qwen3.7-plus")
 
         # 四家的默认模型都得在自家候选表里，否则菜单里选不到正在用的那个。
         settings = AiSettings()
@@ -239,6 +239,10 @@ class AiConfigTests(unittest.TestCase):
         from hr_toolkit.ai.config import normalize_chat_endpoint
 
         cases = [
+            ("qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+             "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"),
+            ("qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+             "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"),
             # 只有域名 → 补上该家的版本前缀
             ("glm", "https://open.bigmodel.cn",
              "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
@@ -260,16 +264,38 @@ class AiConfigTests(unittest.TestCase):
                 normalize_chat_endpoint(provider_id, given), expected, given
             )
 
+    def test_saved_qwen_default_adopts_token_plan_without_changing_custom_urls(self):
+        old = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        custom = "https://example.invalid/compatible-mode/v1/chat/completions"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "ai.json"
+            for endpoint in (old, old + "/chat/completions", custom):
+                settings = AiSettings(active_provider="qwen")
+                config = settings.provider_config("qwen")
+                config.endpoint = endpoint
+                config.api_key = "test-key"
+                config.model = "custom-model"
+                save_ai_settings(settings, path)
+                loaded = load_ai_settings(path)
+                restored = loaded.provider_config("qwen")
+                self.assertEqual(restored.api_key, "test-key")
+                self.assertEqual(restored.model, "custom-model")
+                self.assertEqual(restored.resolved_endpoint(loaded.preset()),
+                                 custom if endpoint == custom else loaded.preset().endpoint)
+
     def test_glm_and_qwen_vision_flags_follow_the_official_lists(self):
         from hr_toolkit.ai.config import PROVIDER_PRESETS, model_supports_vision
 
-        for model in ("glm-4.6v", "glm-5.3-flash", "glm-4v-flash"):
+        for model in ("glm-5.3-flash", "glm-5.3-flashx"):
             self.assertTrue(model_supports_vision("glm", model), model)
         # 纯文本的 GLM 不能被误标成能读图（之前 glm-5.3 名字里没有 v，容易漏判）
         for model in ("glm-4.6", "glm-5.3", "glm-4.7", "glm-4.5-air", "glm-4.5-flash"):
             self.assertFalse(model_supports_vision("glm", model), model)
 
-        for model in ("qwen3-vl-plus", "qwen-vl-max", "qwen-vl-ocr"):
+        for model in (
+            "qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash",
+            "qwen3-vl-plus", "qwen-vl-max", "qwen-vl-ocr",
+        ):
             self.assertTrue(model_supports_vision("qwen", model), model)
         for model in ("qwen-plus", "qwen3-max", "qwen-flash", "qwen-long", "qwq-plus"):
             self.assertFalse(model_supports_vision("qwen", model), model)
@@ -288,7 +314,7 @@ class AiConfigTests(unittest.TestCase):
 
         # 没动过时显示预置候选
         self.assertTrue(config.uses_preset_models(preset))
-        self.assertIn("MiniMax-M2", config.model_choices(preset))
+        self.assertIn("MiniMax-M2.7", config.model_choices(preset))
 
         # 加多个自己的模型
         self.assertTrue(config.add_model(preset, "my-gateway-vl"))
@@ -298,8 +324,8 @@ class AiConfigTests(unittest.TestCase):
         self.assertIn("我的公司模型-2", config.model_choices(preset))
 
         # 删掉预置项：会先把预置列表播种进来，所以「删不掉」不会发生
-        self.assertTrue(config.remove_model(preset, "MiniMax-M2"))
-        self.assertNotIn("MiniMax-M2", config.model_choices(preset))
+        self.assertTrue(config.remove_model(preset, "MiniMax-M2.7"))
+        self.assertNotIn("MiniMax-M2.7", config.model_choices(preset))
         self.assertIn("MiniMax-M3", config.model_choices(preset))
 
         # 落盘再读回：用户列表要活着
@@ -310,6 +336,34 @@ class AiConfigTests(unittest.TestCase):
         restored_config = restored.provider_config("minimax")
         self.assertEqual(restored_config.models, config.models)
         self.assertIn("my-gateway-vl", restored_config.model_choices(restored.preset("minimax")))
+
+    def test_removed_models_do_not_return_from_saved_active_or_custom_lists(self):
+        cases = (("qwen", "qwen-plus", "qwen3.7-plus"),
+                 ("glm", "glm-4.6", "glm-5.3"),
+                 ("minimax", "MiniMax-M2", "MiniMax-M3"))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "ai.json"
+            for provider, removed, default in cases:
+                settings = AiSettings(active_provider=provider)
+                config = settings.provider_config()
+                config.api_key = "test-key"
+                config.model = removed
+                config.models = [removed, "company-custom-model"]
+                save_ai_settings(settings, path)
+                loaded = load_ai_settings(path)
+                actual = loaded.provider_config()
+                self.assertEqual(actual.resolved_model(loaded.preset()), default)
+                self.assertNotIn(removed, actual.model_choices(loaded.preset()))
+                self.assertIn("company-custom-model", actual.model_choices(loaded.preset()))
+                self.assertEqual(actual.api_key, "test-key")
+
+    def test_curated_catalogs_match_requested_models(self):
+        settings = AiSettings()
+        self.assertEqual(settings.preset("glm").models, ("glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"))
+        self.assertEqual(settings.preset("minimax").models, ("MiniMax-M3", "MiniMax-M2.7-highspeed", "MiniMax-M2.7"))
+        self.assertEqual(settings.preset("deepseek").models, ("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash"))
+        self.assertEqual(settings.preset("qwen").models, (
+            "qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash", "qwen3-vl-plus", "qwen-vl-max", "qwen-vl-ocr"))
 
     def test_blank_model_list_still_reports_the_active_model(self):
         from hr_toolkit.ai.config import AiSettings

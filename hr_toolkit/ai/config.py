@@ -58,37 +58,25 @@ MINIMAX_MODELS: tuple = (
     "MiniMax-M3",
     "MiniMax-M2.7-highspeed",
     "MiniMax-M2.7",
-    "MiniMax-M2.5-highspeed",
-    "MiniMax-M2.5",
-    "MiniMax-M2.1-highspeed",
-    "MiniMax-M2.1",
-    "MiniMax-M2",
 )
 
 # 智谱 GLM：OpenAI 兼容地址是 https://open.bigmodel.cn/api/paas/v4/chat/completions
-# （注意版本段是 /api/paas/v4，不是 /v1）。视觉模型名以 v 结尾（glm-4.6v），
-# 另外 glm-5.3-flash 官方标注为多模态，名字里没有 v，所以要显式列出来。
+# 仅保留 5.x 系列；Flash 的视觉能力需要显式标记。
 GLM_MODELS: tuple = (
-    "glm-4.6",
     "glm-5.3",
-    "glm-4.7",
-    "glm-4.5-air",
-    "glm-4.5-flash",
     "glm-5.3-flash",
     "glm-5.3-flashx",
-    "glm-4.6v",
-    "glm-4v-flash",
 )
 
-# 阿里云百炼（通义千问）：OpenAI 兼容地址是
-# https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
-# 能读图的是 Qwen-VL 系列；qwen3-max / plus / flash 是纯文本。
+# 阿里云百炼（通义千问）：使用客户指定的 Token Plan OpenAI 兼容地址。
+# 基地址后追加 /chat/completions，供客户端直接发送请求。
+# 当前推荐及读图能力：https://help.aliyun.com/zh/model-studio/models
+# https://help.aliyun.com/zh/model-studio/vision （2026-09-22）
+# 按客户要求移除旧版文字模型。
 QWEN_MODELS: tuple = (
-    "qwen-plus",
-    "qwen3-max",
-    "qwen-flash",
-    "qwen-long",
-    "qwq-plus",
+    "qwen3.7-plus",
+    "qwen3.8-max",
+    "qwen3.8-flash",
     "qwen3-vl-plus",
     "qwen-vl-max",
     "qwen-vl-ocr",
@@ -99,11 +87,12 @@ PROVIDER_PRESETS: Dict[str, ProviderPreset] = {
         "deepseek",
         "DeepSeek",
         "https://api.deepseek.com/chat/completions",
-        "deepseek-chat",
+        "deepseek-flash",
         chat_path="/chat/completions",
-        models=("deepseek-chat", "deepseek-reasoner"),
-        # DeepSeek 公开接口目前只有纯文本模型，不放视觉候选以免误导。
-        vision_models=(),
+        # https://api-docs.deepseek.com/updates/ (2026-09-10)
+        models=("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash"),
+        vision_models=("deepseek-flash", "deepseek-v4-flash"),
+        models_note="deepseek-flash 对应 V4.1 Flash；deepseek-v4-pro 对应 V4 Pro 0813。V4 Flash 0731 已下线，deepseek-v4-flash 仅为兼容名称，当前转至 V4.1 Flash。",
     ),
     "minimax": ProviderPreset(
         "minimax",
@@ -119,24 +108,36 @@ PROVIDER_PRESETS: Dict[str, ProviderPreset] = {
         "glm",
         "智谱 GLM",
         "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-        "glm-4.6",
+        "glm-5.3",
         chat_path="/chat/completions",
         api_prefix="/api/paas/v4",
         models=GLM_MODELS,
-        vision_models=("glm-4.6v", "glm-5.3-flash", "glm-5.3-flashx", "glm-4v-flash"),
-        models_note="GLM-4.6V、GLM-5.3-Flash、GLM-4V-Flash 能读图，其余为纯文本。",
+        vision_models=("glm-5.3-flash", "glm-5.3-flashx"),
+        models_note="GLM-5.3-Flash 和 GLM-5.3-FlashX 支持图片；GLM-5.3 仅支持文字。",
     ),
     "qwen": ProviderPreset(
         "qwen",
         "通义千问",
-        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-        "qwen-plus",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+        "qwen3.7-plus",
         chat_path="/chat/completions",
         api_prefix="/compatible-mode/v1",
         models=QWEN_MODELS,
-        vision_models=("qwen3-vl-plus", "qwen-vl-max", "qwen-vl-ocr"),
-        models_note="Qwen-VL 系列能读图，Qwen3-Max / Plus / Flash 只认文字。",
+        vision_models=(
+            "qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash",
+            "qwen3-vl-plus", "qwen-vl-max", "qwen-vl-ocr",
+        ),
+        models_note="Qwen3.7-Plus、Qwen3.8-Max / Flash 和 Qwen-VL 支持图片。",
     ),
+}
+
+# Remove the explicitly retired menu entries from persisted catalogs, including
+# the active model (otherwise model_choices would prepend it again).
+_REMOVED_MENU_MODELS = {
+    "qwen": {"qwen-plus", "qwen3-max", "qwen-flash", "qwen-long", "qwq-plus"},
+    "glm": {"glm-4.6", "glm-4.7", "glm-4.5-air", "glm-4.5-flash", "glm-4.6v", "glm-4v-flash"},
+    "minimax": {"MiniMax-M2.5-highspeed", "MiniMax-M2.5", "MiniMax-M2.1-highspeed", "MiniMax-M2.1", "MiniMax-M2"},
+    "deepseek": {"deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash-vision-exp"},
 }
 
 
@@ -427,6 +428,13 @@ def load_ai_settings(path: Optional[Path] = None) -> AiSettings:
                 endpoint = str(entry.get("endpoint") or "").strip()
                 if endpoint:
                     config.endpoint = validate_endpoint(endpoint)
+                    # Earlier settings dialogs saved the old preset as an
+                    # explicit override. Let those installations adopt the
+                    # corrected default without changing other custom URLs.
+                    if provider_id == "qwen" and normalize_chat_endpoint(provider_id, config.endpoint) == (
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+                    ):
+                        config.endpoint = ""
                 models = entry.get("models")
                 if isinstance(models, list):
                     seen: List[str] = []
@@ -443,6 +451,12 @@ def load_ai_settings(path: Optional[Path] = None) -> AiSettings:
             except AiConfigError:
                 # Drop invalid fragments instead of failing the whole file.
                 continue
+            removed = _REMOVED_MENU_MODELS.get(provider_id, set())
+            config.models = [name for name in config.models if name not in removed]
+            if config.model in removed:
+                config.model = ""
+            if provider_id == "deepseek" and config.models == ["deepseek-flash", "deepseek-v4-pro"]:
+                config.models = []
             settings.providers[provider_id] = config
     return settings
 
