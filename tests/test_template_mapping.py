@@ -307,7 +307,7 @@ class TemplateMappingTest(unittest.TestCase):
 
     def test_all_entrypoints_accept_serializable_rules(self):
         from hr_toolkit.tools.registry import get_tool_by_id
-        self.assertEqual(set(SUPPORTED_TOOLS), {"salary_split", "personnel_change_merge", "roster_update", "archive_import", "archive_export", "insurance_ledger", "data_statistics", "social_security"})
+        self.assertEqual(set(SUPPORTED_TOOLS), {"salary_split", "personnel_change_merge", "roster_update", "personnel_reconcile", "archive_import", "archive_export", "insurance_ledger", "data_statistics", "social_security"})
         for tool in SUPPORTED_TOOLS:
             with self.subTest(tool=tool):
                 function = get_tool_by_id(tool).entry_point

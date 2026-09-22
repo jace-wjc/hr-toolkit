@@ -15,6 +15,29 @@ from hr_toolkit.gui_qt.form_specs import (
 
 
 class QtFormSpecTests(unittest.TestCase):
+    def test_reconcile_starts_without_confirmations_and_preserves_explicit_options(self) -> None:
+        default_call = self.invocation("personnel_change_merge", "reconcile")
+        self.assertEqual(default_call.tool_id, "personnel_reconcile")
+        field_ids = {field["id"] for field in spec_for("personnel_change_merge", "reconcile").fields}
+        for obsolete in ("scope_confirmed", "export_filtered"):
+            self.assertNotIn(obsolete, field_ids)
+            self.assertNotIn(obsolete, default_call.kwargs)
+        call = self.invocation("personnel_change_merge", "reconcile", values={
+            "reconcile_month": "2026-07",
+            "leave_date_field": "预计离职日期", "highlight": False,
+        })
+        self.assertEqual(call.tool_id, "personnel_reconcile")
+        self.assertEqual(call.function_name, "reconcile_personnel_changes")
+        self.assertTrue(callable(call.resolve_function()))
+        self.assertEqual(call.args, ([self.file_a], self.file_b, self.output))
+        self.assertEqual(call.kwargs["month"], "2026-07")
+        self.assertEqual(call.kwargs["leave_date_field"], "预计离职日期")
+        self.assertFalse(call.kwargs["highlight"])
+        for field, value in (("reconcile_month", "2026-13"), ("company_aliases", "甲公司")):
+            with self.subTest(field=field), self.assertRaises(FormValidationError) as error:
+                self.invocation("personnel_change_merge", "reconcile", values={field: value})
+            self.assertEqual(error.exception.field, field)
+
     def test_explicit_mapping_and_cleanup_are_separate_preview_modes(self) -> None:
         explicit = self.invocation("folder_rename", input_paths=[self.folder],
             values={"rename_mode": "excel_map", "source_column": "文件名", "target_column": "目标", "file_type": "pdf"})

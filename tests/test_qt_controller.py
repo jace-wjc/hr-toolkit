@@ -61,6 +61,66 @@ class QtControllerTests(unittest.TestCase):
         self.addCleanup(lambda controller=value: controller.presentation.setLanguage("en_US"))
         return value
 
+    def test_reconcile_variant_and_result_paths_are_available(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("personnel_change_merge")
+        self.assertIn({"id": "reconcile", "label": "流程核对"}, controller.variants)
+        controller.selectVariant("reconcile")
+        self.assertEqual(controller._spec.tool_id, "personnel_reconcile")
+        self.assertEqual(controller._spec.support_id, "template_path")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            report = root / "核对结果.xlsx"
+            filled = root / "汇总表副本.xlsx"
+            self.assertEqual(controller._result_output_paths("personnel_reconcile", {
+                "output_file": str(report), "filled_output_file": str(filled),
+                "source_file": str(root.parent / "原文件.xlsx"),
+            }, root), [report, filled])
+
+    def test_reconcile_validation_has_visible_dialog_and_does_not_start(self) -> None:
+        from hr_toolkit.gui_qt.form_specs import FormValidationError
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("personnel_change_merge")
+        controller.selectVariant("reconcile")
+        prompts = []
+        controller.notificationRequested.connect(lambda *args: prompts.append(args))
+        with patch.object(controller, "_start_project_run") as start:
+            for field in ("reconcile_month", "company_aliases"):
+                message = "请检查：" + field
+                controller._set_busy(True)
+                controller._apply_invocation(None, FormValidationError("核对设置有误", message, field), False)
+                self.assertFalse(controller._busy)
+                self.assertEqual(prompts[-1], ("核对设置有误", message, "warning"))
+                self.assertEqual(controller.selectionFeedback[field]["text"], message)
+            start.assert_not_called()
+
+    def test_reconcile_click_starts_without_confirmation(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("personnel_change_merge")
+        controller.selectVariant("reconcile")
+        prompts = []
+        controller.notificationRequested.connect(lambda *args: prompts.append(args))
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            flow, summary = root / "流程.xlsx", root / "汇总表.xlsx"
+            flow.touch()
+            summary.touch()
+            controller._project_path = root
+            controller._project_store = Mock(writable=True)
+            key = controller._state_key()
+            controller._input_states[key] = [flow]
+            controller._support_states[key] = str(summary)
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread, \
+                    patch.object(controller, "_start_project_run") as start:
+                controller.runOrCancel()
+                thread.call_args.kwargs["target"]()
+                self.assertEqual(prompts, [])
+                start.assert_called_once()
+                self.assertEqual(start.call_args.args[0].tool_id, "personnel_reconcile")
+
     def test_replace_text_fields_keep_type_and_restore_existing_mode_labels(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)
@@ -1254,6 +1314,7 @@ class QtControllerTests(unittest.TestCase):
                 "多月工资合并",
                 "异动表汇总",
                 "花名册更新",
+                "异动流程核对",
                 "档案入库",
                 "档案表生成",
                 "员工资料打包",
@@ -1350,6 +1411,27 @@ class QtControllerTests(unittest.TestCase):
         self.assertEqual(len(controller.logModel), 11)
         self.assertEqual(controller.logModel.item_at(10)["text"], "trailing_message")
         controller.close()
+
+    def test_reconcile_notice_is_emphasized_log_only_and_survives_completion(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("personnel_change_merge")
+        controller.selectVariant("reconcile")
+        controller._clear_logs()
+        controller._set_busy(True)
+        stage = controller.runProgressMessage
+        message = "提示：入职流程缺少状态列，未进行状态筛选。"
+        controller._queue_run_progress(0, 0, message)
+        self.assertIsNone(controller._incoming_progress)
+        controller._drain_run_progress()
+        self.assertEqual(controller.runProgressMessage, stage)
+        controller._queue_run_progress(1, 2, "正在核对资料")
+        controller._drain_run_progress()
+        self.assertEqual(controller.runProgressMessage, "正在核对资料")
+        controller._apply_run_finished()
+        notices = [item for item in controller.logModel.items() if item["text"] == message]
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0]["level"], "warning_emphasis")
 
     def test_controller_log_timer_flush(self) -> None:
         import time

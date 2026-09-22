@@ -202,6 +202,23 @@ SPECS: tuple[ToolUiSpec, ...] = (
         support_id="analysis_template_path", support_label="人力资源花名册", support_button="选择花名册",
     ),
     ToolUiSpec(
+        "personnel_change_merge", "reconcile", "personnel_reconcile", "人员与档案",
+        "异动与系统流程核对",
+        "核对入职、离职流程与工具生成的异动汇总表，双向查漏并补齐空白，源文件不修改。",
+        "系统入职 / 离职流程", MULTI_HINT, "选择入职、离职流程文件", "开始核对",
+        "请选择同一事业部的流程导出文件和异动汇总表。重复流程及无法明确匹配的记录会单独列出，不自动选取。",
+        support_id="template_path", support_label="工具生成的异动汇总表", support_button="选择汇总表",
+        fields=(
+            {"id": "reconcile_month", "kind": "text", "label": "核对月份（可选）", "placeholder": "如 2026-07；留空按汇总表行内日期"},
+            {"id": "leave_date_field", "kind": "choice", "label": "离职流程日期列", "default": "离职日期", "options": [
+                {"label": "离职日期（实际）", "value": "离职日期"},
+                {"label": "预计离职日期（确认后使用）", "value": "预计离职日期"},
+            ]},
+            {"id": "company_aliases", "kind": "text", "label": "公司对应（可选）", "placeholder": "简称=完整公司名称；多组用分号分隔"},
+            {"id": "highlight", "kind": "check", "label": "在结果副本中高亮补入字段和字段差异", "default": True},
+        ),
+    ),
+    ToolUiSpec(
         "archive_import", "import", "archive_import", "人员与档案",
         "档案入库与档案表",
         "选择项目档案移交表、压缩包或文件夹；可选已有档案汇总表，不选则新建。",
@@ -290,6 +307,7 @@ PROJECT_TOOL_NAMES = {
     "salary_merge": "多月工资合并",
     "personnel_change_merge": "异动汇总",
     "roster_update": "花名册更新",
+    "personnel_reconcile": "异动流程核对",
     "archive_import": "档案入库",
     "archive_export": "档案表生成",
     "material_collector": "员工资料打包",
@@ -454,6 +472,19 @@ def build_invocation(
         return ToolInvocation(**base, function_module="hr_toolkit.tools.personnel_change_merge", function_name="merge_personnel_changes", args=(inputs, output_dir), kwargs={"template_path": support})
     if spec.tool_id == "roster_update":
         return ToolInvocation(**base, function_module="hr_toolkit.tools.personnel_change_merge", function_name="update_roster_from_change_summaries", args=(inputs, support, output_dir), kwargs={})
+    if spec.tool_id == "personnel_reconcile":
+        from hr_toolkit.tools.personnel_reconcile import parse_company_aliases, validate_month
+
+        for field, validate in (("reconcile_month", validate_month), ("company_aliases", parse_company_aliases)):
+            try:
+                validate(str(values.get(field) or ""))
+            except ValueError as exc:
+                raise FormValidationError("核对设置有误", str(exc), field) from exc
+        kwargs = {"month": str(values.get("reconcile_month") or ""),
+                  "company_aliases": str(values.get("company_aliases") or ""),
+                  "leave_date_field": values.get("leave_date_field") or "离职日期",
+                  "highlight": bool(values.get("highlight", True))}
+        return ToolInvocation(**base, function_module="hr_toolkit.tools.personnel_reconcile", function_name="reconcile_personnel_changes", args=(inputs, support, output_dir), kwargs=kwargs)
     if spec.tool_id == "archive_import":
         return ToolInvocation(**base, function_module="hr_toolkit.tools.archive_import", function_name="import_archive_transfers", args=(inputs, support, output_dir), kwargs={})
     if spec.tool_id == "archive_export":

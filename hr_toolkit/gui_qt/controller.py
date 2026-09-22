@@ -546,6 +546,7 @@ class AppController(QObject):
         labels = {
             ("personnel_change_merge", "merge"): "异动汇总",
             ("personnel_change_merge", "roster"): "花名册更新",
+            ("personnel_change_merge", "reconcile"): "流程核对",
             ("archive_import", "import"): "档案入库",
             ("archive_import", "export"): "档案表生成",
         }
@@ -2104,6 +2105,7 @@ class AppController(QObject):
             "salary_merge": "多月工资合并",
             "personnel_change_merge": "异动汇总",
             "roster_update": "花名册更新",
+            "personnel_reconcile": "异动流程核对",
             "archive_import": "档案入库",
             "archive_export": "档案表生成",
             "material_collector": "员工资料打包",
@@ -2831,7 +2833,7 @@ class AppController(QObject):
         if detail is None or self._busy:
             return
         tool_id = detail.summary.tool_id
-        nav_id = {"roster_update": "personnel_change_merge", "archive_export": "archive_import"}.get(tool_id, tool_id)
+        nav_id = {"roster_update": "personnel_change_merge", "personnel_reconcile": "personnel_change_merge", "archive_export": "archive_import"}.get(tool_id, tool_id)
         try:
             spec_for(nav_id, DEFAULT_VARIANTS.get(nav_id, "default"))
         except KeyError:
@@ -2843,6 +2845,8 @@ class AppController(QObject):
         variant = DEFAULT_VARIANTS.get(nav_id, "default")
         if nav_id == "personnel_change_merge" and (tool_id == "roster_update" or detail.summary.mode == "roster"):
             variant = "roster"
+        elif nav_id == "personnel_change_merge" and tool_id == "personnel_reconcile":
+            variant = "reconcile"
         elif nav_id == "archive_import" and (tool_id == "archive_export" or detail.summary.mode == "export"):
             variant = "export"
         self._variants[nav_id] = variant
@@ -3586,9 +3590,15 @@ class AppController(QObject):
             return
         if error is not None:
             title = error.title if isinstance(error, FormValidationError) else "无法准备处理"
+            self._append_log(str(error), "warning")
+            self._flush_logs()
             if isinstance(error, FormValidationError) and error.field:
                 self._selection_message(error.field, str(error), True)
-                return
+                # Only these controls actually render selectionFeedback in
+                # Main.qml. Text/choice/check fields need the dialog fallback;
+                # otherwise validation stops the run without any visible reason.
+                if error.field in {"input", "support", "week_range", "month_range", "material_types"}:
+                    return
             self.notificationRequested.emit(title, str(error), "warning")
             return
         if invocation.tool_id == "salary_merge":
@@ -4293,6 +4303,8 @@ class AppController(QObject):
             self._run_progress_timer.start()
         self._clear_logs()
         self._append_log(f"开始{invocation.tool_name}，请稍候…", "info")
+        if invocation.tool_id == "personnel_reconcile":
+            self._append_log("提示：核对以本次导入资料为准，请提供同一事业部、核对范围内的完整记录，避免将未提供的记录误判为缺失。", "info")
         self._flush_logs()
         callbacks = RunCallbacks(
             log=lambda message: self._logIncoming.emit(str(message), "info"),
@@ -4313,6 +4325,13 @@ class AppController(QObject):
         # Even a throttled producer can emit thousands of phase completions.
         # Coalesce BEFORE crossing into Qt, so its event queue stays bounded.
         if self._closed:
+            return
+        # Reconciliation's zero-total notice is a log-only diagnostic, not
+        # a task stage. Bypass progress coalescing so later stages cannot
+        # replace it or briefly expose it below the action buttons.
+        if (self._spec.tool_id == "personnel_reconcile" and current == 0 and total == 0
+                and str(message).startswith("提示：")):
+            self._logIncoming.emit(str(message), "warning_emphasis")
             return
         with self._incoming_progress_lock:
             self._incoming_progress = (int(current), int(total), str(message))
@@ -5386,6 +5405,7 @@ class AppController(QObject):
             "salary_merge": ("output_file",),
             "personnel_change_merge": ("output_file", "output_files", "roster_output_file"),
             "roster_update": ("output_file",),
+            "personnel_reconcile": ("output_file", "filled_output_file"),
             "archive_import": ("output_file",),
             "archive_export": ("output_files",),
             "material_collector": ("report_path", "review_path", "zip_path"),

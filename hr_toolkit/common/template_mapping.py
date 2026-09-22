@@ -17,7 +17,7 @@ from typing import Any
 from .header_aliases import normalize_alias, validate_alias_rules, protected_aliases, has_custom_aliases
 
 ERROR_PREFIX = "HR_TEMPLATE_SELECTION:"
-SUPPORTED_TOOLS = ("salary_split", "personnel_change_merge", "roster_update", "archive_import", "archive_export",
+SUPPORTED_TOOLS = ("salary_split", "personnel_change_merge", "roster_update", "personnel_reconcile", "archive_import", "archive_export",
                    "insurance_ledger", "data_statistics", "social_security")
 _current = ContextVar("hr_input_template_mapping", default=None)
 _sheet_notices = ContextVar("hr_input_sheet_notices", default=None)
@@ -77,6 +77,10 @@ def _role(label, required, fields, sheets=()):
 
 def catalog(tool):
     """各处理项分别声明实际读取的字段；可选字段未配置时不额外变成必填。"""
+    if tool == "personnel_reconcile":
+        from hr_toolkit.tools.personnel_reconcile import ROLES
+        return {key: _role(label, ("姓名", "身份证号码", "公司"), fields)
+                for key, (label, _kind, fields) in ROLES.items()}
     if tool == "roster_update":
         return {**catalog("personnel_change_merge"), "roster": _role("人力资源花名册", (), {}, ("花名册",))}
     if tool == "archive_export":

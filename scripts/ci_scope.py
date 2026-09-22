@@ -20,7 +20,7 @@ STORE = "project_store project_store_lite history_store project_run run_coordina
 PROCESS = "background_process run_coordinator project_run performance_regressions " + GUI
 BUSINESS = (
     "archive_import data_statistics salary_merge salary_split social_security "
-    "insurance_ledger personnel_change_merge folder_rename material_collector "
+    "insurance_ledger personnel_change_merge personnel_reconcile folder_rename material_collector "
     "output_regression tool_cancellation"
 )
 MATERIAL = (
@@ -34,7 +34,7 @@ WIN7 = set((
     "salary_split social_security tool_registry paths pdf_backend_compat "
     "release_metadata background_process qt_controller qt_entrypoint qt_form_specs "
     "run_coordinator material_preferences material_collector_gui project_creation_gui "
-    "ci_scope presentation"
+    "ci_scope presentation personnel_reconcile"
 ).split())
 PIN_TEST = (
     "tests.test_windows_packaging.WindowsPackagingTests."
@@ -47,8 +47,9 @@ ROUTES = {
     "hr_toolkit/gui_qt/drop_paths.py": "input_selection " + GUI,
     "hr_toolkit/region_codes.py": "archive_import project_store " + GUI,
     "hr_toolkit/gui_qt/input_selection.py": "input_selection " + GUI,
-    "hr_toolkit/gui_qt/controller.py": "input_selection " + GUI,
-    "hr_toolkit/gui_qt/form_specs.py": "input_selection " + GUI,
+    "hr_toolkit/gui_qt/controller.py": "input_selection personnel_reconcile " + GUI,
+    "hr_toolkit/gui_qt/form_specs.py": "input_selection personnel_reconcile " + GUI,
+    "hr_toolkit/tools/personnel_reconcile.py": "personnel_reconcile template_mapping tool_registry project_run run_coordinator " + GUI,
     "hr_toolkit/gui_qt/qml/components/FileDropTarget.qml": "input_selection " + GUI,
     "hr_toolkit/gui_qt/qml/components/PresetMenuButton.qml": "material_preferences " + GUI,
     "hr_toolkit/common/template_mapping.py": "template_mapping header_aliases " + BUSINESS + " " + GUI,

@@ -16,6 +16,13 @@ SPEC.loader.exec_module(ci_scope)
 
 
 class CIScopeTests(unittest.TestCase):
+    def test_reconcile_routes_include_business_ui_mapping_and_legacy_runtime(self):
+        scope = ci_scope.select_scope(["hr_toolkit/tools/personnel_reconcile.py"])
+        self.assertTrue({"tests.test_personnel_reconcile", "tests.test_template_mapping",
+                         "tests.test_qt_form_specs", "tests.test_run_coordinator"}.issubset(scope["targets"]))
+        self.assertIn("tests.test_personnel_reconcile", scope["win7_targets"])
+        self.assertFalse(scope["full"])
+
     def test_installer_progress_routes_cover_the_updater_protocol(self):
         scope = ci_scope.select_scope(["packaging/windows/HRToolkit.iss"])
         self.assertTrue({"tests.test_app_update", "tests.test_windows_packaging"}.issubset(scope["targets"]))

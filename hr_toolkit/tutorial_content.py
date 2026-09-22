@@ -19,6 +19,7 @@ def tutorial_entries() -> list[TutorialEntry]:
         if tool_id == "personnel_change_merge":
             entries.append((tool_id, "merge", "异动表汇总"))
             entries.append((tool_id, "roster", "花名册更新"))
+            entries.append((tool_id, "reconcile", "异动流程核对"))
         elif tool_id == "archive_import":
             entries.append((tool_id, "import", "档案入库"))
             entries.append((tool_id, "export", "档案表生成"))
@@ -94,6 +95,18 @@ def tutorial_lines(tool_id: str, mode: str | None = None) -> list[TutorialLine]:
             ("注意：工资表文件名或表内日期要能识别月份；重复人员或重复月份会在执行结果里提醒。", "warning"),
         ]
     if tool_id == "personnel_change_merge":
+        if mode == "reconcile":
+            return [
+                ("适用：核对工具生成的异动汇总表与同一事业部的系统入职、离职流程。", "strong"),
+                ("步骤：上方选择入职、离职流程文件，下方选择一份异动汇总表，点击“开始核对”。", None),
+                ("月份留空时，增员按汇总表入职日期、减员按离职日期分别确定月份，不按文件名推断。某类无日期记录时请填写核对月份。", None),
+                ("有流程状态列时自动排除未发起、退回；无状态列时按导入记录继续核对，并在运行日志提示未进行状态筛选；办结时间不作为状态依据。", None),
+                ("离职默认读取实际离职日期；若只有预计离职日期，先确认业务口径再切换日期列，工具不会自动替代。", "warning"),
+                ("公司按全称或唯一的简称关键词对应；不唯一时填写“简称=全称”，多组用分号分隔。", None),
+                ("重复入职流程、姓名或工号冲突、日期缺失均列出核实；身份证脱敏或数字存储时不自动补齐。", None),
+                ("结果：单独生成核对报告和汇总表副本。双向缺失、字段差异写入预警明细；仅明确匹配的空白字段从流程补入，不增加或删除人员、不覆盖已有值和公式、不改源文件。", None),
+                ("学历、学校、专业读取最高学历信息，岗位读取岗位，家庭住址读取户籍地址；补入记录保留字段和来源，关闭高亮也能查看。", None),
+            ]
         if mode == "roster":
             return [
                 ("适用：已有月度异动汇总表时，单独更新人力资源花名册。", "strong"),

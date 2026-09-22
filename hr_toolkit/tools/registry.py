@@ -53,6 +53,7 @@ def ensure_default_tools_registered() -> None:
     from .data_statistics import generate_data_statistics_reports
     from .salary_split import split_salary_by_company
     from .salary_merge import merge_monthly_salary
+    from .personnel_reconcile import reconcile_personnel_changes
     from .personnel_change_merge import (
         merge_personnel_changes,
         update_roster_from_change_summaries,
@@ -128,6 +129,18 @@ def ensure_default_tools_registered() -> None:
             help_text="需求6：汇总多个项目异动表",
             entry_point=merge_personnel_changes,
             multi_input=True,
+        )
+    )
+    register_tool(
+        ToolSpec(
+            tool_id="personnel_reconcile",
+            name="异动流程核对",
+            group="人员与档案",
+            cli_command="change-reconcile",
+            help_text="核对系统入离职流程并补齐异动汇总表空白",
+            entry_point=reconcile_personnel_changes,
+            multi_input=True,
+            supports_dry_run=False,
         )
     )
     register_tool(

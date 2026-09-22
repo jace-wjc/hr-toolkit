@@ -1539,23 +1539,35 @@ ApplicationWindow {
                                     onCountChanged: positionViewAtEnd()
                                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                     delegate: Item {
+                                        id: logEntry
                                         objectName: "logRow"
+                                        readonly property bool emphasized: level === "warning_emphasis"
+                                        readonly property int inset: emphasized ? 6 : 0
                                         width: logList.width
-                                        height: Math.max(25, logText.implicitHeight + 4)
+                                        height: Math.max(25, logText.implicitHeight + (emphasized ? 12 : 4))
+                                        Rectangle {
+                                            objectName: "logWarningBackground"
+                                            anchors.fill: parent
+                                            visible: logEntry.emphasized
+                                            radius: 4
+                                            color: Ui.color("warning7")
+                                            opacity: 0.14
+                                        }
                                         // Width flows from the list to the text; text height
                                         // flows back only to this row. A RowLayout here would
                                         // re-enter height calculation while assigning widths.
                                         Text {
                                             id: logBullet
+                                            x: logEntry.inset
                                             width: Math.ceil(implicitWidth)
                                             y: Math.round((parent.height - height) / 2)
                                             text: Ui.text(level === "muted" ? "" : "●")
-                                            color: level === "error" ? Ui.color("error1") : level === "warning" ? Ui.color("warning7") : level === "success" ? Ui.color("accent2") : root.primary
+                                            color: level === "error" ? Ui.color("error1") : level === "warning" || logEntry.emphasized ? Ui.color("warning7") : level === "success" ? Ui.color("accent2") : root.primary
                                             font.pixelSize: 9
                                         }
                                         Text {
                                             id: logTime
-                                            x: logBullet.width + 7
+                                            x: logBullet.x + logBullet.width + 7
                                             width: Math.ceil(implicitWidth)
                                             y: Math.round((parent.height - height) / 2)
                                             text: Ui.text(time); color: Ui.color("muted7"); font.pixelSize: 10
@@ -1566,10 +1578,11 @@ ApplicationWindow {
                                             objectName: "logText"
                                             x: logTime.x + logTime.width + 7
                                             y: Math.round((parent.height - height) / 2)
-                                            width: Math.max(0, parent.width - x)
+                                            width: Math.max(0, parent.width - x - logEntry.inset)
                                             text: Ui.text(model.text)
-                                            color: level === "muted" ? root.textMuted : root.textMain
+                                            color: logEntry.emphasized ? Ui.color("warning1") : level === "muted" ? root.textMuted : root.textMain
                                             font.pixelSize: 12
+                                            font.weight: logEntry.emphasized ? Font.DemiBold : Font.Normal
                                             wrapMode: TextEdit.Wrap
                                             textFormat: TextEdit.PlainText
                                             readOnly: true

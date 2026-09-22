@@ -298,7 +298,7 @@ def main():
     controller.selectTool("data_statistics")
     log_list = root.findChild(QObject, "logList")
     log_entries = [
-        {"time": "12:00:00" if i % 2 else "12:00", "level": ("muted", "info", "warning", "error")[i % 4],
+        {"time": "12:00:00" if i % 2 else "12:00", "level": ("muted", "info", "warning", "error", "warning_emphasis")[i % 5],
          "text": ("短日志", "需要随宽度换行的长日志。" * 20,
                   "explicit\nline break", "long_unbroken_path_" * 30)[i % 4]}
         for i in range(120)
@@ -329,9 +329,13 @@ def main():
         previous_bottom = None
         for row in rows:
             text = next(item for item in row.childItems() if item.objectName() == "logText")
+            emphasized = row.property("emphasized")
+            inset = 6 if emphasized else 0
             assert abs(row.width() - log_list.width()) < 1
-            assert text.width() > 0 and abs(text.x() + text.width() - row.width()) < 1
-            assert abs(row.height() - max(25, text.property("implicitHeight") + 4)) < 1
+            assert text.width() > 0 and abs(text.x() + text.width() + inset - row.width()) < 1
+            assert abs(row.height() - max(25, text.property("implicitHeight") + (12 if emphasized else 4))) < 1
+            background = next(item for item in row.childItems() if item.objectName() == "logWarningBackground")
+            assert background.property("visible") == emphasized
             assert text.y() >= 0 and text.y() + text.height() <= row.height() + 1
             if previous_bottom is not None:
                 assert row.y() >= previous_bottom - 1, ("Wrapped log rows overlap", root.width(),
