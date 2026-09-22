@@ -7,8 +7,11 @@ TextField {
     implicitHeight: 36
     leftPadding: 11
     rightPadding: 11
-    topPadding: 7
-    bottomPadding: 7
+    // Compact inline editors must still fit a full line, including fallback
+    // fonts used for Chinese. Keep the normal padding when space permits.
+    topPadding: Math.max(0, Math.min(7, Math.floor((height - Math.max(contentHeight, lineMetrics.height) - 2) / 2)))
+    bottomPadding: topPadding
+    verticalAlignment: TextInput.AlignVCenter
     selectByMouse: true
     hoverEnabled: true
     color: enabled ? Ui.color("text") : Ui.color("disabledText")
@@ -16,6 +19,8 @@ TextField {
     selectionColor: Ui.color("accent")
     selectedTextColor: Ui.color("surface")
     font.pixelSize: 13
+
+    FontMetrics { id: lineMetrics; font: control.font }
 
     background: Rectangle {
         radius: 6
