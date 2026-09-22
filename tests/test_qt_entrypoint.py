@@ -373,7 +373,7 @@ class QtEntrypointTests(unittest.TestCase):
 
     def test_attendance_options_share_a_horizontally_scrollable_row(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml" / "Main.qml").read_text(encoding="utf-8")
-        self.assertIn("Math.max(520, attendanceOptions.implicitWidth)", source)
+        self.assertIn("Math.max(520, attendanceOptions.minimumContentWidth)", source)
         self.assertIn("contentWidth: Math.max(width, minimumFormWidth)", source)
         self.assertIn("visible: modelData.visible && !groupedAttendanceField", source)
         row = source.split("id: attendanceOptions", 1)[1].split("\n                                }\n", 1)[0]
@@ -384,7 +384,9 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertLess(row.index('objectName: "attendanceUnit"'), spacer)
         self.assertLess(spacer, row.index('objectName: "attendanceBusinessTrip"'))
         self.assertIn("Layout.rightMargin: 40", row.split('objectName: "attendanceWorkdayTrip"', 1)[1])
-        self.assertEqual(row.count("Layout.minimumWidth: implicitWidth"), 2)
+        for metrics in ("businessTripMetrics", "workdayTripMetrics"):
+            self.assertIn("Layout.minimumWidth: Math.ceil(" + metrics + ".width)", row)
+        self.assertNotIn("attendanceOptions.implicitWidth", source)
         for field in ("remark_unit", "include_business_trip", "include_workday_business_trip"):
             self.assertIn('controller.setFieldValue("' + field + '"', row)
 

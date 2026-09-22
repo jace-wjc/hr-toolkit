@@ -1113,7 +1113,7 @@ ApplicationWindow {
                                 anchors.bottomMargin: 22 + (needsHorizontalScroll ? 14 : 0)
                                 // Keep dates and the complete attendance options
                                 // row reachable without squeezing their controls.
-                                readonly property real minimumFormWidth: controller.currentTool === "data_statistics" ? Math.max(520, attendanceOptions.implicitWidth) : 0
+                                readonly property real minimumFormWidth: controller.currentTool === "data_statistics" ? Math.max(520, attendanceOptions.minimumContentWidth) : 0
                                 readonly property bool needsHorizontalScroll: width < minimumFormWidth
                                 contentWidth: Math.max(width, minimumFormWidth)
                                 contentHeight: formColumn.implicitHeight
@@ -1392,7 +1392,14 @@ ApplicationWindow {
                                     readonly property var unitField: root.fieldById("remark_unit")
                                     readonly property var businessTripField: root.fieldById("include_business_trip")
                                     readonly property var workdayTripField: root.fieldById("include_workday_business_trip")
+                                    // Measure unwrapped labels, not the RowLayout's
+                                    // width-dependent size hint, to avoid feeding
+                                    // Flickable.contentWidth back into itself.
+                                    readonly property real minimumContentWidth: Math.max(145, unitLabel.implicitWidth)
+                                        + 220 + businessTrip.Layout.minimumWidth + workdayTrip.Layout.minimumWidth
+                                        + spacing * 4 + 40
                                     Text {
+                                        id: unitLabel
                                         Layout.minimumWidth: Math.max(145, implicitWidth)
                                         text: Ui.text(attendanceOptions.unitField.label || "")
                                         color: root.textMain; font.pixelSize: 13
@@ -1408,20 +1415,26 @@ ApplicationWindow {
                                     }
                                     Item { Layout.fillWidth: true }
                                     AppCheckBox {
+                                        id: businessTrip
                                         objectName: "attendanceBusinessTrip"
-                                        Layout.minimumWidth: implicitWidth
+                                        Layout.minimumWidth: Math.ceil(businessTripMetrics.width) + indicator.implicitWidth + spacing
+                                        Layout.preferredWidth: Layout.minimumWidth
                                         text: attendanceOptions.businessTripField.label || ""
                                         checked: !!attendanceOptions.businessTripField.value
                                         onToggled: controller.setFieldValue("include_business_trip", checked)
                                     }
                                     AppCheckBox {
+                                        id: workdayTrip
                                         objectName: "attendanceWorkdayTrip"
-                                        Layout.minimumWidth: implicitWidth
+                                        Layout.minimumWidth: Math.ceil(workdayTripMetrics.width) + indicator.implicitWidth + spacing
+                                        Layout.preferredWidth: Layout.minimumWidth
                                         Layout.rightMargin: 40
                                         text: attendanceOptions.workdayTripField.label || ""
                                         checked: !!attendanceOptions.workdayTripField.value
                                         onToggled: controller.setFieldValue("include_workday_business_trip", checked)
                                     }
+                                    TextMetrics { id: businessTripMetrics; font: businessTrip.contentItem.font; text: Ui.text(businessTrip.text) }
+                                    TextMetrics { id: workdayTripMetrics; font: workdayTrip.contentItem.font; text: Ui.text(workdayTrip.text) }
                                 }
 
                             }
