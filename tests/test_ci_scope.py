@@ -17,8 +17,12 @@ SPEC.loader.exec_module(ci_scope)
 
 class CIScopeTests(unittest.TestCase):
     def test_ai_changes_cover_backend_gui_and_win7(self):
-        for path in ("hr_toolkit/ai/client.py", "hr_toolkit/ai/status.py",
-                     "hr_toolkit/gui_qt/image_input.py"):
+        paths = [path.relative_to(ci_scope.ROOT).as_posix()
+                 for path in sorted((ci_scope.ROOT / "hr_toolkit/ai").glob("*.py"))]
+        paths.extend(("hr_toolkit/gui_qt/image_input.py",
+                      "hr_toolkit/gui_qt/qml/components/AiMarkdownTable.qml",
+                      "hr_toolkit/gui_qt/qml/components/AiResponseBody.qml"))
+        for path in paths:
             with self.subTest(path=path):
                 scope = ci_scope.select_scope([path])
                 self.assertTrue({"tests.test_ai_assistant", "tests.test_qt_controller",
