@@ -29,6 +29,7 @@ Item {
     property string editingBackup: ""
     // 有文件正拖在面板上方（用来决定要不要显示「松手即可附加」）
     property bool dropActive: false
+    property string conversationId: ""
 
     readonly property color textMain: Ui.color("text")
     readonly property color textMuted: Ui.color("muted")
@@ -37,43 +38,8 @@ Item {
     readonly property color cardBorder: Ui.color("border")
     readonly property color markColor: Ui.color("markRay")
 
-    // 生成过程中的状态文案，轮流显示，避免「只有一个转圈」的死等感。
-    // 内容由 controller 按这一轮实际发出的附件生成（发图就说看图、发表格就说读表格），
-    // 不在这里写死——写死就会出现「粘了张截图却提示正在读取表格」这种事。
-    readonly property var statusPhrases: controller.aiStatusPhrases.length > 0
-        ? controller.aiStatusPhrases
-        : ["正在思考…", "正在整理结论…"]
-    property int statusIndex: 0
-
-    // 文案是按「先感知输入、再思考、最后成文」排的，所以第一轮顺着念一遍；
-    // 念完就不要回头再说「正在看这张图」——那时候图早就看完了。
-    // 之后只在末尾那两条之间来回，读起来像还在推进，而不是原地打转。
-    function nextStatusIndex() {
-        var count = panel.statusPhrases.length
-        if (count <= 1)
-            return 0
-        var next = panel.statusIndex + 1
-        if (next < count)
-            return next
-        var tail = Math.max(1, count - 2)
-        return tail + ((next - tail) % (count - tail))
-    }
-
-    Timer {
-        id: statusTimer
-        interval: 1600
-        repeat: true
-        running: controller.aiBusy
-        onTriggered: panel.statusIndex = panel.nextStatusIndex()
-        onRunningChanged: if (running) panel.statusIndex = 0
-    }
-
-    // 换了一组提示（新的一轮提问）就回到第一条。不要在这里 restart()：
-    // 那会打断 running 上的声明式绑定，计时器会一直跑下去。
-    Connections {
-        target: controller
-        function onAiStatusChanged() { panel.statusIndex = 0 }
-    }
+    readonly property var statusPhrases: controller.aiStatusPhrases
+    readonly property int statusIndex: 0
 
     // 草稿防抖落盘：每敲一个字都写文件没必要，停手 600ms 再存。
     Timer {
@@ -83,10 +49,21 @@ Item {
         onTriggered: controller.aiSaveDraft(inputArea.text)
     }
 
+    function saveDraftNow() {
+        draftTimer.stop()
+        if (panel.editingRow < 0) controller.aiSaveDraft(inputArea.text)
+    }
+
     function submitInput() {
         if (!controller.aiReady)
             return
+        if (controller.aiBusy) return
+        draftTimer.stop()
         var text = inputArea.text.trim()
+        if (text.length > 10000) {
+            controller.aiSendMessage(text)
+            return
+        }
         if (!text && aiAttachmentRepeater.count === 0)
             return
         if (panel.editingRow >= 0) {
@@ -127,13 +104,28 @@ Item {
 
     Component.onCompleted: {
         controller.aiActivate()
+        panel.conversationId = controller.aiConversationId
         inputArea.text = controller.aiDraft
+    }
+
+    Component.onDestruction: {
+        draftTimer.stop()
+        if (controller && panel.editingRow < 0 && panel.conversationId === controller.aiConversationId)
+            controller.aiSaveDraft(inputArea.text)
     }
 
     // 切换对话时换回那条对话自己的草稿（发送后 aiDraft 会被清空）。
     Connections {
         target: controller
         function onAiChanged() {
+            if (panel.conversationId !== controller.aiConversationId) {
+                draftTimer.stop()
+                panel.conversationId = controller.aiConversationId
+                panel.editingRow = -1
+                panel.editingBackup = ""
+                inputArea.text = controller.aiDraft
+                return
+            }
             if (!inputArea.activeFocus || inputArea.text.length === 0)
                 inputArea.text = controller.aiDraft
         }
@@ -164,10 +156,8 @@ Item {
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: Ui.text(controller.aiReady
-                                      ? controller.aiActiveProviderLabel
-                                      : controller.aiSetupMessage)
-                        color: controller.aiReady ? panel.textFaint : Ui.color("warning3")
+                        text: Ui.text(controller.aiActiveProviderLabel)
+                        color: panel.textFaint
                         font.pixelSize: 10
                         elide: Text.ElideRight
                     }
@@ -183,7 +173,7 @@ Item {
                     iconId: "new_chat"
                     tip: "新对话"
                     enabled: !controller.aiBusy
-                    onClicked: controller.aiNewConversation()
+                    onClicked: { panel.saveDraftNow(); controller.aiNewConversation() }
                 }
                 IconAction {
                     iconId: "gear"
@@ -221,10 +211,10 @@ Item {
         // ---------- 未配置提示 ----------
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: controller.aiReady ? 0 : notReadyColumn.implicitHeight + 20
+            Layout.preferredHeight: controller.aiReady ? 0 : notReadyColumn.height + 20
             visible: !controller.aiReady
             color: Ui.color("surface")
-            ColumnLayout {
+            Column {
                 id: notReadyColumn
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -232,7 +222,7 @@ Item {
                 anchors.margins: 10
                 spacing: 6
                 Text {
-                    Layout.fillWidth: true
+                    width: parent.width
                     text: Ui.text(controller.aiSetupMessage || "尚未配置 AI 服务。")
                     color: Ui.color("warning3")
                     font.pixelSize: 12
@@ -255,6 +245,16 @@ Item {
 
         // ---------- 消息区 ----------
         // 外面套一层 Item 是为了在视图上叠一个「回到底部」按钮：
+        Text {
+            Layout.fillWidth: true
+            Layout.leftMargin: 14
+            Layout.rightMargin: 14
+            text: Ui.text(controller.aiPreparing ? "正在准备附件，可点击停止取消。" : "发送后，问题、历史上下文和所附文件内容会传给所选 AI 服务。项目文件不会自动发送。")
+            color: panel.textMuted
+            font.pixelSize: 11
+            wrapMode: Text.Wrap
+        }
+
         // ListView 的直接子项会变成内容项跟着滚，浮层必须放在它外面。
         Item {
             Layout.fillWidth: true
@@ -265,21 +265,45 @@ Item {
                 objectName: "aiChatView"
                 anchors.fill: parent
                 clip: true
+                boundsBehavior: Flickable.StopAtBounds
                 model: controller.aiChatModel
                 spacing: 12
                 topMargin: 14
                 bottomMargin: 14
                 // 流式输出时跟着最新内容走；用户手动上滚就暂停跟随，回到底部再恢复。
                 property bool followTail: true
+                // Virtualized rows must retain their measured size when they
+                // leave the viewport. Recreating a long response at 60px can
+                // make ListView discard/recreate it repeatedly as it expands.
+                property var measuredHeights: ({})
+                property int measurementEpoch: 0
+                Connections {
+                    target: controller.aiChatModel
+                    function onModelAboutToBeReset() {
+                        aiChatView.measurementEpoch += 1
+                        aiChatView.measuredHeights = ({})
+                    }
+                }
+                // A restored response may change height while Qt is creating
+                // its table/text delegates. Scrolling inside that layout pass
+                // can recreate delegates indefinitely (notably with CJK fonts).
+                // Coalesce requests onto the next event-loop turn instead.
+                function scheduleTail() { if (followTail) tailTimer.restart() }
+                Timer {
+                    id: tailTimer
+                    interval: 16
+                    repeat: false
+                    onTriggered: if (aiChatView.followTail) aiChatView.positionViewAtEnd()
+                }
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                 onCountChanged: {
                     followTail = true
-                    positionViewAtEnd()
+                    scheduleTail()
                 }
-                onContentHeightChanged: if (followTail) positionViewAtEnd()
-                onMovementStarted: followTail = false
+                onContentHeightChanged: scheduleTail()
+                onMovementStarted: { followTail = false; tailTimer.stop() }
                 onMovementEnded: followTail = atYEnd
-                Component.onCompleted: positionViewAtEnd()
+                Component.onCompleted: scheduleTail()
 
                 // 空状态：一句说明 + 几个建议问题。
                 // 注意这些子项都是布局子项，只能写 Layout.* 不能写 anchors，
@@ -308,7 +332,7 @@ Item {
                             text: modelData
                             onClicked: {
                                 inputArea.text = ""
-                                controller.aiSendMessage(modelData)
+                                controller.aiSendMessage(Ui.text(modelData))
                             }
                             contentItem: Text {
                                 text: Ui.text(suggestionButton.text)
@@ -351,7 +375,33 @@ Item {
                     readonly property real maxBubbleWidth: Math.max(120, width - sideGap * 2 - 20)
 
                     width: aiChatView.width
-                    height: implicitHeight
+                    // Rich text starts with a provisional width while nested
+                    // components are created. Publish the final row height only
+                    // after that layout pass, so ListView cannot repeatedly
+                    // recreate a tall offscreen row as it shrinks into place.
+                    property real settledHeight: aiChatView.measuredHeights[index] || 60
+                    property int measurementEpoch: -1
+                    height: settledHeight
+                    clip: true
+                    function rememberHeight() {
+                        if (measurementEpoch === aiChatView.measurementEpoch && index >= 0 && implicitHeight > 0)
+                            aiChatView.measuredHeights[index] = implicitHeight
+                    }
+                    onImplicitHeightChanged: messageSizeTimer.restart()
+                    Component.onCompleted: {
+                        measurementEpoch = aiChatView.measurementEpoch
+                        messageSizeTimer.restart()
+                    }
+                    Component.onDestruction: rememberHeight()
+                    Timer {
+                        id: messageSizeTimer
+                        interval: 16
+                        repeat: false
+                        onTriggered: {
+                            messageDelegate.rememberHeight()
+                            messageDelegate.settledHeight = messageDelegate.implicitHeight
+                        }
+                    }
                     implicitHeight: isUser
                     ? userBubble.height + (showUserActions ? 20 : 0)
                     : assistantBlock.height
@@ -419,7 +469,7 @@ Item {
                                             anchors.centerIn: parent
                                             width: parent.width - 10
                                             visible: !modelData.preview
-                                            text: Ui.text(modelData.name)
+                                            text: modelData.name
                                             color: panel.textFaint
                                             font.pixelSize: 10
                                             elide: Text.ElideMiddle
@@ -459,7 +509,7 @@ Item {
                                         Text {
                                             anchors.verticalCenter: parent.verticalCenter
                                             width: parent.width - 17
-                                            text: Ui.text(modelData.name)
+                                            text: modelData.name
                                             color: panel.textMuted
                                             font.pixelSize: 11
                                             elide: Text.ElideMiddle
@@ -527,7 +577,7 @@ Item {
                         readonly property bool waiting: model.streaming && messageDelegate.body.length === 0
                         readonly property real bodyHeight: waiting
                             ? 18
-                            : Math.max(assistantMark.height, assistantBody.implicitHeight)
+                            : Math.max(assistantMark.height, assistantViewport.height)
                         // 操作行的位置固定留出来，避免鼠标悬浮时消息高度跳变（列表会跟着抖）。
                         readonly property bool showActions: !model.streaming && messageDelegate.body.length > 0
                         height: bodyHeight + (showActions ? 24 : 0)
@@ -555,23 +605,15 @@ Item {
                             font.pixelSize: 12
                         }
 
-                        TextEdit {
-                            id: assistantBody
-                            // 宽度只由父项（受视图宽度决定）推导，不读取自身高度，
-                            // 否则首次布局 width=0 时富文本会被撑高整行。
+                        AiResponseBody {
+                            id: assistantViewport
+                            objectName: "aiResponseViewport"
                             x: assistantMark.width + 10
                             width: Math.max(40, assistantBlock.width - assistantMark.width - 10)
-                            anchors.top: parent.top
                             visible: !assistantBlock.waiting
-                            text: (model.html || "") + (model.streaming && messageDelegate.body.length > 0
-                                  ? "<span style=\"color:" + panel.markColor + "\">▍</span>" : "")
-                            color: panel.textMain
-                            font.pixelSize: 13
-                            wrapMode: TextEdit.Wrap
-                            textFormat: TextEdit.RichText
-                            readOnly: true
-                            selectByMouse: true
-                            selectByKeyboard: true
+                            blocks: model.blocks || []
+                            fallbackHtml: model.html || ""
+                            streaming: model.streaming
                         }
 
                         Row {
@@ -690,7 +732,7 @@ Item {
                         anchors.centerIn: parent
                         width: parent.width - 12
                         visible: pendingChip.isImage && chipThumb.status !== Image.Ready
-                        text: Ui.text(model.name)
+                        text: model.name
                         color: panel.textFaint
                         font.pixelSize: 10
                         elide: Text.ElideMiddle
@@ -704,7 +746,7 @@ Item {
                         visible: !pendingChip.isImage
                         spacing: 6
                         Text {
-                            text: Ui.text(model.name) + "（" + Ui.text(model.summary) + "）"
+                            text: model.name + "（" + Ui.text(model.summary) + "）"
                             color: panel.accent
                             font.pixelSize: 11
                             Layout.maximumWidth: 210
@@ -845,7 +887,7 @@ Item {
                         topPadding: 2
                         bottomPadding: 2
                         background: Rectangle { color: "transparent" }
-                        onTextChanged: if (activeFocus) draftTimer.restart()
+                        onTextChanged: if (activeFocus && panel.editingRow < 0) draftTimer.restart()
 
                         // 剪贴板里是图就先粘图；不是图就放行，让 TextArea 粘文字。
                         Keys.onPressed: function(event) {
@@ -941,7 +983,7 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: controller.aiNewConversation()
+                            onClicked: { panel.saveDraftNow(); controller.aiNewConversation() }
                         }
                         AppToolTip { text: Ui.text("开始新对话（当前对话会存入历史）"); visible: newChatMouse.containsMouse }
                     }
@@ -1039,7 +1081,7 @@ Item {
             Layout.leftMargin: 12
             Layout.rightMargin: 12
             Layout.bottomMargin: 8
-            text: Ui.text("Enter 发送 · Shift+Enter 换行 · Ctrl+V 粘图或拖入文件 · Ctrl+K 开关 Sage")
+            text: Ui.text("Enter 发送 · Shift+Enter 换行 · Ctrl+K 开关助手")
             color: panel.textFaint
             font.pixelSize: 9
             horizontalAlignment: Text.AlignHCenter
@@ -1221,6 +1263,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     label: "新对话"
                     onClicked: {
+                        panel.saveDraftNow()
                         controller.aiNewConversation()
                         historyPopup.close()
                     }
@@ -1277,6 +1320,7 @@ Item {
                         // 改名时让点击落在输入框上，别顺手把对话切走。
                         enabled: !historyRow.renaming
                         onClicked: {
+                            panel.saveDraftNow()
                             controller.aiOpenConversation(model.id)
                             historyPopup.close()
                         }
@@ -1315,7 +1359,7 @@ Item {
                         Text {
                             width: parent.width
                             visible: !historyRow.renaming
-                            text: Ui.text(model.title)
+                            text: model.title === "新对话" ? Ui.text("新对话") : model.title
                             color: model.active ? panel.accent : panel.textMain
                             font.pixelSize: 12
                             font.weight: model.active ? Font.DemiBold : Font.Normal

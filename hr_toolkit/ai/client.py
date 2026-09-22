@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import ssl
+import socket
+import threading
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Iterator, List, Optional, Sequence
@@ -20,12 +22,59 @@ from .config import (
     validate_model,
 )
 
-DEFAULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_TIMEOUT_SECONDS = 30.0
 CONNECTIVITY_TIMEOUT_SECONDS = 30.0
+MAX_REPLY_CHARS = 100000
+
+
+class StreamControl:
+    """One request's cancellation state; socket shutdown unblocks urllib reads.
+
+    Connection establishment is bounded by the transport timeout. The response
+    remains owned and closed by the worker, never by the GUI thread.
+    """
+
+    def __init__(self):
+        self.stopped = threading.Event()
+        self._lock = threading.Lock()
+        self._socket = None
+
+    def bind(self, response):
+        with self._lock:
+            self._socket = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+        if self.stopped.is_set():
+            self.cancel()
+
+    def cancel(self):
+        self.stopped.set()
+        with self._lock:
+            sock = self._socket
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def release(self):
+        with self._lock:
+            self._socket = None
 
 
 class ChatError(RuntimeError):
     """User-facing failure with an actionable Chinese message."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward the API key or HR attachments to a redirected host.
+        raise ChatError("AI 服务地址发生重定向，请在设置中填写最终接口地址。")
+
+
+def _urlopen(request, *, timeout, context):
+    opener = urllib.request.build_opener(
+        _NoRedirect(), urllib.request.HTTPSHandler(context=context)
+    )
+    return opener.open(request, timeout=timeout)
 
 
 def _ssl_context():
@@ -85,7 +134,7 @@ def _http_error_message(exc: urllib.error.HTTPError) -> str:
     status = exc.code
     detail = ""
     try:
-        body = exc.read().decode("utf-8", "replace")
+        body = exc.read(8192).decode("utf-8", "replace")
         try:
             data = json.loads(body)
             error = data.get("error")
@@ -109,7 +158,7 @@ def _http_error_message(exc: urllib.error.HTTPError) -> str:
     }.get(status, "请稍后重试或联系管理员。")
     message = f"AI 服务返回错误（HTTP {status}）：{hint}"
     if detail:
-        message += f"（{detail}）"
+        message += f"\n服务返回详情：{detail[:500]}"
     return message
 
 
@@ -133,7 +182,7 @@ def _open_response(
     try:
         return opener(request, timeout=timeout, context=_ssl_context())
     except urllib.error.HTTPError as exc:
-        raise ChatError(_http_error_message(exc)) from exc
+        raise ChatError(_http_error_message(exc).replace(api_key, "***")) from exc
     except (urllib.error.URLError, ssl.SSLError, OSError, ValueError) as exc:
         reason = getattr(exc, "reason", None) or exc
         raise ChatError(f"无法连接 AI 服务，请检查网络：{reason}") from exc
@@ -141,17 +190,37 @@ def _open_response(
 
 def iter_sse_data_lines(response) -> Iterator[str]:
     """Yield decoded ``data:`` payloads from an SSE response stream."""
-    for raw_line in response:
-        if isinstance(raw_line, bytes):
-            line = raw_line.decode("utf-8", "replace")
-        else:
-            line = str(raw_line)
-        line = line.strip()
-        if not line or line.startswith(":"):
-            continue
-        if not line.startswith("data:"):
-            continue
-        yield line[len("data:"):].strip()
+    event = []
+    size = 0
+    while True:
+        raw_line = response.readline(1024 * 1024 + 1)
+        if not raw_line:
+            if event:
+                yield "\n".join(event)
+            break
+        size += len(raw_line)
+        if size > 1024 * 1024:
+            raise ChatError("AI 服务返回了过大的数据片段。")
+        line = raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else str(raw_line)
+        line = line.rstrip("\r\n")
+        if not line:
+            if event:
+                yield "\n".join(event)
+            event = []
+            size = 0
+        elif line.startswith("data:"):
+            event.append(line[5:].lstrip(" "))
+            # Some compatible gateways omit the blank event delimiter. Accept
+            # a complete JSON payload there, while retaining multiline JSON.
+            payload = "\n".join(event)
+            try:
+                if payload != "[DONE]":
+                    json.loads(payload)
+            except ValueError:
+                continue
+            yield payload
+            event = []
+            size = 0
 
 
 def friendly_service_error(message: str) -> str:
@@ -211,7 +280,7 @@ def _extract_stream_delta(chunk: Dict[str, Any]) -> str:
     consumes ``delta``.
     """
     choices = chunk.get("choices")
-    if not isinstance(choices, list) or not choices:
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         return ""
     delta = choices[0].get("delta")
     if isinstance(delta, dict):
@@ -251,6 +320,7 @@ def stream_chat(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     opener=None,
     extra: Optional[Dict[str, Any]] = None,
+    control: Optional[StreamControl] = None,
 ) -> Iterator[str]:
     """Stream assistant replies as text deltas.
 
@@ -263,18 +333,29 @@ def stream_chat(
     """
     if not api_key:
         raise ChatError("尚未配置 API Key。")
+    control = control or StreamControl()
+    if control.stopped.is_set():
+        return
     payload = build_payload(
         messages, model=model, temperature=temperature, stream=True, extra=extra
     )
-    open_url = opener or urllib.request.urlopen
+    open_url = opener or _urlopen
     response = _open_response(endpoint, payload, api_key, timeout, open_url)
+    control.bind(response)
     saw_chunk = False
     saw_content = False
+    completed = False
+    reply_size = 0
     first_line = ""
     try:
         with response:
+            if control.stopped.is_set():
+                return
             for data in iter_sse_data_lines(response):
+                if control.stopped.is_set():
+                    return
                 if data == "[DONE]":
+                    completed = True
                     break
                 try:
                     chunk = json.loads(data)
@@ -285,17 +366,34 @@ def stream_chat(
                 if not isinstance(chunk, dict):
                     continue
                 saw_chunk = True
-                error = _chunk_error(chunk)
+                choices = chunk.get("choices")
+                if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                    reason = choices[0].get("finish_reason")
+                    if reason in ("length", "content_filter"):
+                        raise ChatError("回复未完整生成，请缩小问题范围后重试。")
+                    completed = completed or reason == "stop"
+                error = _chunk_error(chunk).replace(api_key, "***")
                 if error:
                     raise ChatError(f"AI 服务返回错误：{error}")
                 delta = _extract_stream_delta(chunk)
                 if delta:
+                    reply_size += len(delta)
+                    if reply_size > MAX_REPLY_CHARS:
+                        raise ChatError("回复过长，已停止接收。请缩小问题范围。")
                     saw_content = True
                     yield delta
     except ChatError:
         raise
     except (OSError, ValueError, ssl.SSLError) as exc:
+        if control.stopped.is_set():
+            return
         raise ChatError(f"读取 AI 回复时中断：{exc}") from exc
+    finally:
+        control.release()
+    if control.stopped.is_set():
+        return
+    if saw_content and not completed:
+        raise ChatError("连接提前结束，回复可能不完整。请重试。")
     if not saw_content:
         if not saw_chunk:
             detail = f"首个片段：{first_line}" if first_line else "响应是空的"
@@ -325,22 +423,26 @@ def chat_once(
     payload = build_payload(
         messages, model=model, temperature=temperature, stream=False, extra=extra
     )
-    open_url = opener or urllib.request.urlopen
+    open_url = opener or _urlopen
     response = _open_response(endpoint, payload, api_key, timeout, open_url)
     try:
         with response:
-            body = response.read()
+            body = response.read(MAX_REPLY_CHARS * 4 + 1)
+            if len(body) > MAX_REPLY_CHARS * 4:
+                raise ChatError("回复过长，已停止接收。请缩小问题范围。")
     except (OSError, ssl.SSLError) as exc:
         raise ChatError(f"读取 AI 回复时中断：{exc}") from exc
     try:
         data = json.loads(body.decode("utf-8", "replace"))
     except ValueError as exc:
         raise ChatError("AI 服务返回了无法解析的内容。") from exc
-    error = _chunk_error(data)
+    if not isinstance(data, dict):
+        raise ChatError("AI 服务返回了无法解析的内容。")
+    error = _chunk_error(data).replace(api_key, "***")
     if error:
         raise ChatError(f"AI 服务返回错误：{error}")
     choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise ChatError("AI 服务未返回任何回复。" + _looks_like_model_problem(model))
     message = choices[0].get("message")
     if not isinstance(message, dict) or not isinstance(message.get("content"), str):

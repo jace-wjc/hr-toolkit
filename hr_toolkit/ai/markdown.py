@@ -11,6 +11,7 @@ pre / ul / ol / li / table / blockquote / hr / span），供 QML 的
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Dict, List, Tuple
 
 # Qt 只认有限的 CSS 属性，且暗色主题下浅色底会把文字吃掉，所以底色/描边分主题给。
@@ -18,12 +19,11 @@ _THEMES: Dict[str, Dict[str, str]] = {
     "light": {
         "rule": "#E6E3DC",
         "code_bg": "#F3F2EE",
-        # 表格靠 "cellspacing=1 + table 底色" 画出网格（QML 的富文本不认 td 的
-        # border/padding）。底色定得越浅越好：原来的 #E6E3DC 在小面板里像 Excel
-        # 截图，换成 #EFEDE8 后线还在，但不再抢文字。
         "grid": "#EFEDE8",
         "head_bg": "#F5F4F1",
         "cell_bg": "#FFFFFF",
+        "stripe_bg": "#FAFAF8",
+        "text": "#292825",
         "quote_text": "#6F6D66",
         "link": "#17715B",
     },
@@ -33,6 +33,8 @@ _THEMES: Dict[str, Dict[str, str]] = {
         "grid": "#333C47",
         "head_bg": "#262E38",
         "cell_bg": "#222931",
+        "stripe_bg": "#262F39",
+        "text": "#E6EBF0",
         "quote_text": "#A3A8AE",
         "link": "#5FBFA0",
     },
@@ -40,9 +42,8 @@ _THEMES: Dict[str, Dict[str, str]] = {
 
 _BODY_SIZE = 13.0
 _CODE_SIZE = 12.0
-# 单元格内边距，走 cellpadding 属性：CSS 的 padding 在 QML 富文本里只吃到横向，
-# 纵向会被忽略，表格看着还是贴边。
-_CELL_PAD = 6
+# Qt's table cell padding and collapsed borders are supported on Qt 5.15+.
+_CELL_PAD = 8
 # (font-size, margin-top, margin-bottom)
 _HEADING_SCALE = {
     1: (16.0, 10, 5),
@@ -78,7 +79,14 @@ def render_markdown_html(text: str, *, dark: bool = False, font_family: str = ""
     字体（段落会），不显式指定的话表里的中文会掉到另一套字族，看着像等宽宽体、
     跟正文完全不是一套字。传进来就写在 table/td 上，不传则保持继承行为。
     """
-    return _Renderer(_THEMES["dark" if dark else "light"], font_family=font_family).render(text)
+    return _Renderer(_THEMES["dark" if dark else "light"], font_family=font_family).render(str(text or "").replace("\x00", ""))
+
+
+def render_markdown_payload(text: str, *, dark: bool = False, font_family: str = "") -> dict:
+    """One parse supplies legacy HTML and native table blocks for the chat view."""
+    renderer = _Renderer(_THEMES["dark" if dark else "light"], font_family=font_family)
+    html = renderer.render(str(text or "").replace("\x00", ""))
+    return {"html": html, "blocks": renderer.blocks}
 
 
 def markdown_to_plain(text: str) -> str:
@@ -101,11 +109,14 @@ class _Renderer:
     def __init__(self, palette: Dict[str, str], font_family: str = "") -> None:
         self.palette = palette
         self.font_family = str(font_family or "").strip()
+        self.blocks: List[dict] = []
+        self._last_table: dict = {}
 
     # ------------------------------------------------------------------ 入口
     def render(self, text: str) -> str:
         lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
         blocks: List[str] = []
+        tables: Dict[int, dict] = {}
         index = 0
         total = len(lines)
         while index < total:
@@ -138,6 +149,7 @@ class _Renderer:
                 continue
             if self._starts_table(lines, index):
                 block, index = self._read_table(lines, index)
+                tables[len(blocks)] = self._last_table
                 blocks.append(block)
                 continue
             if _LIST_RE.match(line):
@@ -146,6 +158,17 @@ class _Renderer:
                 continue
             block, index = self._read_paragraph(lines, index)
             blocks.append(block)
+        pending: List[str] = []
+        for position, block in enumerate(blocks):
+            if position in tables:
+                if pending:
+                    self.blocks.append({"kind": "text", "html": "".join(pending)})
+                    pending = []
+                self.blocks.append(tables[position])
+            else:
+                pending.append(block)
+        if pending:
+            self.blocks.append({"kind": "text", "html": "".join(pending)})
         return "".join(blocks)
 
     # ------------------------------------------------------------------ 块级
@@ -219,33 +242,42 @@ class _Renderer:
 
         columns = max([len(header)] + [len(row) for row in rows]) if (header or rows) else 0
         palette = self.palette
-        # 单元格不继承控件字体，得显式写上去；没传字体就退回原来的继承行为。
-        style = "background-color:%s" % palette["grid"]
+        widths = _column_widths(header, rows, columns)
+        typography = "font-size:%gpx; color:%s" % (_BODY_SIZE, palette["text"])
         if self.font_family:
-            style += "; font-family:%s" % self.font_family
-        head_style = "background-color:%s" % palette["head_bg"]
-        cell_style = "background-color:%s" % palette["cell_bg"]
-
-        parts = ['<table width="100%%" cellspacing="1" cellpadding="%d" style="%s">'
-                 % (_CELL_PAD, style)]
-        if header:
-            parts.append("<tr>")
-            for column in range(columns):
-                title = header[column] if column < len(header) else ""
-                parts.append(
-                    '<td align="%s" valign="top" style="%s"><b>%s</b></td>'
-                    % (_align(aligns, column), head_style, self._inline(title) or "&nbsp;")
-                )
-            parts.append("</tr>")
-        for row in rows:
+            typography += "; font-family:%s" % self.font_family
+        typography = _escape(typography).replace('"', "&quot;")
+        # Use actual cell backgrounds, not paragraph backgrounds on a colored
+        # table. Wide tables retain readable columns and can scroll in the view.
+        width = str(max(440, columns * 80)) if columns > 4 else "100%"
+        parts = ['<table width="%s" cellspacing="0" cellpadding="%d" '
+                 'style="border-collapse:collapse; margin-top:8px; margin-bottom:10px; %s">'
+                 % (width, _CELL_PAD, typography)]
+        rendered_rows: List[List[str]] = []
+        for row_index, row in enumerate([header] + rows):
+            rendered_cells: List[str] = []
+            heading = row_index == 0
+            background = palette["head_bg"] if heading else palette["cell_bg"] if row_index % 2 else palette["stripe_bg"]
             parts.append("<tr>")
             for column in range(columns):
                 cell = row[column] if column < len(row) else ""
+                value = self._inline(cell, table_cell=True)
+                if heading:
+                    value = "<b>%s</b>" % (value or "&nbsp;")
+                elif not value:
+                    value = '<span style="color:%s">—</span>' % palette["quote_text"]
+                rendered_cells.append(value)
                 parts.append(
-                    '<td align="%s" valign="top" style="%s">%s</td>'
-                    % (_align(aligns, column), cell_style, self._inline(cell) or "&nbsp;")
+                    '<td align="%s" valign="top" width="%d%%" bgcolor="%s" '
+                    'style="border-bottom:1px solid %s; %s">'
+                    '<p style="margin-top:0; margin-bottom:0; line-height:125%%; %s">%s</p></td>'
+                    % (_align(aligns, column), widths[column], background,
+                       palette["grid"], typography, typography, value)
                 )
             parts.append("</tr>")
+            rendered_rows.append(rendered_cells)
+        self._last_table = {"kind": "table", "headers": rendered_rows[0], "rows": rendered_rows[1:],
+                            "widths": widths, "alignments": [_align(aligns, c) for c in range(columns)]}
         parts.append("</table>")
         return "".join(parts), index
 
@@ -313,7 +345,7 @@ class _Renderer:
         )
 
     # ------------------------------------------------------------------ 行内
-    def _inline(self, raw: str) -> str:
+    def _inline(self, raw: str, *, table_cell: bool = False) -> str:
         palette = self.palette
         text = _escape(raw)
         codes: List[str] = []
@@ -324,6 +356,10 @@ class _Renderer:
 
         # 先抠出行内代码，免得里面的 * _ ~ 被当成强调标记
         text = _INLINE_CODE_RE.sub(stash, text)
+        if table_cell:
+            # Only an exact line-break tag is allowed. Other HTML stays escaped,
+            # and tags inside inline code remain literal.
+            text = re.sub(r"&lt;br\s*/?&gt;", "<br>", text, flags=re.IGNORECASE)
         text = _LINK_RE.sub(
             lambda match: '<a href="%s" style="color:%s">%s</a>'
             % (match.group(2), palette["link"], match.group(1) or match.group(2)),
@@ -359,12 +395,71 @@ def _is_table_separator(stripped: str) -> bool:
 
 
 def _split_row(raw: str) -> List[str]:
+    """Split unescaped pipes outside code spans; preserve empty cells."""
     row = raw.strip()
+    cells, cell = [], []
+    ticks = 0
+    index = 0
+    trailing_separator = False
+    while index < len(row):
+        char = row[index]
+        trailing_separator = False
+        if char == "\\" and index + 1 < len(row) and row[index + 1] in "\\|":
+            cell.append(row[index + 1])
+            index += 2
+            continue
+        if char == "`":
+            end = index + 1
+            while end < len(row) and row[end] == "`":
+                end += 1
+            run = end - index
+            if not ticks:
+                ticks = run
+            elif ticks == run:
+                ticks = 0
+            cell.append(row[index:end])
+            index = end
+            continue
+        if char == "|" and not ticks:
+            cells.append("".join(cell).strip())
+            cell = []
+            trailing_separator = True
+        else:
+            cell.append(char)
+        index += 1
+    cells.append("".join(cell).strip())
     if row.startswith("|"):
-        row = row[1:]
-    if row.endswith("|"):
-        row = row[:-1]
-    return [cell.strip() for cell in row.split("|")]
+        cells.pop(0)
+    if trailing_separator:
+        cells.pop()
+    return cells
+
+
+def _column_widths(header: List[str], rows: List[List[str]], columns: int) -> List[int]:
+    # Bounded sampling keeps sizing cheap during streaming, even for long tables.
+    # Count CJK characters as two units and cap outliers so one long note cannot
+    # squeeze every other column. No text is truncated in the rendered cells.
+    weights = [6] * columns
+    for row in [header] + rows[:32]:
+        for column, cell in enumerate(row[:columns]):
+            lines = re.split(r"<br\s*/?>", cell, flags=re.IGNORECASE)
+            for line in lines:
+                units = sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in line[:160])
+                weights[column] = max(weights[column], min(36, units))
+    total = sum(weights) or 1
+    # Largest-remainder allocation totals exactly 100 without zero-width columns
+    # for normal HR tables. Extremely wide tables retain a minimum per column.
+    if columns > 100:
+        return [1] * columns
+    widths = [max(1, int(100 * weight / total)) for weight in weights]
+    while sum(widths) > 100:
+        largest = max(range(columns), key=lambda c: widths[c])
+        widths[largest] -= 1
+    remainder = 100 - sum(widths)
+    order = sorted(range(columns), key=lambda c: 100 * weights[c] / total - widths[c], reverse=True)
+    for column in order[:remainder]:
+        widths[column] += 1
+    return widths
 
 
 def _row_alignments(separator: str) -> List[str]:

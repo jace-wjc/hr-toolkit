@@ -16,6 +16,7 @@ os.environ.update(
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hr_toolkit.ai import config as ai_config
 from hr_toolkit.ai import history as ai_history
+from hr_toolkit.ai import images as ai_images
 from hr_toolkit.gui_qt.compat import QApplication, QObject, Property, Slot, QUrl, QT_MAJOR
 from hr_toolkit.gui_qt.controller import AppController
 
@@ -24,14 +25,17 @@ from hr_toolkit.gui_qt.controller import AppController
 _PROBE_DIR = Path(tempfile.mkdtemp(prefix="hr-toolkit-ai-probe-"))
 ai_config.default_settings_path = lambda: _PROBE_DIR / "ai-assistant.json"
 ai_history.default_conversations_path = lambda: _PROBE_DIR / "ai-conversations.json"
+ai_images.image_cache_dir = lambda: _PROBE_DIR / "ai-images"
 
 if QT_MAJOR == 6:
-    from PySide6.QtCore import Q_ARG, QEventLoop, QMetaObject, QPoint, Qt, QTimer
-    from PySide6.QtQml import QQmlApplicationEngine, QQmlExpression
+    from PySide6.QtCore import QEventLoop, QMetaObject, QPoint, Qt, QTimer
+    from PySide6.QtQuick import QQuickWindow
+    from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent, QQmlExpression
     from PySide6.QtTest import QTest
 else:
-    from PySide2.QtCore import Q_ARG, QEventLoop, QMetaObject, QPoint, Qt, QTimer
-    from PySide2.QtQml import QQmlApplicationEngine, QQmlExpression
+    from PySide2.QtCore import QEventLoop, QMetaObject, QPoint, Qt, QTimer
+    from PySide2.QtQuick import QQuickWindow
+    from PySide2.QtQml import QQmlApplicationEngine, QQmlComponent, QQmlExpression
     from PySide2.QtTest import QTest
 
 os.environ["QT_QUICK_CONTROLS_STYLE"] = "Default" if QT_MAJOR == 5 else "Basic"
@@ -133,8 +137,188 @@ def require(condition, message, failures):
     return bool(condition)
 
 
+def markdown_probe() -> int:
+    """Load only response blocks; no project, network, settings or main window."""
+    import json
+    import time
+    from hr_toolkit.ai.markdown import render_markdown_payload
+
+    application = QApplication.instance() or QApplication([])
+    engine = QQmlApplicationEngine()
+    warnings = []
+    engine.warnings.connect(lambda messages: warnings.extend(m.toString() for m in messages))
+    source = "## Records\n\n| ID | Name | Department | Date | Status | Notes |\n| ---: | --- | --- | --- | --- | --- |\n"
+    source += "\n".join("| %d | Employee | HR | 2026-09-22 | Pending | First<br>Second |" % i for i in range(2000))
+    started = time.perf_counter()
+    engine.rootContext().setContextProperty("responseBlocks", render_markdown_payload(source)["blocks"])
+    qml = '''import QtQuick 2.15
+import QtQuick.Window 2.15
+import "."
+Window {
+    id: win; visible: true; width: 400; height: 600
+    QtObject { id: appearance; property string theme: "light"; property string language: "en_US"
+        function translate(t, l) { return t } }
+    Component.onCompleted: Ui.backend = appearance
+    AiResponseBody { id: response; width: win.width; blocks: responseBlocks }
+    function named(name) {
+        function scan(o) {
+            if (o.objectName === name) return o
+            var children = o.children || []
+            for (var i=0; i<children.length; ++i) { var found=scan(children[i]); if(found) return found }
+            return null
+        }
+        return scan(contentItem)
+    }
+    function metrics() {
+        var r=named("aiTableRows"), h=named("aiTableHorizontal"), live=0
+        for(var i=0;i<r.contentItem.children.length;++i)
+            if(r.contentItem.children[i].objectName === "aiTableRow") ++live
+        return JSON.stringify({count:r.count,live:live,height:r.height,total:r.contentHeight,
+            last:r.itemAtIndex(r.count-1)!==null,x:h.contentX,maxX:h.contentWidth-h.width,
+            first:r.indexAt(1,r.contentY+1)})
+    }
+    function scrollLast() { var r=named("aiTableRows"); r.positionViewAtEnd(); r.rememberPosition() }
+    function pan() { var h=named("aiTableHorizontal"); h.contentX=h.contentWidth-h.width }
+    function dark() { appearance.theme="dark" }
+}'''
+    base = Path(__file__).resolve().parents[1] / "hr_toolkit/gui_qt/qml/components/MarkdownProbe.qml"
+    panel = QQmlComponent(engine, QUrl.fromLocalFile(str(base.with_name("AiChatPanel.qml"))))
+    assert not panel.isError(), [error.toString() for error in panel.errors()]
+    engine.loadData(qml.encode(), QUrl.fromLocalFile(str(base)))
+    if not engine.rootObjects():
+        raise AssertionError("Markdown QML failed: " + "\n".join(warnings))
+    root = engine.rootObjects()[0]
+
+    def evaluate(expression):
+        result = QQmlExpression(engine.rootContext(), root, expression).evaluate()
+        return result[0] if isinstance(result, tuple) else result
+
+    wait_for_events(150)
+    metrics = json.loads(evaluate("metrics()"))
+    assert metrics["count"] == 2000 and metrics["live"] < 40, metrics
+    assert metrics["height"] == 360 and metrics["total"] > metrics["height"], metrics
+    evaluate("scrollLast(); pan()")
+    wait_for_events(100)
+    before = json.loads(evaluate("metrics()"))
+    assert before["last"] and before["x"] > 0, before
+    # Updating the streamed response must preserve the existing table viewport.
+    engine.rootContext().setContextProperty("responseBlocks", render_markdown_payload(source + "\n| 2000 | Added | HR | | | |", dark=True)["blocks"])
+    evaluate("dark()")
+    wait_for_events(150)
+    after = json.loads(evaluate("metrics()"))
+    assert after["count"] == 2001 and after["live"] < 40, after
+    assert abs(after["x"] - before["x"]) < 1 and after["first"] == before["first"], (before, after)
+    root.setProperty("width", 900)
+    wait_for_events(80)
+    assert json.loads(evaluate("metrics()"))["x"] == 0
+    assert not warnings, warnings
+    print("Markdown probe OK (Qt %d): 2,001 rows, %d live rows; resize, theme and stream update passed (%.2fs including waits)"
+          % (QT_MAJOR, after["live"], time.perf_counter() - started))
+    root.close()
+    return 0
+
+
+def sage_open_probe() -> int:
+    """Exercise the sidebar entry with restored, variable-height CJK messages."""
+    from hr_toolkit.gui_qt.compat import delete_qobject
+    application = QApplication.instance() or QApplication([])
+    original_font = application.font()
+    font = application.font()
+    if sys.platform == "darwin":
+        font.setFamily("PingFang SC")
+    elif sys.platform.startswith("win"):
+        font.setFamily("Microsoft YaHei" if QT_MAJOR == 5 else "Microsoft YaHei UI")
+    application.setFont(font)
+    controller = Controller()
+    controller._save_workspace_preferences = lambda: True
+    store = ai_history.ConversationStore(_PROBE_DIR / "sage-open-history.json")
+    record = store.create("Synthetic layout regression")
+    for i in range(9):
+        record.messages.extend([
+            {"role": "user", "content": "请查看工作表" * (1 + i % 3)},
+            {"role": "assistant", "content": "### 工作表说明\n\n" + "待核对资料说明。" * (120 if i == 4 else i * 3)
+             + "\n\n| 序号 | 工作表 | 备注 |\n| --- | --- | --- |\n"
+             + "\n".join("| %d | 归档资料 | %s |" % (j, "待确认<br>" * (1 + j % 3)) for j in range(1 + i % 4))}
+        ])
+    store.upsert(record)
+    controller._ai_conversation_store = store
+    engine = QQmlApplicationEngine()
+    errors = []
+    engine.warnings.connect(lambda messages: errors.extend(error.toString() for error in messages))
+    engine.rootContext().setContextProperty("controller", controller)
+    qml = Path(__file__).resolve().parents[1] / "hr_toolkit/gui_qt/qml/Main.qml"
+    engine.load(QUrl.fromLocalFile(str(qml)))
+    assert engine.rootObjects(), errors
+    root = engine.rootObjects()[0]
+    button = root.findChild(QObject, "sidebarAiButton")
+    assert button is not None
+    for width in (1560, 1024, 1560):
+        print("Sage open: width %d" % width, flush=True)
+        root.setProperty("width", width)
+        wait_for_events(100)
+        QMetaObject.invokeMethod(button, "clicked")
+        # If layout re-enters tail scrolling, even this event-loop timer cannot
+        # fire; the parent entrypoint test's process timeout catches the freeze.
+        wait_for_events(350)
+        assert len(controller.aiChatModel) == 18
+        panel = root.findChild(QObject, "aiPanelLoader")
+        detached = root.findChild(QObject, "aiWindowLoader").property("item")
+        view_root = detached if detached is not None and detached.property("visible") else panel.property("item")
+        assert view_root is not None
+        view = view_root.findChild(QObject, "aiChatView")
+        assert view is not None
+        # Qt 5/6 differ in whether positionViewAtEnd includes bottomMargin.
+        def tail_gap():
+            return float(view.property("originY")) + float(view.property("contentHeight")) - float(view.property("contentY")) - float(view.property("height"))
+        for _ in range(15):
+            if abs(tail_gap()) <= float(view.property("bottomMargin")) + 1:
+                break
+            wait_for_events(100)
+        gap = tail_gap()
+        assert abs(gap) <= float(view.property("bottomMargin")) + 1, {
+            key: view.property(key) for key in ("count", "height", "contentHeight", "contentY", "originY", "followTail", "atYEnd")}
+        # Move past a response taller than the viewport, then hover. Previously
+        # it was repeatedly recreated at 60px, shifting its neighbors forever.
+        def evaluate(expression):
+            query = QQmlExpression(engine.rootContext(), view, expression)
+            value = query.evaluate()
+            assert not query.hasError(), query.error().toString()
+            value = value[0] if isinstance(value, tuple) else value
+            return value.toVariant() if hasattr(value, "toVariant") else value
+
+        window = detached if detached is not None and detached.property("visible") else root
+        evaluate("followTail=false; positionViewAtBeginning()")
+        wait_for_events(200)
+        for row in (9, 10, 9, 10):
+            evaluate("positionViewAtIndex(%d, 0)" % row)
+            wait_for_events(300)
+        snapshot = "JSON.stringify([contentY, originY, contentHeight])"
+        before = evaluate(snapshot)
+        for offset in (30, 100, 200, 50):
+            coordinates = evaluate("(function(){var p=mapToItem(null,20,%d);return [p.x,p.y]})()" % offset)
+            QTest.mouseMove(window, QPoint(int(coordinates[0]), int(coordinates[1])))
+            wait_for_events(80)
+            assert evaluate(snapshot) == before, "Hover changed the settled conversation layout"
+        assert evaluate("(function(){var a=Array.prototype.filter.call(contentItem.children,function(c){return c.settledHeight!==undefined});"
+                        "a.sort(function(a,b){return a.y-b.y});for(var i=0;i<a.length;++i){"
+                        "if(Math.abs(a[i].height-a[i].implicitHeight)>1)return false;"
+                        "if(i && a[i].y<a[i-1].y+a[i-1].height-1)return false;}return a.length>0;})()"), "Message rows overlap or retain provisional heights"
+        root.setProperty("aiPanelRequested", False)
+        if detached is not None:
+            detached.setProperty("visible", False)
+        wait_for_events(50)
+    assert not errors, errors
+    delete_qobject(root)
+    controller.close()
+    application.setFont(original_font)
+    print("Sage open probe OK: restored CJK tables, tail following, docked/detached reopening, and stable hover/navigation")
+    return 0
+
+
 def main() -> int:
     application = QApplication([])
+    markdown_probe()
+    sage_open_probe()
     controller = Controller()
     controller._save_workspace_preferences = lambda: True
     engine = QQmlApplicationEngine()
@@ -409,7 +593,9 @@ def main() -> int:
             target = provider_ids.index("deepseek")
             combo.setProperty("currentIndex", target)
             # 走真实激活路径：光设 currentIndex 不会触发 onActivated，测不出那个 bug。
-            activated = QMetaObject.invokeMethod(combo, "activated", Q_ARG("int", target))
+            activation = QQmlExpression(engine.rootContext(), combo, "activated(%d)" % target)
+            activation.evaluate()
+            activated = not activation.hasError()
             wait_for_events(200)
             require(activated, "could not activate the provider combo", failures)
             require(
@@ -420,7 +606,7 @@ def main() -> int:
             model_field = root.findChild(QObject, "aiModelField")
             endpoint_field = root.findChild(QObject, "aiEndpointField")
             require(
-                model_field is not None and str(model_field.property("text")) == "deepseek-chat",
+                model_field is not None and str(model_field.property("text")) == "deepseek-flash",
                 "切到 DeepSeek 后模型栏没跟着换（%r）"
                 % (model_field.property("text") if model_field is not None else None),
                 failures,
@@ -434,7 +620,7 @@ def main() -> int:
             )
             hint = root.findChild(QObject, "aiModelChoicesHint")
             require(
-                hint is not None and "deepseek-reasoner" in str(hint.property("text")),
+                hint is not None and "deepseek-v4-pro" in str(hint.property("text")),
                 "模型候选提示没跟着服务商换",
                 failures,
             )
@@ -534,7 +720,7 @@ def main() -> int:
                 failures,
             )
             require(
-                "deepseek-reasoner" in [row["value"] for row in controller.aiModelOptions],
+                "deepseek-v4-pro" in [row["value"] for row in controller.aiModelOptions],
                 "切了服务商，模型列表没跟着换",
                 failures,
             )
@@ -640,6 +826,25 @@ def main() -> int:
     if window_loader is not None and window_loader.property("item") is not None:
         window_loader.property("item").setProperty("visible", False)
 
+    # Exercise both catalogs/palettes and the small-window entry point.
+    for language, theme in (("en_US", "dark"), ("zh_CN", "light"), ("en_US", "light"), ("zh_CN", "dark")):
+        controller.presentation.setLanguage(language)
+        controller.presentation.setTheme(theme)
+        wait_for_events(80)
+        if os.environ.get("HR_AI_REVIEW_CAPTURE") and language == "en_US":
+            root.grabWindow().save(os.environ["HR_AI_REVIEW_CAPTURE"] + "-" + theme + ".png")
+    root.setProperty("aiPanelRequested", False)
+    root.setProperty("width", 1024)
+    wait_for_events(250)
+    QMetaObject.invokeMethod(root, "toggleAiPanel")
+    wait_for_events(250)
+    detached = window_loader.property("item") if window_loader is not None else None
+    require(detached is not None and detached.property("visible"),
+            "small-window entry point did not open usable detached chat", failures)
+    if detached is not None:
+        require(float(detached.property("width")) >= 360, "detached chat is too narrow", failures)
+        detached.setProperty("visible", False)
+
     chat_model.clear()
 
     # 先算断言失败和运行期错误；销毁整个面板会在 QML 里产生一批
@@ -679,4 +884,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(sage_open_probe() if "--sage-open-only" in sys.argv else markdown_probe() if "--markdown-only" in sys.argv else main())

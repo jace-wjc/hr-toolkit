@@ -23,6 +23,7 @@ from hr_toolkit.common.excel_compat import ensure_xlsx_workbook
 MAX_CONTEXT_ROWS = 500  # rows rendered into the prompt
 MAX_STATS_ROWS = 20000  # rows scanned for statistics
 MAX_SHEETS = 8
+MAX_COLUMNS = 128
 MAX_CELL_TEXT_LENGTH = 80
 _HEADER_SCAN_ROWS = 10
 _NUMERIC_COLUMN_RATIO = 0.8
@@ -49,6 +50,7 @@ class SheetContext:
     stats: List[ColumnStats]
     total_data_rows: int
     truncated: bool
+    scan_limited: bool = False
 
 
 @dataclass
@@ -271,7 +273,8 @@ def build_workbook_context(path: Union[str, Path], *, max_rows: int = MAX_CONTEX
 def _read_sheet(sheet, *, max_rows: int) -> SheetContext:
     collected: List[Tuple[int, List[str]]] = []  # (真实行号, 渲染后的行)
     sheet_row_number = 0
-    for row in sheet.iter_rows(values_only=True):
+    for row in sheet.iter_rows(values_only=True, max_col=min(sheet.max_column or MAX_COLUMNS, MAX_COLUMNS),
+                               max_row=min(sheet.max_row or MAX_STATS_ROWS, MAX_STATS_ROWS + _HEADER_SCAN_ROWS)):
         sheet_row_number += 1
         rendered = [_cell_text(value) for value in row]
         while rendered and rendered[-1] == "":
@@ -302,6 +305,8 @@ def _read_sheet(sheet, *, max_rows: int) -> SheetContext:
         stats=stats,
         total_data_rows=len(normalized_rows),
         truncated=len(normalized_rows) > len(prompt_rows),
+        scan_limited=(sheet_row_number >= MAX_STATS_ROWS + _HEADER_SCAN_ROWS
+                      or (sheet.max_column or 0) > MAX_COLUMNS),
     )
 
 
@@ -354,7 +359,7 @@ def render_workbook_markdown(context: WorkbookContext) -> str:
         lines.extend(_markdown_table(sheet.headers, sheet.rows))
         if sheet.stats:
             lines.append("")
-            lines.append("数值列统计（本地计算，可信）：")
+            lines.append("数值列统计（本地计算；业务口径需核对）：")
             stats_headers = ["列", "数值个数", "合计", "最小值", "最大值", "平均值"]
             stats_rows = [
                 [
@@ -368,7 +373,9 @@ def render_workbook_markdown(context: WorkbookContext) -> str:
                 for stat in sheet.stats
             ]
             lines.extend(_markdown_table(stats_headers, stats_rows))
-        if sheet.truncated:
+        if sheet.scan_limited:
+            lines.append("（已达到扫描上限：行数、列和统计仅覆盖已读取部分，不代表整张表；不得作为全表合计。）")
+        elif sheet.truncated:
             lines.append("")
             lines.append(
                 "（该表数据较多，已截断为首尾部分行；合计等统计基于全部数据，"
@@ -381,7 +388,7 @@ ANALYSIS_PREAMBLE = (
     "你是 HR Toolkit 内置的表格分析助手。下面提供用户上传的表格内容，"
     "均为本地解析后的结果；「数值列统计」由程序本地计算，数值可信，请优先依据统计结果回答。\n"
     "回答要求：\n"
-    "1. 用简体中文，直接给结论，再给依据；涉及金额和人数时明确写出数字。\n"
+    "1. 使用系统指定的回答语言，直接给结论，再给依据；涉及金额和人数时明确写出数字。\n"
     "2. 对比多张表时，先总结相同点和差异点，再回答用户的具体问题。\n"
     "3. 数据中可能存在身份证号等敏感信息，回答时只引用必要的业务字段。\n"
     "4. 如果数据不足以回答，明确说明缺少什么，不要编造。\n"

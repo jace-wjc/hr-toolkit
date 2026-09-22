@@ -126,9 +126,22 @@ def prepare_image(image, name: str, *, source_path: Optional[Path] = None) -> Di
 
 def load_image_file(path) -> Optional[Dict[str, Any]]:
     """读一个图片文件并压缩成可发送的字节。"""
-    QImage, _buffer, _device, _app, _keep, _smooth, _write = _qt()
+    _image, _buffer, _device, _app, keep_aspect, _smooth, _write = _qt()
+    if qt_compat.QT_MAJOR == 6:
+        from PySide6.QtGui import QImageReader
+    else:
+        from PySide2.QtGui import QImageReader
     source = Path(path).expanduser()
-    image = QImage(str(source))
+    if source.stat().st_size > 40 * 1024 * 1024:
+        raise ValueError("图片过大，请先缩小图片后再附加。")
+    reader = QImageReader(str(source))
+    size = reader.size()
+    if not size.isValid() or size.width() * size.height() > 40000000:
+        raise ValueError("图片尺寸过大或无法识别，请先缩小图片后再附加。")
+    reader.setAutoTransform(True)
+    if max(size.width(), size.height()) > image_support.MAX_IMAGE_EDGE:
+        reader.setScaledSize(size.scaled(image_support.MAX_IMAGE_EDGE, image_support.MAX_IMAGE_EDGE, keep_aspect))
+    image = reader.read()
     if image.isNull():
         raise ValueError("无法读取图片 %s，请确认文件未损坏。" % source.name)
     return prepare_image(image, source.name, source_path=source)

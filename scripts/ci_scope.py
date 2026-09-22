@@ -34,7 +34,7 @@ WIN7 = set((
     "salary_split social_security tool_registry paths pdf_backend_compat "
     "release_metadata background_process qt_controller qt_entrypoint qt_form_specs "
     "run_coordinator material_preferences material_collector_gui project_creation_gui "
-    "ci_scope presentation personnel_reconcile"
+    "ci_scope presentation personnel_reconcile ai_assistant"
 ).split())
 PIN_TEST = (
     "tests.test_windows_packaging.WindowsPackagingTests."
@@ -43,12 +43,14 @@ PIN_TEST = (
 
 # Entries add caller coverage to the matching test_<filename>.py, when it exists.
 ROUTES = {
+    "hr_toolkit/gui_qt/qml/components/AiMarkdownTable.qml": "ai_assistant " + GUI,
+    "hr_toolkit/gui_qt/qml/components/AiResponseBody.qml": "ai_assistant " + GUI,
     "hr_toolkit/gui_qt/qml/components/RecentSelectionButton.qml": "input_selection " + GUI,
     "hr_toolkit/common/run_temp.py": BUSINESS + " " + PROCESS + " " + STORE,
     "hr_toolkit/gui_qt/drop_paths.py": "input_selection " + GUI,
     "hr_toolkit/region_codes.py": "archive_import project_store " + GUI,
     "hr_toolkit/gui_qt/input_selection.py": "input_selection " + GUI,
-    "hr_toolkit/gui_qt/controller.py": "input_selection personnel_reconcile " + GUI,
+    "hr_toolkit/gui_qt/controller.py": "ai_assistant input_selection personnel_reconcile " + GUI,
     "hr_toolkit/gui_qt/form_specs.py": "input_selection personnel_reconcile " + GUI,
     "hr_toolkit/tools/personnel_reconcile.py": "personnel_reconcile template_mapping tool_registry project_run run_coordinator " + GUI,
     "hr_toolkit/gui_qt/qml/components/FileDropTarget.qml": "input_selection " + GUI,
@@ -91,14 +93,16 @@ ROUTES = {
     "tests/qt_presentation_probe.py": "presentation",
     "hr_toolkit/gui_qt/presentation.py": "presentation " + GUI,
     "hr_toolkit/gui_qt/translations_en.py": "presentation " + GUI,
-    "hr_toolkit/ai/__init__.py": "ai_assistant",
-    "hr_toolkit/ai/config.py": "ai_assistant",
-    "hr_toolkit/ai/client.py": "ai_assistant",
-    "hr_toolkit/ai/excel_context.py": "ai_assistant",
-    "hr_toolkit/ai/assistant.py": "ai_assistant",
-    "hr_toolkit/ai/markdown.py": "ai_assistant",
-    "hr_toolkit/ai/history.py": "ai_assistant",
-    "hr_toolkit/ai/images.py": "ai_assistant",
+    "hr_toolkit/gui_qt/image_input.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/__init__.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/config.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/client.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/excel_context.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/assistant.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/markdown.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/history.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/images.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/status.py": "ai_assistant qt_controller qt_entrypoint",
     "hr_toolkit/tools/salary_headers.py": "salary_merge salary_split output_regression",
     "hr_toolkit/tools/registry.py": "tool_registry " + BUSINESS + " " + GUI,
     "hr_toolkit/tools/__init__.py": BUSINESS,

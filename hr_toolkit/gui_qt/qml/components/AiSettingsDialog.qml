@@ -142,10 +142,11 @@ AppDialog {
             Item { Layout.fillWidth: true }
             AppButton {
                 text: "测试连接"
+                enabled: !controller.aiTesting
                 onClicked: {
                     dialog.statusText = Ui.text("正在测试…")
                     dialog.statusOk = false
-                    controller.aiTestConnection()
+                    controller.aiTestConnection(providerCombo.currentValue, keyField.text, modelField.text, endpointField.text)
                 }
             }
             AppButton {

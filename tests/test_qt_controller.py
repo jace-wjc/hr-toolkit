@@ -484,7 +484,8 @@ class QtControllerTests(unittest.TestCase):
         for _ in range(5):
             controller._ai_attach_status_phrases([{"kind": "sheet"}])
             rounds.append(tuple(controller.aiStatusPhrases))
-        self.assertGreater(len(set(rounds)), 1)
+        self.assertEqual(len(set(rounds)), 1)
+        self.assertIn("等待", rounds[0][0])
 
     def test_waiting_hint_signals_a_change_each_turn(self) -> None:
         controller = self.controller()
@@ -495,6 +496,81 @@ class QtControllerTests(unittest.TestCase):
         controller._ai_attach_status_phrases([{"kind": "image"}])
         self.assertEqual(len(seen), 2)
         self.assertTrue(all(phrases for phrases in seen))
+
+    def test_ai_restore_and_retry_keep_saved_attachment_context(self):
+        from hr_toolkit.ai.history import ConversationRecord, ConversationStore
+        with tempfile.TemporaryDirectory() as folder:
+            controller = self._isolated_controller(folder)
+            controller._ai_conversation_store = ConversationStore(Path(folder) / "history.json")
+            record = ConversationRecord("chat", messages=[
+                {"role": "user", "content": "analyze", "apiContent": "saved table rows\nanalyze",
+                 "attachments": [{"kind": "sheet", "name": "table.xlsx"}]},
+                {"role": "assistant", "content": "failed", "status": "error"}])
+            with patch.object(controller, "_ai_prune_image_cache"):
+                controller._ai_restore_record(record)
+            self.assertEqual(controller._ai_chat_model.item_at(0)["apiContent"], "saved table rows\nanalyze")
+            with patch.object(controller, "_ai_begin_turn") as begin:
+                controller.aiRegenerate()
+            self.assertEqual(begin.call_args.kwargs["context_body"], "saved table rows\nanalyze")
+            self.assertEqual(begin.call_args.args[1][0]["name"], "table.xlsx")
+
+    def test_ai_edit_keeps_context_and_conversation_identity(self):
+        from hr_toolkit.ai.history import ConversationRecord
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._ai_conversation = ConversationRecord("same-chat")
+        controller._ai_chat_model.set_items([
+            {"role": "user", "content": "old", "apiContent": "saved rows\n用户的问题：old", "attachments": []},
+            {"role": "assistant", "content": "answer"}])
+        with patch.object(controller, "_ai_begin_turn") as begin:
+            controller.aiEditMessage(0, "new")
+        self.assertEqual(controller._ai_conversation.conversation_id, "same-chat")
+        self.assertEqual(begin.call_args.kwargs["context_body"], "saved rows\n用户的问题：new")
+
+    def test_ai_attachment_preparation_does_not_block_gui_and_cancel_discards_result(self):
+        controller = self.controller()
+        controller._ai_prune_image_cache = lambda: None
+        self.addCleanup(controller.close)
+        entered, release = threading.Event(), threading.Event()
+        worker_ids = []
+        def parse(session, path):
+            worker_ids.append(threading.get_ident())
+            entered.set()
+            release.wait(2)
+            return {}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "table.xlsx"
+            path.touch()
+            with patch("hr_toolkit.ai.assistant.AiAssistantSession.add_attachment", parse):
+                controller.aiAttachPaths([str(path)])
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(controller.aiPreparing)
+                generation = controller._ai_attachment_generation
+                controller.aiStopGenerating()
+                release.set()
+                controller._apply_ai_attachments(generation, [object()], [])
+                self.assertFalse(controller.aiBusy)
+                self.assertEqual(controller.aiAttachmentModel.rowCount(), 0)
+                self.assertNotEqual(worker_ids[0], threading.get_ident())
+
+    def test_ai_connection_test_uses_unsaved_fields_without_persisting(self):
+        from hr_toolkit.ai.config import AiSettings
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._ai_settings = AiSettings()
+        captured = []
+        finished = threading.Event()
+        def check(settings):
+            captured.append(settings)
+            finished.set()
+            return "OK"
+        with patch("hr_toolkit.ai.client.test_connection", check):
+            controller.aiTestConnection("deepseek", "test-only", "custom-model", "https://example.com/v1")
+            self.assertTrue(finished.wait(1))
+        self.assertEqual(captured[0].active_provider, "deepseek")
+        self.assertEqual(captured[0].provider_config().model, "custom-model")
+        self.assertEqual(captured[0].provider_config().api_key, "test-only")
+        self.assertNotEqual(controller._ai_settings.provider_config("deepseek").api_key, "test-only")
 
     def _isolated_controller(self, folder):
         """AI 设置落到临时文件，别动用户真实的 ai-assistant.json。"""

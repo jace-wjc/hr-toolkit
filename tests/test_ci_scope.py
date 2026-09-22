@@ -16,6 +16,16 @@ SPEC.loader.exec_module(ci_scope)
 
 
 class CIScopeTests(unittest.TestCase):
+    def test_ai_changes_cover_backend_gui_and_win7(self):
+        for path in ("hr_toolkit/ai/client.py", "hr_toolkit/ai/status.py",
+                     "hr_toolkit/gui_qt/image_input.py"):
+            with self.subTest(path=path):
+                scope = ci_scope.select_scope([path])
+                self.assertTrue({"tests.test_ai_assistant", "tests.test_qt_controller",
+                                 "tests.test_qt_entrypoint"}.issubset(scope["targets"]))
+                self.assertIn("tests.test_ai_assistant", scope["win7_targets"])
+                self.assertFalse(scope["full"])
+
     def test_reconcile_routes_include_business_ui_mapping_and_legacy_runtime(self):
         scope = ci_scope.select_scope(["hr_toolkit/tools/personnel_reconcile.py"])
         self.assertTrue({"tests.test_personnel_reconcile", "tests.test_template_mapping",

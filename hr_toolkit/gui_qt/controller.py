@@ -197,6 +197,7 @@ class AppController(QObject):
     aiTestFinished = Signal(bool, str)
     _aiDeltaIncoming = Signal(str)
     _aiFinishedIncoming = Signal(bool, str)
+    _aiAttachmentsReady = Signal(int, object, object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -425,15 +426,20 @@ class AppController(QObject):
         self._ai_conversation_model = AiConversationModel(self)
         self._ai_conversation_store = None
         self._ai_conversation = None
+        self._ai_activated = False
         self._ai_busy = False
+        self._ai_testing = False
+        self._ai_preparing = False
+        self._ai_attachment_generation = 0
         self._ai_draft = ""
         self._ai_history_query = ""
         # 等待首个字时轮流显示的状态文案：按这一轮实际发出去的附件类型生成，
         # 每轮换一组（见 hr_toolkit.ai.status）。
         self._ai_status_phrases: list[str] = []
-        self._ai_status_seq = 0
         self._aiDeltaIncoming.connect(self._apply_ai_delta)
         self._aiFinishedIncoming.connect(self._apply_ai_finished)
+        self._aiAttachmentsReady.connect(self._apply_ai_attachments)
+        self.aiTestFinished.connect(self._ai_test_finished)
         # 主题切换后要重算富文本里的表格/代码底色，否则暗色下会白底黑字。
         self._presentation.changed.connect(self._rerender_ai_messages)
 
@@ -4697,10 +4703,12 @@ class AppController(QObject):
         return str(getattr(self._presentation, "theme", "light")) == "dark"
 
     def _ai_render(self, text: str) -> str:
-        """Markdown → Qt 富文本；主题变了要重算（表格/代码底色随主题）。"""
-        from hr_toolkit.ai.markdown import render_markdown_html
+        return self._ai_rendered(text)["html"]
 
-        return render_markdown_html(
+    def _ai_rendered(self, text: str) -> dict:
+        from hr_toolkit.ai.markdown import render_markdown_payload
+
+        return render_markdown_payload(
             text, dark=self._ai_dark_theme(), font_family=self._ai_ui_font_family()
         )
 
@@ -4731,8 +4739,10 @@ class AppController(QObject):
         if self._ai_conversation is None:
             from hr_toolkit.ai.history import make_title
 
-            self._ai_conversation = self._ai_store_obj().create(
-                make_title(title_hint) if title_hint else ""
+            from hr_toolkit.ai.history import ConversationRecord
+            import uuid
+            self._ai_conversation = ConversationRecord(
+                uuid.uuid4().hex, make_title(title_hint), time.time()
             )
         return self._ai_conversation
 
@@ -4747,18 +4757,26 @@ class AppController(QObject):
             self._ai_refresh_history()
             return
         self._ai_conversation.messages = rows
-        store.upsert(self._ai_conversation)
+        self._ai_conversation.draft = self._ai_draft
+        try:
+            store.upsert(self._ai_conversation)
+        except OSError:
+            self.notificationRequested.emit("Sage", "无法保存对话历史，请检查磁盘权限或删除不再需要的旧对话。", "warning")
+            return
         self._ai_refresh_history()
 
     def _ai_restore_record(self, record) -> None:
         rows = []
         for item in record.messages:
             content = str(item.get("content") or "")
+            if item.get("role") == "assistant" and item.get("status") == "stopped" and not content:
+                content = self._presentation.translate("上次回复被中断，请重试。", self._presentation.language)
             rows.append(
                 {
+                    **item,
                     "role": str(item.get("role") or "assistant"),
                     "content": content,
-                    "html": self._ai_render(content) if item.get("role") == "assistant" else "",
+                    **(self._ai_rendered(content) if item.get("role") == "assistant" else {"html": "", "blocks": []}),
                     "streaming": False,
                     "time": str(item.get("time") or ""),
                     "attachments": item.get("attachments") or [],
@@ -4779,7 +4797,9 @@ class AppController(QObject):
         try:
             from hr_toolkit.ai.images import prune_image_cache
 
-            prune_image_cache(self._ai_session.retained_image_paths())
+            retained = self._ai_session.retained_image_paths()
+            retained.extend(self._ai_store_obj().retained_image_paths())
+            prune_image_cache(retained)
         except Exception:
             return
 
@@ -4788,6 +4808,9 @@ class AppController(QObject):
         """面板打开时恢复最近一次对话（AI 模块保持懒加载，不进启动路径）。"""
         if self._ai_busy or self._ai_conversation is not None or len(self._ai_chat_model) > 0:
             return
+        if self._ai_activated:
+            return
+        self._ai_activated = True
         record = self._ai_store_obj().latest()
         if record is not None and record.messages:
             self._ai_restore_record(record)
@@ -4800,7 +4823,7 @@ class AppController(QObject):
             item = self._ai_chat_model.item_at(row)
             if item is None or item.get("role") != "assistant":
                 continue
-            item["html"] = self._ai_render(item.get("content") or "")
+            item.update(self._ai_rendered(item.get("content") or ""))
             self._ai_chat_model.update_at(row, item)
 
     @constant_property(QObject)
@@ -4841,7 +4864,7 @@ class AppController(QObject):
 
     @Slot()
     def aiNewConversation(self) -> None:
-        if self._ai_busy:
+        if self._ai_busy or self._ai_preparing:
             return
         self._ai_sync_conversation()
         self._ai_conversation = None
@@ -4854,7 +4877,7 @@ class AppController(QObject):
 
     @Slot(str)
     def aiOpenConversation(self, conversation_id: str) -> None:
-        if self._ai_busy:
+        if self._ai_busy or self._ai_preparing:
             return
         record = self._ai_store_obj().get(str(conversation_id))
         if record is None:
@@ -4867,7 +4890,7 @@ class AppController(QObject):
 
     @Slot(str)
     def aiDeleteConversation(self, conversation_id: str) -> None:
-        if self._ai_busy:
+        if self._ai_busy or self._ai_preparing:
             return
         target = str(conversation_id)
         if self._ai_conversation is not None and self._ai_conversation.conversation_id == target:
@@ -4877,6 +4900,7 @@ class AppController(QObject):
             self._ai_draft = ""
             self._ai_session_obj().reset_conversation()
         self._ai_store_obj().remove(target)
+        self._ai_prune_image_cache()
         self._ai_refresh_history()
         self.aiChanged.emit()
 
@@ -4903,9 +4927,12 @@ class AppController(QObject):
         """记住输入框草稿：切走再回来不丢。只在已有对话时落盘。"""
         self._ai_draft = str(text or "")
         if self._ai_conversation is not None:
-            self._ai_store_obj().set_draft(
-                self._ai_conversation.conversation_id, self._ai_draft
-            )
+            try:
+                self._ai_store_obj().set_draft(
+                    self._ai_conversation.conversation_id, self._ai_draft
+                )
+            except OSError:
+                self.notificationRequested.emit("Sage", "无法保存对话历史，请检查磁盘权限或删除不再需要的旧对话。", "warning")
 
     @Property(str, notify=aiChanged)
     def aiDraft(self) -> str:
@@ -4918,7 +4945,7 @@ class AppController(QObject):
     @Slot(int, str)
     def aiEditMessage(self, row: int, text: str) -> None:
         """编辑并重发：从这条用户消息起截断，用新内容重新问一次。"""
-        if self._ai_busy:
+        if self._ai_busy or self._ai_preparing:
             return
         index = int(row)
         if index < 0 or index >= len(self._ai_chat_model):
@@ -4929,15 +4956,24 @@ class AppController(QObject):
         question = str(text or "").strip()
         if not question:
             return
+        if len(question) > 10000:
+            self.notificationRequested.emit("Sage", "问题过长，请缩短到 10000 字以内。", "warning")
+            return
         remaining = self._ai_chat_model.items()[:index]
         attachment_rows = item.get("attachments") or []
         while len(self._ai_chat_model) > index:
             self._ai_chat_model.remove_at(len(self._ai_chat_model) - 1)
         self._ai_session_obj().load_history(remaining)
-        if not remaining:
-            # 把标题也换掉，否则第一条被编辑后标题还是旧问题。
-            self._ai_conversation = None
-        self._ai_begin_turn(question, attachment_rows, [])
+        if not remaining and self._ai_conversation is not None:
+            from hr_toolkit.ai.history import make_title
+            self._ai_conversation.title = make_title(question)
+        context_body = str(item.get("apiContent") or "")
+        old_question = str(item.get("content") or "")
+        if context_body and old_question and context_body.endswith(old_question):
+            context_body = context_body[:-len(old_question)] + question
+        elif context_body:
+            context_body += "\nUpdated user question: " + question
+        self._ai_begin_turn(question, attachment_rows, [], context_body=context_body or None)
 
     @Property("QVariantList", notify=aiSettingsChanged)
     def aiModelOptions(self):
@@ -4996,16 +5032,18 @@ class AppController(QObject):
         if not key:
             return False
         try:
-            settings = self._ai_settings_obj()
+            from copy import deepcopy
+            settings = deepcopy(self._ai_settings_obj())
             if key == settings.active_provider:
                 return True
             preset = settings.preset(key)  # 未知 id 会抛 AiConfigError
             settings.provider_config(key)  # 确保这一家的配置节存在
             settings.active_provider = preset.provider_id
             save_ai_settings(settings)
+            self._ai_settings = settings
         except (AiConfigError, OSError):
             return False
-        if self._ai_session is not None:
+        if self._ai_session is not None and not self._ai_busy:
             self._ai_session.refresh_settings(settings)
         self.aiSettingsChanged.emit()
         return True
@@ -5026,7 +5064,8 @@ class AppController(QObject):
         if not name:
             return False
         try:
-            settings = self._ai_settings_obj()
+            from copy import deepcopy
+            settings = deepcopy(self._ai_settings_obj())
             preset = settings.preset()
             config = settings.provider_config()
         except Exception:
@@ -5038,10 +5077,11 @@ class AppController(QObject):
         try:
             config.model = validate_model(name)
             save_ai_settings(settings)
+            self._ai_settings = settings
         except (AiConfigError, OSError) as exc:
             self.aiTestFinished.emit(False, str(exc))
             return False
-        if self._ai_session is not None:
+        if self._ai_session is not None and not self._ai_busy:
             self._ai_session.refresh_settings(settings)
         self.aiSettingsChanged.emit()
         return True
@@ -5055,17 +5095,19 @@ class AppController(QObject):
         if not name:
             return False
         try:
-            settings = self._ai_settings_obj()
+            from copy import deepcopy
+            settings = deepcopy(self._ai_settings_obj())
             preset = settings.preset()
             config = settings.provider_config()
             if not config.add_model(preset, name):
                 self.aiTestFinished.emit(False, f"模型「{name}」已经在列表里了。")
                 return False
             save_ai_settings(settings)
+            self._ai_settings = settings
         except (AiConfigError, OSError) as exc:
             self.aiTestFinished.emit(False, str(exc))
             return False
-        if self._ai_session is not None:
+        if self._ai_session is not None and not self._ai_busy:
             self._ai_session.refresh_settings(settings)
         # 加完直接切过去：用户加它就是为了用它。
         return self.aiSelectModel(name)
@@ -5079,7 +5121,8 @@ class AppController(QObject):
         if not name:
             return False
         try:
-            settings = self._ai_settings_obj()
+            from copy import deepcopy
+            settings = deepcopy(self._ai_settings_obj())
             preset = settings.preset()
             config = settings.provider_config()
             if name == config.resolved_model(preset):
@@ -5089,17 +5132,18 @@ class AppController(QObject):
                 self.aiTestFinished.emit(False, f"列表里没有模型「{name}」。")
                 return False
             save_ai_settings(settings)
+            self._ai_settings = settings
         except (AiConfigError, OSError) as exc:
             self.aiTestFinished.emit(False, str(exc))
             return False
-        if self._ai_session is not None:
+        if self._ai_session is not None and not self._ai_busy:
             self._ai_session.refresh_settings(settings)
         self.aiSettingsChanged.emit()
         return True
 
     @Property(bool, notify=aiChanged)
     def aiBusy(self) -> bool:
-        return self._ai_busy
+        return self._ai_busy or self._ai_preparing
 
     @Property(bool, notify=aiSettingsChanged)
     def aiReady(self) -> bool:
@@ -5134,7 +5178,7 @@ class AppController(QObject):
 
     @Property("QVariantList", notify=aiStatusChanged)
     def aiStatusPhrases(self):
-        """等待首个字时轮流显示的提示，按这一轮实际发出的附件类型生成。"""
+        """Waiting status for the attachments actually sent."""
         from hr_toolkit.ai.status import default_status_phrases
 
         return list(self._ai_status_phrases) or default_status_phrases()
@@ -5177,7 +5221,8 @@ class AppController(QObject):
         from hr_toolkit.ai.config import AiConfigError, save_ai_settings
 
         try:
-            settings = self._ai_settings_obj()
+            from copy import deepcopy
+            settings = deepcopy(self._ai_settings_obj())
             preset = settings.preset(str(provider).strip() or "minimax")
             settings.active_provider = preset.provider_id
             config = settings.provider_config(preset.provider_id)
@@ -5188,11 +5233,12 @@ class AppController(QObject):
             endpoint_text = str(endpoint or "").strip()
             config.endpoint = validate_endpoint(endpoint_text) if endpoint_text else ""
             save_ai_settings(settings)
+            self._ai_settings = settings
         except (AiConfigError, OSError) as exc:
             self.aiTestFinished.emit(False, str(exc))
             return False
         session = self._ai_session
-        if session is not None:
+        if session is not None and not self._ai_busy:
             session.refresh_settings(settings)
         self.aiSettingsChanged.emit()
         return True
@@ -5226,28 +5272,62 @@ class AppController(QObject):
         except Exception:
             return ""
 
+    @Property(bool, notify=aiSettingsChanged)
+    def aiTesting(self):
+        return self._ai_testing
+
+    @Property(bool, notify=aiChanged)
+    def aiPreparing(self):
+        return self._ai_preparing
+
+    @Slot(bool, str)
+    def _ai_test_finished(self, ok, message):
+        self._ai_testing = False
+        self.aiSettingsChanged.emit()
+
     @Slot()
-    def aiTestConnection(self) -> None:
-        settings = self._ai_settings_obj()
+    @Slot(str, str, str, str)
+    def aiTestConnection(self, provider=None, api_key=None, model=None, endpoint=None) -> None:
+        if self._ai_testing or self._closed:
+            return
+        from copy import deepcopy
+        from hr_toolkit.ai.config import normalize_api_key, validate_endpoint, validate_model
+        settings = deepcopy(self._ai_settings_obj())
+        try:
+            if provider is not None:
+                settings.preset(provider)
+                settings.active_provider = provider
+                config = settings.provider_config(provider)
+                config.api_key = normalize_api_key(api_key)
+                config.model = validate_model(model) if model.strip() else ""
+                config.endpoint = validate_endpoint(endpoint) if endpoint.strip() else ""
+        except ValueError as exc:
+            self.aiTestFinished.emit(False, str(exc))
+            return
+        self._ai_testing = True
+        self.aiSettingsChanged.emit()
 
         def worker() -> None:
             from hr_toolkit.ai.client import ChatError, test_connection
-
             try:
                 reply = test_connection(settings)
+                result = (True, "连接成功" + (f"：{reply}" if reply else ""))
             except ChatError as exc:
-                self.aiTestFinished.emit(False, str(exc))
-            except Exception as exc:  # 防御：不友好的底层错误也转成可读提示
-                self.aiTestFinished.emit(False, f"连接测试失败：{exc}")
-            else:
-                self.aiTestFinished.emit(True, "连接成功" + (f"：{reply}" if reply else ""))
+                result = (False, str(exc))
+            except Exception:
+                result = (False, "请求失败，请稍后重试。")
+            if not self._closed:
+                self.aiTestFinished.emit(*result)
 
         threading.Thread(target=worker, daemon=True, name="HRToolkit-ai-test").start()
 
     @Slot(str)
     def aiSendMessage(self, text: str) -> None:
         question = str(text or "").strip()
-        if self._ai_busy:
+        if self._ai_busy or self._ai_preparing:
+            return
+        if len(question) > 10000:
+            self.notificationRequested.emit("Sage", "问题过长，请缩短到 10000 字以内。", "warning")
             return
         if not question and self._ai_attachment_model.rowCount() == 0:
             return
@@ -5257,38 +5337,39 @@ class AppController(QObject):
             return
         # 附件跟着这条消息走：快照进消息行，待发区清空，用户才看得出确实发出去了。
         sent = self._ai_session_obj().consume_pending()
-        attachment_rows = [item.as_model_row() for item in sent]
+        attachment_rows = [item.as_history_row() for item in sent]
         if not question and not attachment_rows:
             return
         self._ai_begin_turn(question, attachment_rows, sent)
 
     def _ai_attach_status_phrases(self, attachment_rows) -> None:
-        """按这一轮实际发出去的附件换一组「等待首个字」的提示。
-
-        发的是图就别再写「正在读取表格」——照抄一句与事实不符的提示，用户一眼
-        就看得出是假的。每轮换一个种子，相邻两次提问的措辞也不一样。
-        """
+        """Show only observable input and waiting state, never invented progress."""
         from hr_toolkit.ai.status import build_status_phrases
 
-        self._ai_status_seq += 1
         self._ai_status_phrases = build_status_phrases(
             [
                 str(row.get("kind") or "")
                 for row in (attachment_rows or [])
                 if isinstance(row, dict)
             ],
-            seed=self._ai_status_seq,
         )
         self.aiStatusChanged.emit()
 
-    def _ai_begin_turn(self, question: str, attachment_rows, sent_attachments) -> None:
+    def _ai_begin_turn(self, question: str, attachment_rows, sent_attachments, *, context_body=None) -> None:
         session = self._ai_session_obj()
         self._ai_ensure_conversation(question)
+        session.prepare_request()
+        session.language = self._presentation.language
+        session.context_label = self._spec.title
+        # Snapshot settings: changing provider mid-response cannot mutate this request.
+        from copy import deepcopy
+        session.refresh_settings(deepcopy(self._ai_settings_obj()))
         self._ai_attach_status_phrases(attachment_rows)
         self._ai_chat_model.append(
             {
                 "role": "user",
-                "content": question if question else "（请分析附加的表格）",
+                "content": question if question else self._presentation.translate("请分析所附文件。", self._presentation.language),
+                "apiContent": context_body or session._context_message(question, sent_attachments),
                 "html": "",
                 "streaming": False,
                 "time": datetime.now().strftime("%H:%M"),
@@ -5316,32 +5397,38 @@ class AppController(QObject):
 
             def flush() -> None:
                 nonlocal last_flush
-                if buffer:
+                if buffer and not self._closed:
                     self._aiDeltaIncoming.emit("".join(buffer))
                     buffer.clear()
                 last_flush = time.monotonic()
 
             try:
-                for delta in session.ask(question, list(sent_attachments or [])):
+                for delta in session.ask(question, list(sent_attachments or []),
+                                         context_body=context_body, image_rows=attachment_rows if context_body else ()):
+                    if self._closed:
+                        return
                     buffer.append(delta)
-                    if time.monotonic() - last_flush >= 0.06:
+                    if time.monotonic() - last_flush >= 0.12:
                         flush()
                 flush()
-                self._aiFinishedIncoming.emit(True, "")
+                if not self._closed:
+                    self._aiFinishedIncoming.emit(True, "")
             except ChatError as exc:
                 flush()
-                self._aiFinishedIncoming.emit(False, str(exc))
+                if not self._closed:
+                    self._aiFinishedIncoming.emit(False, str(exc))
             except Exception as exc:
                 flush()
                 runlog.log_exception("AI 助手请求失败", exc)
-                self._aiFinishedIncoming.emit(False, "请求失败，请稍后重试。")
+                if not self._closed:
+                    self._aiFinishedIncoming.emit(False, "请求失败，请稍后重试。")
 
         threading.Thread(target=worker, daemon=True, name="HRToolkit-ai-chat").start()
 
     @Slot()
     def aiRegenerate(self) -> None:
         """重新生成最后一条回答：退掉最后的一问一答，用同一条问题再问一次。"""
-        if self._ai_busy or len(self._ai_chat_model) < 2:
+        if self._ai_busy or self._ai_preparing or len(self._ai_chat_model) < 2:
             return
         last_row = self._ai_chat_model.item_at(len(self._ai_chat_model) - 1)
         question_row = self._ai_chat_model.item_at(len(self._ai_chat_model) - 2)
@@ -5356,10 +5443,14 @@ class AppController(QObject):
         # 用剩下的消息行重建上下文：带附件的用户行存了 apiContent（表格正文），
         # 所以重问时模型仍然看得见原来的表格。
         self._ai_session_obj().load_history(self._ai_chat_model.items())
-        self._ai_begin_turn(question, attachment_rows, [])
+        self._ai_begin_turn(question, attachment_rows, [], context_body=question_row.get("apiContent") or None)
 
     @Slot()
     def aiStopGenerating(self) -> None:
+        if self._ai_preparing:
+            self._ai_attachment_generation += 1
+            self._ai_preparing = False
+            self.aiChanged.emit()
         if self._ai_session is not None:
             self._ai_session.request_stop()
 
@@ -5393,6 +5484,8 @@ class AppController(QObject):
 
     @Slot(result=bool)
     def aiPasteImage(self) -> bool:
+        if self._ai_busy or self._ai_preparing:
+            return False
         """把剪贴板里的图附加进来；剪贴板没有图返回 False，让普通文本粘贴继续。"""
         try:
             from hr_toolkit.gui_qt.image_input import clipboard_image_payload
@@ -5437,55 +5530,60 @@ class AppController(QObject):
 
     @Slot("QVariantList")
     def aiAttachPaths(self, paths) -> None:
-        """表格走解析管道，图片走压缩管道；两类混选也能一次加完。
-
-        ``paths`` 可能来自拖拽（QUrl）也可能来自文件对话框（字符串），
-        统一走 ``local_drop_paths`` 归一化：``file://`` 前缀、Windows 的
-        ``/D:/`` 盘符形式都在那里处理，这里不重复造一套。
-        """
+        """Decode/parse off the GUI thread; only publish a completed batch here."""
+        if self._ai_busy or self._ai_preparing or self._closed:
+            return
+        from hr_toolkit.ai.assistant import AiAssistantSession
         from hr_toolkit.ai import images as image_support
-
-        session = self._ai_session_obj()
-        added = 0
-        errors: list[str] = []
+        resolved = []
+        errors = []
         for raw in paths or []:
             try:
-                resolved = local_drop_paths([raw])
+                resolved.extend(local_drop_paths([raw]))
             except ValueError as exc:
                 errors.append(str(exc))
-                continue
-            if not resolved:
-                continue
-            path = resolved[0]
-            try:
-                if image_support.is_image_filename(path.name):
-                    self._ai_attach_image_file(str(path))
-                else:
-                    row = session.add_attachment(str(path))
-                    self._ai_attachment_model.append(row)
-                added += 1
-            except ValueError as exc:
-                errors.append(str(exc))
-                continue
-        if added:
-            self.aiChanged.emit()
+        session = self._ai_session_obj()
+        self._ai_prune_image_cache()
+        pending = list(session.pending_attachments())
+        self._ai_preparing = True
+        self._ai_attachment_generation += 1
+        generation = self._ai_attachment_generation
+        self.aiChanged.emit()
+
+        def worker():
+            temporary = AiAssistantSession(session.settings)
+            temporary._attachments = list(pending)
+            for path in resolved:
+                if self._closed or generation != self._ai_attachment_generation:
+                    return
+                try:
+                    if image_support.is_image_filename(path.name):
+                        from hr_toolkit.gui_qt.image_input import load_image_file
+                        payload = load_image_file(path)
+                        temporary.add_image(name=payload["name"], data=payload["data"],
+                                            mime=payload["mime"], width=payload["width"],
+                                            height=payload["height"], path=payload["cached_path"])
+                    else:
+                        temporary.add_attachment(path)
+                except (ValueError, OSError) as exc:
+                    errors.append(str(exc))
+                except Exception:
+                    errors.append("附件解析失败，请检查文件格式。")
+            if not self._closed:
+                self._aiAttachmentsReady.emit(generation, temporary.pending_attachments(), errors)
+
+        threading.Thread(target=worker, daemon=True, name="HRToolkit-ai-attachments").start()
+
+    @Slot(int, object, object)
+    def _apply_ai_attachments(self, generation, attachments, errors):
+        if self._closed or generation != self._ai_attachment_generation:
+            return
+        self._ai_session_obj()._attachments = list(attachments)
+        self._ai_attachment_model.set_items([item.as_model_row() for item in attachments])
+        self._ai_preparing = False
+        self.aiChanged.emit()
         if errors:
             self.notificationRequested.emit("附件解析", "\n".join(errors[:3]), "warning")
-
-    def _ai_attach_image_file(self, path: str) -> None:
-        from hr_toolkit.gui_qt.image_input import load_image_file
-
-        payload = load_image_file(path)
-        session = self._ai_session_obj()
-        row = session.add_image(
-            name=payload["name"],
-            data=payload["data"],
-            mime=payload["mime"],
-            width=payload["width"],
-            height=payload["height"],
-            path=payload.get("cached_path"),
-        )
-        self._ai_attachment_model.append(row)
 
     @Slot(str)
     def aiOpenImage(self, path: str) -> None:
@@ -5494,11 +5592,13 @@ class AppController(QObject):
         if not target:
             return
         if target.startswith("file://"):
-            target = target[len("file://"):]
+            target = QUrl(target).toLocalFile()
         QDesktopServices.openUrl(QUrl.fromLocalFile(target))
 
     @Slot(int)
     def aiRemoveAttachment(self, row: int) -> None:
+        if self._ai_preparing or self._ai_busy:
+            return
         if self._ai_session is not None:
             self._ai_session.remove_attachment(int(row))
         self._ai_attachment_model.remove_at(int(row))
@@ -5506,6 +5606,8 @@ class AppController(QObject):
 
     @Slot()
     def aiClearAttachments(self) -> None:
+        if self._ai_preparing or self._ai_busy:
+            return
         if self._ai_session is not None:
             self._ai_session.clear_attachments()
         self._ai_attachment_model.clear()
@@ -5513,26 +5615,34 @@ class AppController(QObject):
 
     @Slot(str)
     def _apply_ai_delta(self, text: str) -> None:
+        if self._closed:
+            return
         row = len(self._ai_chat_model) - 1
         item = self._ai_chat_model.item_at(row)
         if not item:
             return
         item["content"] = (item.get("content") or "") + str(text)
-        item["html"] = self._ai_render(item["content"])
+        item.update(self._ai_rendered(item["content"]))
         self._ai_chat_model.update_at(row, item)
 
     @Slot(bool, str)
     def _apply_ai_finished(self, ok: bool, error: str) -> None:
+        if self._closed:
+            return
         row = len(self._ai_chat_model) - 1
         item = self._ai_chat_model.item_at(row)
         if item is not None and item.get("role") == "assistant":
-            if not ok:
+            stopped = self._ai_session is not None and self._ai_session.stopped
+            item["status"] = "stopped" if stopped else ("complete" if ok else "error")
+            if stopped:
+                item["content"] = (item.get("content") or "") + "\n\n" + self._presentation.translate("已停止生成", self._presentation.language)
+            elif not ok:
                 existing = item.get("content") or ""
                 item["content"] = (
                     existing + "\n\n" if existing else ""
-                ) + "⚠ " + str(error or "请求失败")
+                ) + "⚠ " + self._presentation.translate(str(error or "请求失败"), self._presentation.language)
             item["streaming"] = False
-            item["html"] = self._ai_render(item.get("content") or "")
+            item.update(self._ai_rendered(item.get("content") or ""))
             self._ai_chat_model.update_at(row, item)
         # 用户行记下真正发给模型的正文（含表格），历史恢复与重新生成都要用它。
         question_row = row - 1
@@ -5694,6 +5804,8 @@ class AppController(QObject):
         if hasattr(self, "_log_flush_timer") and self._log_flush_timer.isActive():
             self._log_flush_timer.stop()
         self._closed = True
+        if self._ai_session is not None:
+            self._ai_session.request_stop()
         self._clear_trash_items()
         if self._drop_preview_request is not None:
             self.cancelDropPreview(self._drop_preview_request["token"])

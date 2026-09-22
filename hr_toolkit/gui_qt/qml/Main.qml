@@ -64,7 +64,16 @@ ApplicationWindow {
     // Sage 面板停靠在主 RowLayout 右侧（见 AiSidePanel），中间内容区随之收窄而不被遮挡。
     property bool aiPanelRequested: false
     function toggleAiPanel() {
-        if (!aiPanelRequested) {
+        if (aiWindowLoader.item && aiWindowLoader.item.visible) {
+            aiWindowLoader.item.raise()
+            aiWindowLoader.item.requestActivate()
+            return
+        }
+        if (!aiPanelRequested || (aiPanelLoader.item && aiPanelLoader.item.autoCollapsed)) {
+            if (workspaceLayout.width - (sidebar.pinned ? sidebar.width : 0) < 1048) {
+                openAiWindow()
+                return
+            }
             aiPanelRequested = true
             return
         }

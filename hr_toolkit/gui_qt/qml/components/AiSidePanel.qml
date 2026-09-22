@@ -55,7 +55,6 @@ FocusScope {
 
     readonly property color markColor: Ui.color("markRay")
 
-    function open() { openRequested() }
     function close() { closeRequested() }
     function expand() { collapsed = false }
     function updateAvailability() {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import time
 import uuid
@@ -21,6 +22,7 @@ from hr_toolkit.common.paths import user_app_data_dir
 
 CONVERSATIONS_FILENAME = "ai-conversations.json"
 CONVERSATION_LIMIT = 40
+MAX_HISTORY_BYTES = 16 * 1024 * 1024
 TITLE_MAX_CHARS = 22
 DEFAULT_TITLE = "新对话"
 
@@ -48,7 +50,10 @@ class ConversationRecord:
             "id": self.conversation_id,
             "title": self.title,
             "updatedAt": self.updated_at,
-            "messages": self.messages,
+            "messages": [dict(
+                {key: item[key] for key in ("role", "content", "time", "apiContent", "attachments") if key in item},
+                status=("stopped" if item.get("streaming") else item.get("status", "complete"))
+            ) for item in self.messages],
             "draft": self.draft,
         }
 
@@ -88,7 +93,10 @@ def format_updated(stamp: float, *, now: Optional[float] = None) -> str:
     if not stamp:
         return ""
     reference = datetime.fromtimestamp(now if now is not None else time.time())
-    moment = datetime.fromtimestamp(stamp)
+    try:
+        moment = datetime.fromtimestamp(stamp)
+    except (ValueError, OSError, OverflowError):
+        return ""
     delta_days = (reference.date() - moment.date()).days
     if delta_days <= 0:
         return "今天 " + moment.strftime("%H:%M")
@@ -115,6 +123,8 @@ class ConversationStore:
     def __init__(self, path: Optional[Path] = None, *, limit: int = CONVERSATION_LIMIT) -> None:
         self._path = Path(path) if path is not None else default_conversations_path()
         self._limit = max(1, int(limit))
+        self._unreadable = False
+        self._corrupt = False
         self._items: List[ConversationRecord] = self._read()
 
     # --------------------------------------------------------------- 读取
@@ -124,13 +134,25 @@ class ConversationStore:
 
     def _read(self) -> List[ConversationRecord]:
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, ValueError):
+            with self._path.open("rb") as handle:
+                body = handle.read(MAX_HISTORY_BYTES + 1)
+            if len(body) > MAX_HISTORY_BYTES:
+                raise OSError("Conversation history exceeds the size limit")
+            raw = json.loads(body.decode("utf-8"))
+        except FileNotFoundError:
+            return []
+        except ValueError:
+            self._corrupt = True
+            return []
+        except OSError:
+            self._unreadable = True
             return []
         if not isinstance(raw, dict):
+            self._corrupt = True
             return []
         entries = raw.get("conversations")
         if not isinstance(entries, list):
+            self._corrupt = True
             return []
         records: List[ConversationRecord] = []
         for entry in entries:
@@ -153,6 +175,11 @@ class ConversationStore:
                 return item
         return None
 
+    def retained_image_paths(self):
+        return [part.get("path", "") for record in self._items
+                for message in record.messages for part in message.get("attachments", [])
+                if isinstance(part, dict) and part.get("kind") == "image"]
+
     def latest(self) -> Optional[ConversationRecord]:
         return self._items[0] if self._items else None
 
@@ -169,6 +196,8 @@ class ConversationStore:
         record = self.get(conversation_id)
         if record is None:
             return False
+        if record.draft == str(draft or ""):
+            return True
         record.draft = str(draft or "")
         self.save()
         return True
@@ -206,7 +235,16 @@ class ConversationStore:
         return False
 
     def save(self) -> Path:
+        if self._unreadable:
+            raise OSError("Cannot replace unreadable conversation history")
+        if self._corrupt:
+            backup = self._path.with_name(self._path.name + ".corrupt-" + uuid.uuid4().hex)
+            shutil.copy2(self._path, backup)
+            self._corrupt = False
         payload = {"conversations": [item.as_payload() for item in self._items]}
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+        if len(serialized.encode("utf-8")) > MAX_HISTORY_BYTES:
+            raise OSError("Conversation history exceeds the size limit")
         target = self._path
         target.parent.mkdir(parents=True, exist_ok=True)
         handle = tempfile.NamedTemporaryFile(
@@ -214,8 +252,7 @@ class ConversationStore:
         )
         try:
             with handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
+                handle.write(serialized)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(handle.name, target)
@@ -255,6 +292,7 @@ def _record_from_payload(entry: Any) -> Optional[ConversationRecord]:
             messages.append(
                 {
                     "role": role,
+                    "status": str(item.get("status") or ("stopped" if item.get("streaming") else "complete")),
                     "content": str(item.get("content") or ""),
                     "time": str(item.get("time") or ""),
                     "apiContent": str(item.get("apiContent") or ""),

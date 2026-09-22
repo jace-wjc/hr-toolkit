@@ -42,7 +42,7 @@ from hr_toolkit.ai.history import (
     format_updated,
     make_title,
 )
-from hr_toolkit.ai.markdown import markdown_to_plain, render_markdown_html
+from hr_toolkit.ai.markdown import markdown_to_plain, render_markdown_html, render_markdown_payload
 from hr_toolkit.ai.status import (
     build_status_phrases,
     default_status_phrases,
@@ -95,9 +95,8 @@ class StatusPhraseTests(unittest.TestCase):
             build_status_phrases(["image"], seed=5),
         )
         sequences = {tuple(build_status_phrases(["sheet"], seed=n)) for n in range(8)}
-        self.assertGreater(
-            len(sequences), 1, "相邻几轮的提示完全相同，等于还是写死的文案"
-        )
+        self.assertEqual(len(sequences), 1)
+        self.assertIn("等待", next(iter(sequences))[0])
 
     def test_default_phrases_are_available_before_the_first_turn(self):
         self.assertTrue(default_status_phrases())
@@ -1026,8 +1025,8 @@ class MarkdownRenderTests(unittest.TestCase):
         from hr_toolkit.ai.markdown import _THEMES
 
         html = render_markdown_html("| a | b |\n| --- | --- |\n| c | d |")
-        self.assertIn('cellspacing="1"', html)
-        self.assertIn('cellpadding="6"', html)
+        self.assertIn('cellspacing="0"', html)
+        self.assertIn('cellpadding="8"', html)
         self.assertIn(_THEMES["light"]["grid"], html)
         self.assertIn(_THEMES["light"]["head_bg"], html)
         self.assertIn(_THEMES["light"]["cell_bg"], html)
@@ -1040,6 +1039,44 @@ class MarkdownRenderTests(unittest.TestCase):
         self.assertIn("<b>事项</b>", html)
         self.assertIn("报销", html)
         self.assertNotIn("|", html)
+
+    def test_native_tables_preserve_block_order_and_column_alignment(self):
+        source = "## Summary\n\n| Name | Amount |\n| :---: | ---: |\n| Ann | 0 |\n\n- Done"
+        result = render_markdown_payload(source)
+        self.assertEqual([b["kind"] for b in result["blocks"]], ["text", "table", "text"])
+        table = result["blocks"][1]
+        self.assertEqual(table["alignments"], ["center", "right"])
+        self.assertEqual(table["rows"], [["Ann", "0"]])
+        self.assertEqual(result["html"], render_markdown_html(source))
+        self.assertIn("<ul", result["blocks"][2]["html"])
+
+    def test_table_pipes_empty_cells_and_safe_multiline_content(self):
+        source = (
+            "| Name | Note | Value |\n| --- | --- | --- |\n"
+            "| A\\|B | `C|D`<br>Second<br />Third | |\n"
+            "| Ann | <img src=x> `<br>` | 0 |\n| Bob |"
+        )
+        table = render_markdown_payload(source)["blocks"][0]
+        self.assertEqual(len(table["headers"]), 3)
+        self.assertEqual([len(row) for row in table["rows"]], [3, 3, 3])
+        self.assertEqual(table["rows"][0][0], "A|B")
+        self.assertIn("C|D", table["rows"][0][1])
+        self.assertIn("<br>Second<br>Third", table["rows"][0][1])
+        self.assertIn("—", table["rows"][0][2])
+        self.assertIn("&lt;img src=x&gt;", table["rows"][1][1])
+        self.assertIn("&lt;br&gt;", table["rows"][1][1])
+        self.assertEqual(table["rows"][1][2], "0")
+        self.assertIn("—", table["rows"][2][2])
+
+    def test_large_table_retains_all_rows_with_bounded_width_sampling(self):
+        source = "| ID | Notes |\n| ---: | --- |\n" + "\n".join(
+            "| %d | Employee records pending confirmation |" % i for i in range(2000)
+        )
+        table = render_markdown_payload(source)["blocks"][0]
+        self.assertEqual(len(table["rows"]), 2000)
+        self.assertEqual(table["rows"][-1][0], "1999")
+        self.assertEqual(sum(table["widths"]), 100)
+        self.assertGreater(table["widths"][1], table["widths"][0])
 
     def test_table_grid_stays_lighter_than_the_dense_grid(self):
         """回归：网格底色再加深回原来那版，小面板里又会像 Excel 截图。"""
@@ -1188,6 +1225,182 @@ class ConversationHistoryTests(unittest.TestCase):
         self.assertEqual(len(long_title), TITLE_MAX_CHARS + 1)
         self.assertTrue(long_title.endswith("…"))
         self.assertNotIn("#", long_title)
+
+
+
+class AiReliabilityRegressionTests(unittest.TestCase):
+    def session(self, response=None):
+        from hr_toolkit.ai.assistant import AiAssistantSession
+        settings = AiSettings()
+        settings.provider_config().api_key = 'offline-test'
+        return AiAssistantSession(settings, opener=_FakeOpener(response or _sse_stream([
+            {'choices': [{'delta': {'content': 'answer'}}]}
+        ])))
+
+    def test_cancel_before_worker_does_not_open_network(self):
+        session = self.session()
+        session.prepare_request()
+        session.request_stop()
+        self.assertEqual(list(session.ask('question')), [])
+        self.assertTrue(session.stopped)
+
+    def test_consumed_attachments_release_slots_and_remove_correct_pending_item(self):
+        from hr_toolkit.ai.assistant import Attachment, MAX_ATTACHMENTS
+        session = self.session()
+        session._attachments = [Attachment(Path(str(i)), str(i), '') for i in range(MAX_ATTACHMENTS)]
+        sent = session.consume_pending()
+        self.assertEqual(len(sent), MAX_ATTACHMENTS)
+        self.assertEqual(session.attachments_summary(), [])
+        session._attachments.append(Attachment(Path('new'), 'new', ''))
+        self.assertTrue(session.remove_attachment(0))
+        self.assertEqual(session.pending_attachments(), [])
+
+    def test_retry_sends_saved_spreadsheet_and_image_context(self):
+        from hr_toolkit.ai import images
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            image = Path(folder) / 'image.png'
+            image.write_bytes(b'\x89PNG\r\n\x1a\nimage')
+            session = self.session()
+            with patch('hr_toolkit.ai.assistant.stream_chat', return_value=iter(['answer'])) as send:
+                list(session.ask('question', [], context_body='saved spreadsheet rows',
+                                 image_rows=[{'kind': 'image', 'path': str(image), 'mime': 'image/png'}]))
+            content = send.call_args.args[0][-1]['content']
+            self.assertEqual(content[0]['text'], 'saved spreadsheet rows')
+            self.assertTrue(content[1]['image_url']['url'].startswith('data:image/png;base64,'))
+            self.assertEqual(session.last_context_body, 'saved spreadsheet rows')
+
+    def test_whole_request_history_budget_drops_complete_old_turns(self):
+        session = self.session()
+        session.load_history([{'role': 'user', 'content': 'x' * 70000},
+                              {'role': 'assistant', 'content': 'old'},
+                              {'role': 'user', 'content': 'recent'},
+                              {'role': 'assistant', 'content': 'recent answer'}])
+        session.language = 'en_US'
+        messages = session.build_messages('z' * 60000)
+        self.assertEqual(messages[1]['content'], 'recent')
+        self.assertIn('US English', messages[0]['content'])
+        self.assertLess(sum(len(m['content']) for m in messages), 125000)
+
+    def test_sse_multiline_and_truncated_response(self):
+        source = io.BytesIO(b'data: {"choices":\ndata: [{"delta":{"content":"hello"}}]}\n\n')
+        stream = ai_client.stream_chat([], endpoint='https://example.com', api_key='key',
+                                      model='model', opener=_FakeOpener(source))
+        self.assertEqual(next(stream), 'hello')
+        with self.assertRaisesRegex(ai_client.ChatError, '不完整'):
+            next(stream)
+
+    def test_malformed_success_body_is_a_friendly_error(self):
+        with self.assertRaises(ai_client.ChatError):
+            ai_client.chat_once([], endpoint='https://example.com', api_key='key', model='model',
+                                opener=_FakeOpener(io.BytesIO(b'[]')))
+
+    def test_image_names_unique_even_with_frozen_clock(self):
+        from hr_toolkit.ai.images import save_cached_image
+        with tempfile.TemporaryDirectory() as folder:
+            paths = {save_cached_image(b'image', directory=Path(folder)) for _ in range(100)}
+            self.assertEqual(len(paths), 100)
+
+    def test_corrupt_history_is_preserved_before_next_save(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'history.json'
+            path.write_text('{broken', encoding='utf-8')
+            store = ConversationStore(path)
+            store.create('new')
+            backups = list(path.parent.glob('history.json.corrupt-*'))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(), '{broken')
+
+    def test_failed_answer_excluded_from_restored_model_context(self):
+        session = self.session()
+        session.load_history([{'role': 'user', 'content': 'question'},
+                              {'role': 'assistant', 'content': 'network error', 'status': 'error'}])
+        self.assertNotIn('network error', str(session.build_messages('again')))
+
+    def test_scan_limit_discloses_partial_totals(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'large.xlsx'
+            book = Workbook()
+            sheet = book.active
+            sheet.append(['Name', 'Amount'])
+            for i in range(30):
+                sheet.append(['Employee %d' % i, i])
+            book.save(path)
+            with patch('hr_toolkit.ai.excel_context.MAX_STATS_ROWS', 5):
+                context = build_workbook_context(path)
+            self.assertTrue(context.sheets[0].scan_limited)
+            text = render_workbook_markdown(context)
+            self.assertIn('不得作为全表合计', text)
+            self.assertNotIn('统计基于全部数据', text)
+
+    def test_stop_interrupts_a_blocked_socket_read(self):
+        import socket
+        import threading
+        from types import SimpleNamespace
+        left, right = socket.socketpair()
+        bound = threading.Event()
+        control = ai_client.StreamControl()
+        class Response:
+            def __init__(self):
+                self.reader = left.makefile("rb")
+                self.fp = SimpleNamespace(raw=SimpleNamespace(_sock=left))
+            def __enter__(self):
+                bound.set()
+                return self
+            def __exit__(self, *args):
+                self.reader.close()
+                left.close()
+            def readline(self, size):
+                return self.reader.readline(size)
+        result, errors = [], []
+        def run():
+            try:
+                result.extend(ai_client.stream_chat([], endpoint="https://example.com", api_key="key",
+                              model="model", opener=lambda *a, **k: Response(), control=control))
+            except Exception as exc:
+                errors.append(exc)
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(bound.wait(1))
+            control.cancel()
+            worker.join(1)
+            self.assertFalse(worker.is_alive(), "Stop did not unblock the response read")
+            self.assertEqual(errors, [])
+            self.assertEqual(result, [])
+        finally:
+            right.close()
+            left.close()
+
+    def test_history_does_not_persist_rendered_html_and_recovers_interrupted_turn(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "history.json"
+            store = ConversationStore(path)
+            record = store.create("test")
+            record.messages = [{"role": "assistant", "content": "", "html": "rendered data", "streaming": True}]
+            store.upsert(record)
+            self.assertNotIn('"html"', path.read_text())
+            restored = ConversationStore(path).latest()
+            self.assertEqual(restored.messages[0]["status"], "stopped")
+
+    def test_null_bytes_cannot_collide_with_markdown_placeholders(self):
+        self.assertIn("safe", render_markdown_html("\x009999\x00 `safe`"))
+
+    def test_redirect_does_not_forward_credentials(self):
+        request = urllib.request.Request("https://example.com", headers={"Authorization": "Bearer key"})
+        with self.assertRaises(ai_client.ChatError):
+            ai_client._NoRedirect().redirect_request(request, None, 307, "redirect", {}, "https://other.example")
+
+    def test_image_cache_quota_preserves_existing_files(self):
+        from hr_toolkit.ai.images import save_cached_image
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            with patch("hr_toolkit.ai.images.MAX_CACHE_BYTES", 8):
+                original = save_cached_image(b"first", directory=Path(folder))
+                with self.assertRaisesRegex(ValueError, "缓存已满"):
+                    save_cached_image(b"second", directory=Path(folder))
+                self.assertEqual(original.read_bytes(), b"first")
 
 
 if __name__ == "__main__":

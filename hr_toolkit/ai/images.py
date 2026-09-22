@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import base64
 import os
-import shutil
-import time
+import uuid
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
@@ -33,6 +32,7 @@ MAX_IMAGE_EDGE = 1568
 IMAGE_CACHE_DIRNAME = "ai-images"
 # 缓存目录最多留这么多张；超出按修改时间删最旧的。粘贴的图片只有这里一份副本。
 IMAGE_CACHE_LIMIT = 60
+MAX_CACHE_BYTES = 256 * 1024 * 1024
 
 
 def is_image_filename(name: str) -> bool:
@@ -121,9 +121,11 @@ def save_cached_image(data: bytes, suffix: str = ".png", *, directory: Optional[
         raise ValueError("图片内容为空。")
     target_dir = Path(directory) if directory is not None else image_cache_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
+    occupied = sum(child.stat().st_size for child in target_dir.iterdir() if child.is_file())
+    if occupied + len(blob) > MAX_CACHE_BYTES:
+        raise ValueError("图片缓存已满，请删除不再需要的旧对话后再试。")
     extension = suffix if str(suffix).startswith(".") else "." + str(suffix)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    name = "img-%s-%d%s" % (stamp, int(time.time() * 1000) % 1000000, extension)
+    name = "img-%s%s" % (uuid.uuid4().hex, extension)
     target = target_dir / name
     temp = target_dir / (".partial-" + name)
     try:
@@ -184,9 +186,3 @@ def prune_image_cache(
         except OSError:
             continue
     return removed
-
-
-def clear_image_cache(*, directory: Optional[Path] = None) -> None:
-    """删除整个缓存目录（用户主动清理时用）。"""
-    target_dir = Path(directory) if directory is not None else image_cache_dir()
-    shutil.rmtree(str(target_dir), ignore_errors=True)
