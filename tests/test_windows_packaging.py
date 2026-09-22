@@ -134,7 +134,8 @@ class WindowsPackagingTests(unittest.TestCase):
             "from hr_toolkit.tutorial_content import tutorial_groups",
             controller_source,
         )
-        self.assertNotIn("from hr_toolkit.gui", controller_source)
+        # Reject the legacy GUI module without also rejecting gui_qt imports.
+        self.assertNotRegex(controller_source, r"(?m)^\s*from hr_toolkit\.gui(?:\s|\.)")
         for hidden_import in build_windows.HIDDEN_IMPORTS:
             self.assertIn(["--hidden-import", hidden_import], [main[index : index + 2] for index in range(len(main) - 1)])
         for module in build_windows.COLLECT_ALL_MODULES:
