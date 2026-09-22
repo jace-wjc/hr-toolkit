@@ -28,6 +28,14 @@ def selection_hint(mode: str) -> str:
     }[mode]
 
 
+def accepts_file_name(path: Path, mode: str) -> bool:
+    """Shared filename filter for validation and recent menus; no filesystem IO."""
+    return mode != "directory_single" and (
+        path.suffix.lower() in EXCEL_SUFFIXES
+        or (mode in {"excel_archive_multi", "excel_archive_or_folder"} and is_supported_archive_file(path))
+    )
+
+
 def validate_selection(paths: list[Path], mode: str, cancelled) -> list[Path]:
     """Run on a worker: stat may block on an unavailable network share.
 
@@ -48,10 +56,7 @@ def validate_selection(paths: list[Path], mode: str, cancelled) -> list[Path]:
             if path.is_dir():
                 valid = mode in {"directory_single", "excel_archive_multi", "excel_or_folder", "excel_archive_or_folder"}
             elif path.is_file():
-                valid = mode != "directory_single" and (
-                    path.suffix.lower() in EXCEL_SUFFIXES
-                    or (mode in {"excel_archive_multi", "excel_archive_or_folder"} and is_supported_archive_file(path))
-                )
+                valid = accepts_file_name(path, mode)
             else:
                 raise ValueError("不存在、无法访问或不是普通文件/文件夹")
             if not valid:

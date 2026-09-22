@@ -776,6 +776,134 @@ class QtControllerTests(unittest.TestCase):
             self.assertIsNone(controller._drop_preview_pending)
             self.assertFalse(controller.finishDropPreview(current["token"], "support", urls))
 
+    def test_recent_selection_history_is_bounded_filtered_and_metadata_only(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        root = Path(tempfile.gettempdir()) / "recent-test"
+        items = [{"path": str(root / (str(i) + ".xlsx")), "kind": "file"} for i in range(25)]
+        items += [{"path": str(root / str(i)), "kind": "folder"} for i in range(15)]
+        with patch.object(Path, "stat", side_effect=AssertionError("history must not touch disk")):
+            controller._recent_selections[controller._spec.nav_id] = controller._bounded_recent_selections(
+                [None, {"path": "relative.xlsx", "kind": "file"}] + items + items[:2])
+            self.assertEqual(len(controller.recentSelectionItems("input", "file")), 20)
+            self.assertEqual(len(controller.recentSelectionItems("input", "folder")), 10)
+            self.assertEqual(controller.recentSelectionItems("support", "file")[0]["path"], items[0]["path"])
+            controller._tool_recent_selections().insert(0, {"path": str(root / "batch.tar.gz"), "kind": "file"})
+            self.assertEqual(len(controller.recentSelectionItems("input", "file")), 21)
+            self.assertEqual(len(controller.recentSelectionItems("support", "file")), 20)
+            controller.removeRecentSelection(items[0]["path"], "file")
+            self.assertNotIn(items[0], controller._tool_recent_selections())
+            controller.clearRecentSelections()
+            self.assertEqual(controller._tool_recent_selections(), [])
+
+    def test_recent_file_reuses_validation_and_never_starts_processing(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "名单.xlsx"
+            source.touch()
+            controller._recent_selections[controller._spec.nav_id] = [{"path": str(source), "kind": "file"}]
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker, \
+                 patch.object(controller, "runOrCancel") as run:
+                controller.useRecentSelection("support", str(source), "file", False)
+                worker.call_args.kwargs["target"]()
+                self.assertEqual(controller.supportPath, str(source))
+                self.assertEqual(controller._last_selected_dir, source.parent)
+                self.assertEqual(controller._tool_recent_selections(), [{"path": str(source), "kind": "file"}])
+                source.unlink()
+                controller.useRecentSelection("support", str(source), "file", False)
+                worker.call_args.kwargs["target"]()
+                self.assertEqual(controller.supportPath, str(source))
+                self.assertTrue(controller.selectionFeedback["support"]["error"])
+                run.assert_not_called()
+
+    def test_recent_folder_opens_existing_picker_and_cancel_preserves_selection(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as temp:
+            controller._recent_selections[controller._spec.nav_id] = [{"path": temp, "kind": "folder"}]
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker, \
+                 patch.object(controller.presentation, "file_dialog", return_value=([], "")) as picker, \
+                 patch.object(controller, "runOrCancel") as run:
+                controller.useRecentSelection("input", temp, "browse_files", True)
+                worker.call_args.kwargs["target"]()
+                self.assertEqual(picker.call_args.args[3], temp)
+                self.assertEqual(controller._input_states[controller._state_key()], [])
+                self.assertEqual(controller._tool_recent_selections(), [{"path": temp, "kind": "folder"}])
+                run.assert_not_called()
+                picker.reset_mock()
+                controller.useRecentSelection("input", temp, "browse_files", True)
+                controller.cancelSelectionCheck()
+                worker.call_args.kwargs["target"]()
+                picker.assert_not_called()
+
+    def test_recent_histories_are_isolated_and_cleared_per_tool(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        path = str(Path(tempfile.gettempdir()) / "records.xlsx")
+        entry = {"path": path, "kind": "file"}
+        controller._recent_selections["social_security"] = [entry]
+        controller.selectTool("data_statistics")
+        self.assertEqual(controller.recentSelectionItems("input", "file"), [])
+        with patch.object(controller, "_submit_selection") as submit:
+            controller.useRecentSelection("input", path, "file", False)
+            submit.assert_not_called()
+        controller._recent_selections["data_statistics"] = [entry]
+        controller.clearRecentSelections()
+        controller.selectTool("social_security")
+        self.assertEqual(controller._tool_recent_selections(), [entry])
+        controller.removeRecentSelection(path, "file")
+        self.assertEqual(controller._tool_recent_selections(), [])
+
+    def test_recent_history_records_selected_folders_and_archives_only(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp) / "uploads"
+            folder.mkdir()
+            archive = folder / "records.zip"
+            archive.touch()
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker:
+                controller._submit_selection("input", [archive], replace=True)
+                worker.call_args.kwargs["target"]()
+                self.assertEqual(controller._tool_recent_selections(), [{"path": str(archive), "kind": "file"}])
+                controller._submit_selection("input", [folder], replace=True)
+                worker.call_args.kwargs["target"]()
+                self.assertEqual(controller._tool_recent_selections(), [
+                    {"path": str(folder), "kind": "folder"}, {"path": str(archive), "kind": "file"}])
+
+    def test_recent_open_actions_do_not_select_or_process_items(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "records.xlsx"
+            source.touch()
+            entries = [{"path": str(source), "kind": "file"}, {"path": temp, "kind": "folder"}]
+            controller._recent_selections[controller._spec.nav_id] = entries.copy()
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker, \
+                 patch("hr_toolkit.gui_qt.controller.open_path") as opener, \
+                 patch.object(controller, "_submit_selection") as select, \
+                 patch.object(controller, "runOrCancel") as run:
+                for path, kind, action, expected in ((str(source), "file", "open", source),
+                                                   (str(source), "file", "location", source.parent),
+                                                   (temp, "folder", "open", Path(temp))):
+                    controller.openRecentSelection(path, kind, action)
+                    worker.call_args.kwargs["target"]()
+                    opener.assert_called_with(expected)
+                    self.assertFalse(controller._recent_location_pending)
+                source.unlink()
+                opener.reset_mock()
+                notices = []
+                controller.notificationRequested.connect(lambda *args: notices.append(args))
+                controller.openRecentSelection(str(source), "file", "open")
+                worker.call_args.kwargs["target"]()
+                opener.assert_not_called()
+                self.assertTrue(notices)
+                self.assertFalse(controller._recent_location_pending)
+                self.assertEqual(controller._tool_recent_selections(), entries)
+                select.assert_not_called()
+                run.assert_not_called()
+
     def test_drop_selection_is_atomic_and_support_does_not_change_inputs(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

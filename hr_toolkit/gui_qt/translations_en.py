@@ -1,6 +1,23 @@
 """US English display catalog. Numbered placeholders preserve source data."""
 
 MESSAGES = {
+ '最近使用': 'Recent',
+ '打开文件': 'Open File',
+ '打开文件夹': 'Open Folder',
+ '打开所在文件夹': 'Open Containing Folder',
+ '清空本工具记录': 'Clear Tool History',
+ '仅显示当前工具的记录；打开文件或位置不会添加资料或开始处理。': 'History for this tool only. Opening a file or location does not add inputs or start processing.',
+ '无法打开最近记录：文件或文件夹已移动、删除、无法访问，或没有可用的打开程序。': 'Could not open this recent item. It may have been moved, deleted, or become unavailable, or no suitable app is installed.',
+ '暂时无法打开最近记录，请稍后重试。': 'Could not open this recent item. Please try again.',
+ '最近文件': 'Recent Files',
+ '最近文件夹': 'Recent Folders',
+ '浏览文件': 'Browse Files',
+ '暂无适用于此输入的最近记录。': 'No recent items match this input.',
+ '文件按当前输入类型筛选；选择文件夹位置后仍使用系统选择窗口。': 'Files match the current input type. Browse a recent folder using the system picker.',
+ '移除或清空记录不会删除原文件。': 'Removing history does not delete your files.',
+ '清空记录': 'Clear History',
+ '最近文件已移动、删除或无法访问，请重新选择。': 'The recent file was moved, deleted, or is unavailable. Please select it again.',
+
  '流程核对': 'Workflow Check',
  '异动流程核对': 'Personnel Workflow Check',
  '异动与系统流程核对': 'Personnel Change and Workflow Check',

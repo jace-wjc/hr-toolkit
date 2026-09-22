@@ -87,7 +87,7 @@ from .models import (
     WorkspaceModel,
     ObjectListModel,
 )
-from .input_selection import selection_hint, selection_mode, validate_selection
+from .input_selection import accepts_file_name, selection_hint, selection_mode, validate_selection
 from .drop_paths import local_drop_paths, native_mime_paths, text_paths
 from .rename_review import RenameReview
 from .presentation import Presentation
@@ -137,6 +137,8 @@ class AppController(QObject):
     workspaceSelectionChanged = Signal()
     supportChanged = Signal()
     selectionStateChanged = Signal()
+    recentSelectionsChanged = Signal()
+    _recentLocationReady = Signal(str)
     dropPreviewReady = Signal("QVariantMap", arguments=["preview"])
     formRevisionChanged = Signal()
     lastResultChanged = Signal()
@@ -306,6 +308,9 @@ class AppController(QObject):
         self._result_notice_counts = {}
         self._stop_requested = False
         self._last_selected_dir: Path | None = None
+        self._recent_selections: dict[str, list[dict[str, str]]] = {}
+        self._recent_location_pending = False
+        self._recentLocationReady.connect(self._finish_recent_location)
         self._last_run_by_key: dict[tuple[str, str], tuple[str, bool]] = {}
         self._original_switch_interval: float | None = None
         self._closed = False
@@ -1296,6 +1301,109 @@ class AppController(QObject):
         except Exception:
             pass
 
+    @staticmethod
+    def _bounded_recent_selections(items) -> list[dict[str, str]]:
+        # Metadata only: never stat a network drive while loading/showing history.
+        result, seen = [], set()
+        counts = {"file": 0, "folder": 0}
+        for item in items[:90] if isinstance(items, list) else []:
+            if (not isinstance(item, dict) or not isinstance(item.get("kind"), str)
+                    or item["kind"] not in counts):
+                continue
+            value = item.get("path")
+            if not isinstance(value, str) or not value or len(value) > 32768:
+                continue
+            path = absolute_path_hint(value)
+            if path is None:
+                continue
+            kind = item["kind"]
+            key = (kind, os.path.normcase(str(path)))
+            if key in seen or counts[kind] >= (20 if kind == "file" else 10):
+                continue
+            seen.add(key)
+            counts[kind] += 1
+            result.append({"path": str(path), "kind": kind})
+        return result
+
+    @Slot(str, str, result="QVariantList")
+    def recentSelectionItems(self, role: str, kind: str):
+        if role not in {"input", "support"} or (role == "support" and not self.hasSupportField):
+            return []
+        mode = selection_mode(self._spec, role)
+        return [{**item, "name": Path(item["path"]).name or item["path"]}
+                for item in self._tool_recent_selections() if item["kind"] == kind
+                and (kind == "folder" or accepts_file_name(Path(item["path"]), mode))]
+
+    def _tool_recent_selections(self):
+        # Navigation tools own history; variants of the same tool share it.
+        return self._recent_selections.get(self._spec.nav_id, [])
+
+    @Slot(str, str)
+    def removeRecentSelection(self, path: str, kind: str) -> None:
+        self._recent_selections[self._spec.nav_id] = [item for item in self._tool_recent_selections()
+                                                     if (item["path"], item["kind"]) != (path, kind)]
+        self._save_workspace_preferences()
+        self.recentSelectionsChanged.emit()
+
+    @Slot()
+    def clearRecentSelections(self) -> None:
+        self._recent_selections.pop(self._spec.nav_id, None)
+        self._save_workspace_preferences()
+        self.recentSelectionsChanged.emit()
+
+    @Slot(str, str, str, bool)
+    def useRecentSelection(self, role: str, path: str, action: str, append: bool) -> None:
+        if (not self.selectionEnabled or role not in {"input", "support"}
+                or (role == "support" and not self.hasSupportField)):
+            return
+        kind = "file" if action == "file" else "folder"
+        if action not in {"file", "browse_files", "browse_folder"} or not any(
+                item["path"] == path and item["kind"] == kind for item in self._tool_recent_selections()):
+            return
+        allows_files = self.inputAllowsFiles if role == "input" else True
+        allows_folder = self.inputAllowsFolder if role == "input" else self.supportAllowsFolder
+        if (action in {"file", "browse_files"} and not allows_files
+                or action == "browse_folder" and not allows_folder):
+            return
+        replace = role == "support" or not self.inputAllowsMultiple or (
+            self._spec.tool_id == "data_statistics" and not append)
+        self._submit_selection(role, [Path(path)], replace=replace,
+                               recent_action=action, recent_append=append)
+
+    @Slot(str, str, str)
+    def openRecentSelection(self, path: str, kind: str, action: str) -> None:
+        if (not self.selectionEnabled or self._recent_location_pending
+                or kind not in {"file", "folder"} or action not in {"open", "location"}
+                or not any(item["path"] == path and item["kind"] == kind
+                           for item in self._tool_recent_selections())):
+            return
+        target = Path(path).parent if kind == "file" and action == "location" else Path(path)
+        folder = kind == "folder" or action == "location"
+        self._recent_location_pending = True
+
+        def worker():
+            error = ""
+            try:
+                if not (target.is_dir() if folder else target.is_file()):
+                    raise OSError("unavailable")
+                if not self._closed:
+                    open_path(target)
+            except OSError:
+                error = "无法打开最近记录：文件或文件夹已移动、删除、无法访问，或没有可用的打开程序。"
+            if not self._closed:
+                self._recentLocationReady.emit(error)
+
+        try:
+            threading.Thread(target=worker, daemon=True, name="HRToolkit-recent-open").start()
+        except RuntimeError:
+            self._finish_recent_location("暂时无法打开最近记录，请稍后重试。")
+
+    @Slot(str)
+    def _finish_recent_location(self, error: str) -> None:
+        self._recent_location_pending = False
+        if error and not self._closed:
+            self.notificationRequested.emit("无法打开资料", error, "warning")
+
     def _selection_block_reason(self) -> str:
         if self._closed or self._shutdown_requested:
             return "工具正在退出，暂不能添加资料。"
@@ -1511,11 +1619,13 @@ class AppController(QObject):
         self._submit_selection(role, self._local_drop_paths(urls),
                                replace=role == "support" or not self.inputAllowsMultiple)
 
-    def _submit_selection(self, role: str, paths: list[Path], *, replace: bool, workspace_source=None) -> None:
+    def _submit_selection(self, role: str, paths: list[Path], *, replace: bool, workspace_source=None,
+                          recent_action: str = "", recent_append: bool = False) -> None:
         if not self.selectionEnabled:
             return
-        mode = selection_mode(self._spec, role)
+        mode = "directory_single" if recent_action.startswith("browse_") else selection_mode(self._spec, role)
         request = {"context": self._selection_context(), "role": role,
+                   "recent_action": recent_action, "recent_append": recent_append,
                    "replace": replace, "cancel": threading.Event()}
         self._selection_request = request
         self._selection_message(role, "正在检查所选资料…")
@@ -1523,8 +1633,22 @@ class AppController(QObject):
         def worker() -> None:
             try:
                 self._validate_workspace_source(workspace_source)
+                if recent_action == "file" and not paths[0].is_file():
+                    raise ValueError("最近文件已移动、删除或无法访问，请重新选择。")
                 selected = validate_selection(paths, mode, request["cancel"].is_set)
                 error = ""
+                # Record only bounded metadata, on this existing worker. A failed
+                # history lookup must never change the selection result.
+                history = []
+                for path in selected[:30]:
+                    if request["cancel"].is_set():
+                        break
+                    try:
+                        kind = "folder" if path.is_dir() else "file"
+                        history.append({"path": str(path), "kind": kind})
+                    except OSError:
+                        pass
+                request["history"] = history
             except Exception as exc:
                 selected, error = [], str(exc)
             if not self._closed:
@@ -1553,6 +1677,17 @@ class AppController(QObject):
         if error:
             self._selection_message(role, error, True)
             return
+        action = request.get("recent_action", "")
+        if action.startswith("browse_"):
+            self._selection_message(role, "")
+            initial_dir = str(paths[0])
+            if role == "input":
+                chooser = self._choose_input_files if action == "browse_files" else self._choose_input_folder
+                chooser(append=request["recent_append"], initial_dir=initial_dir)
+            else:
+                chooser = self._choose_support_file if action == "browse_files" else self._choose_support_folder
+                chooser(initial_dir=initial_dir)
+            return
         if role == "support":
             self._support_states[self._state_key()] = str(paths[0])
             self.supportChanged.emit()
@@ -1566,6 +1701,13 @@ class AppController(QObject):
             if not added:
                 message = "这些资料已在列表中，未重复添加。"
         self._selection_message(role, message)
+        history = request.get("history", [])
+        if history:
+            self._recent_selections[self._spec.nav_id] = self._bounded_recent_selections(history + self._tool_recent_selections())
+            if action == "file":
+                self._last_selected_dir = paths[0].parent
+            self._save_workspace_preferences()
+            self.recentSelectionsChanged.emit()
 
     @Slot()
     def cancelSelectionCheck(self) -> None:
@@ -1581,12 +1723,12 @@ class AppController(QObject):
     def appendInputFiles(self) -> None:
         self._choose_input_files(append=True)
 
-    def _choose_input_files(self, *, append: bool) -> None:
+    def _choose_input_files(self, *, append: bool, initial_dir: str | None = None) -> None:
         if not self.selectionEnabled or not self.inputAllowsFiles:
             return
         parent = self._dialog_parent()
         file_filter = f"Excel 或压缩包 (*.xlsx *.xls {ARCHIVE_FILE_DIALOG_PATTERN});;所有文件 (*)"
-        initial_dir = self._file_dialog_initial_dir()
+        initial_dir = self._file_dialog_initial_dir() if initial_dir is None else initial_dir
         if self._spec.input_mode == "excel_single":
             filename, _selected = self._presentation.file_dialog(QFileDialog.getOpenFileName,
                 parent, self._spec.input_drop_title, initial_dir, "Excel 工作簿 (*.xlsx *.xls);;所有文件 (*)"
@@ -1609,11 +1751,11 @@ class AppController(QObject):
     def appendInputFolder(self) -> None:
         self._choose_input_folder(append=True)
 
-    def _choose_input_folder(self, *, append: bool) -> None:
+    def _choose_input_folder(self, *, append: bool, initial_dir: str | None = None) -> None:
         if not self.selectionEnabled or not self.inputAllowsFolder:
             return
         selected = self._presentation.file_dialog(QFileDialog.getExistingDirectory,
-            self._dialog_parent(), self._spec.input_drop_title, self._file_dialog_initial_dir()
+            self._dialog_parent(), self._spec.input_drop_title, self._file_dialog_initial_dir() if initial_dir is None else initial_dir
         )
         if selected:
             self._remember_file_dialog_path(selected)
@@ -1711,13 +1853,16 @@ class AppController(QObject):
 
     @Slot()
     def chooseSupportFile(self) -> None:
+        self._choose_support_file()
+
+    def _choose_support_file(self, *, initial_dir: str | None = None) -> None:
         if not self.selectionEnabled or not self.hasSupportField:
             return
         file_filter = "Excel 工作簿 (*.xlsx *.xls);;所有文件 (*)"
         if self._spec.support_mode == "excel_archive_or_folder":
             file_filter = f"Excel 或压缩包 (*.xlsx *.xls {ARCHIVE_FILE_DIALOG_PATTERN});;所有文件 (*)"
         filename, _selected = self._presentation.file_dialog(QFileDialog.getOpenFileName,
-            self._dialog_parent(), self._spec.support_label, self._file_dialog_initial_dir(), file_filter
+            self._dialog_parent(), self._spec.support_label, self._file_dialog_initial_dir() if initial_dir is None else initial_dir, file_filter
         )
         if filename:
             self._remember_file_dialog_path(filename)
@@ -1725,10 +1870,13 @@ class AppController(QObject):
 
     @Slot()
     def chooseSupportFolder(self) -> None:
+        self._choose_support_folder()
+
+    def _choose_support_folder(self, *, initial_dir: str | None = None) -> None:
         if not self.selectionEnabled or not self.hasSupportField or not self.supportAllowsFolder:
             return
         selected = self._presentation.file_dialog(QFileDialog.getExistingDirectory,
-            self._dialog_parent(), self._spec.support_label, self._file_dialog_initial_dir()
+            self._dialog_parent(), self._spec.support_label, self._file_dialog_initial_dir() if initial_dir is None else initial_dir
         )
         if selected:
             self._remember_file_dialog_path(selected)
@@ -1968,6 +2116,14 @@ class AppController(QObject):
             if isinstance(candidates, list):
                 self._recent_projects = [path for value in candidates if (path := absolute_path_hint(value)) is not None][:8]
         self._last_selected_dir = last_dir
+        # Legacy global entries have no reliable tool ownership (and may contain
+        # inferred parent folders). Do not seed them into the new tool histories.
+        histories = state.get("recent_selections_by_tool", {})
+        self._recent_selections = {
+            nav_id: self._bounded_recent_selections(histories.get(nav_id, []))
+            for _group, items in NAV_GROUPS for nav_id, _label in items
+        } if isinstance(histories, dict) else {}
+        self.recentSelectionsChanged.emit()
         self._release_notes_seen_version = str(state.get("release_notes_seen_version") or "")
         self._material_preferences = MaterialPreferences.from_payload(
             state.get("material_preferences")
@@ -2034,6 +2190,7 @@ class AppController(QObject):
                     payload.update(existing)
         except Exception:
             pass
+        payload.pop("recent_selections", None)
         payload.update(
             {
                 "version": max(2, int(payload.get("version", 0) or 0)),
@@ -2041,6 +2198,7 @@ class AppController(QObject):
                 "recent_projects": [str(item) for item in self._recent_projects[:8]],
                 "material_preferences": self._material_preferences.to_payload(),
                 "last_selected_dir": str(self._last_selected_dir) if self._last_selected_dir is not None else None,
+                "recent_selections_by_tool": self._recent_selections,
                 "salary_header_profiles": self._salary_header_profiles,
                 "header_name_rules": self._header_name_rules,
                 "release_notes_seen_version": self._release_notes_seen_version,

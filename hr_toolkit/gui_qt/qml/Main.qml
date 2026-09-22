@@ -945,6 +945,11 @@ ApplicationWindow {
                                             else controller.appendInputFiles()
                                         }
                                     }
+                                    RecentSelectionButton {
+                                        objectName: "inputRecentButton"
+                                        backend: controller; selectionRole: "input"
+                                        appendMode: inputList.count > 0
+                                    }
                                     AppButton { objectName: "clearInputsButton"; visible: inputList.count > 0; enabled: controller.selectionEnabled; text: "清空"; variant: "link"; onClicked: controller.clearInputs() }
                                 }
                                 Rectangle {
@@ -1162,6 +1167,7 @@ ApplicationWindow {
                                             }
                                             AppButton { enabled: controller.selectionEnabled; text: controller.currentTool === "material_collector" ? "选择文件" : controller.supportButtonText; variant: "link"; onClicked: controller.chooseSupportFile() }
                                             AppButton { enabled: controller.selectionEnabled; visible: controller.supportAllowsFolder; text: "选择文件夹"; variant: "link"; onClicked: controller.chooseSupportFolder() }
+                                            RecentSelectionButton { objectName: "supportRecentButton"; backend: controller; selectionRole: "support" }
                                             AppButton { enabled: controller.selectionEnabled; visible: !!controller.supportPath; text: "清除"; variant: "link"; onClicked: controller.clearSupport() }
                                         }
                                         Text { Layout.fillWidth: true; text: Ui.text(controller.supportDropHint); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
