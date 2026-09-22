@@ -109,7 +109,7 @@ class PresentationTests(unittest.TestCase):
         result = view.file_dialog(picker, None, "选择文件", "C:/资料", "Excel 文件 (*.xlsx *.xls)")
         self.assertEqual(result[0], "C:/资料/姓名.xlsx")
         self.assertEqual(picker.call_args[0][2], "C:/资料")
-        self.assertEqual(picker.call_args[1]["options"], QFileDialog.DontUseNativeDialog)
+        self.assertEqual(picker.call_args[1], {})
         self.assertNotRegex(picker.call_args[0][1], r"[\u3400-\u9fff]")
 
     def test_qt_catalog_layouts_load_and_unload_on_language_switch(self):

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from .compat import QObject, Property, Signal, Slot, QApplication, QEvent, QT_MAJOR, constant_property
+from .compat import QObject, Property, Signal, Slot, QApplication, QT_MAJOR, constant_property
 
 if QT_MAJOR == 6:
     from PySide6.QtCore import QTranslator
@@ -213,93 +213,10 @@ class Presentation(QObject):
         return text
 
     def file_dialog(self, function, parent, title, directory, *args):
-        from .compat import QFileDialog
         title = self.translate(title, self._language)
         filters = tuple(self.translate(value, self._language) for value in args)
-        # Qt dialogs follow the selected palette and language, independent of OS locale.
+        # Keep Qt's native picker and each function's original options (notably
+        # ShowDirsOnly for folder selection). OS controls follow the OS appearance
+        # and language; only application-provided titles and filters are translated.
         self._apply_language()
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-        try:
-            return function(parent, title, directory, *filters, options=QFileDialog.DontUseNativeDialog)
-        finally:
-            if app is not None:
-                app.removeEventFilter(self)
-
-    def eventFilter(self, watched, event):
-        from .compat import QFileDialog
-        if event.type() == QEvent.Show and isinstance(watched, QFileDialog):
-            self._size_file_dialog(watched)
-            if self._theme == 'dark':
-                self._style_file_dialog_icons(watched)
-        return False
-
-    @staticmethod
-    def _style_file_dialog_icons(dialog):
-        # Platform navigation icons can remain black even with a dark Qt palette.
-        # Draw only the six stock toolbar glyphs; folder/file icons stay untouched.
-        if QT_MAJOR == 6:
-            from PySide6.QtCore import Qt, QPointF, QRectF
-            from PySide6.QtGui import QIcon, QPainter, QPalette, QPen, QPixmap, QPolygonF
-            from PySide6.QtWidgets import QToolButton
-        else:
-            from PySide2.QtCore import Qt, QPointF, QRectF
-            from PySide2.QtGui import QIcon, QPainter, QPalette, QPen, QPixmap, QPolygonF
-            from PySide2.QtWidgets import QToolButton
-        strokes = {
-            'backButton': [[(10, 3), (5, 8), (10, 13)]],
-            'forwardButton': [[(6, 3), (11, 8), (6, 13)]],
-            'toParentButton': [[(3, 7), (8, 2), (13, 7)], [(8, 2), (8, 14)]],
-            'newFolderButton': [[(2, 13), (2, 4), (6, 4), (8, 6), (14, 6), (14, 13), (2, 13)],
-                                [(8, 8), (8, 12)], [(6, 10), (10, 10)]],
-            'listModeButton': [[(6, y), (14, y)] for y in (4, 8, 12)],
-            'detailModeButton': [[(6, y), (10, y)] for y in (4, 8, 12)],
-        }
-        for name, lines in strokes.items():
-            button = dialog.findChild(QToolButton, name)
-            if button is None:
-                continue
-            icon = QIcon()
-            for mode, group in ((QIcon.Normal, QPalette.Active), (QIcon.Disabled, QPalette.Disabled)):
-                pixmap = QPixmap(32, 32)
-                pixmap.fill(Qt.transparent)
-                painter = QPainter(pixmap)
-                painter.setRenderHint(QPainter.Antialiasing)
-                painter.scale(2, 2)
-                painter.setPen(QPen(dialog.palette().color(group, QPalette.ButtonText), 1.4))
-                for points in lines:
-                    painter.drawPolyline(QPolygonF([QPointF(x, y) for x, y in points]))
-                if name in ('listModeButton', 'detailModeButton'):
-                    for y in (4, 8, 12):
-                        painter.drawRect(QRectF(2, y - 1, 2, 2))
-                        if name == 'detailModeButton':
-                            painter.drawLine(QPointF(12, y), QPointF(14, y))
-                painter.end()
-                pixmap.setDevicePixelRatio(2)
-                icon.addPixmap(pixmap, mode)
-            button.setIcon(icon)
-
-    @staticmethod
-    def _size_file_dialog(dialog):
-        # Size the stock picker; do not replace its selection/navigation behavior.
-        if QT_MAJOR == 6:
-            from PySide6.QtWidgets import QHeaderView, QSplitter, QTreeView
-        else:
-            from PySide2.QtWidgets import QHeaderView, QSplitter, QTreeView
-        screen = dialog.screen() or QApplication.primaryScreen()
-        available = screen.availableGeometry()
-        dialog.resize(min(max(dialog.width(), 900), available.width() - 48),
-                      min(max(dialog.height(), 540), available.height() - 64))
-        splitter = dialog.findChild(QSplitter, 'splitter')
-        if splitter is not None and len(splitter.sizes()) == 2:
-            sidebar_width = max(160, splitter.sizes()[0])
-            splitter.setSizes([sidebar_width, max(240, dialog.width() - sidebar_width - 48)])
-        tree = dialog.findChild(QTreeView, 'treeView')
-        if tree is not None and tree.header().count() >= 4:
-            header = tree.header()
-            header.setStretchLastSection(False)
-            header.setSectionResizeMode(0, QHeaderView.Stretch)
-            for column, width in ((1, 72), (2, 90), (3, 170)):
-                header.setSectionResizeMode(column, QHeaderView.Interactive)
-                header.resizeSection(column, width)
+        return function(parent, title, directory, *filters)

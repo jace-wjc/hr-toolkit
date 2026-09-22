@@ -26,13 +26,13 @@ if QT_MAJOR == 6:
     from PySide6.QtQml import QQmlExpression, QQmlEngine
     from PySide6.QtQuick import QQuickItem
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QFileDialog, QPushButton, QSplitter
+    from PySide6.QtWidgets import QFileDialog, QPushButton
     from PySide6.QtCore import QEventLoop, QTimer
 else:
     from PySide2.QtQml import QQmlExpression, QQmlEngine
     from PySide2.QtQuick import QQuickItem
     from PySide2.QtTest import QTest
-    from PySide2.QtWidgets import QFileDialog, QPushButton, QSplitter
+    from PySide2.QtWidgets import QFileDialog, QPushButton
     from PySide2.QtCore import QEventLoop, QTimer
 
 
@@ -200,7 +200,7 @@ def main():
             js('appearanceDialog.open()'); wait(30)
             assert js('appearanceDialog.width <= root.width')
             js('appearanceDialog.close()')
-            # Qt-provided file dialogs follow the app locale, not the desktop locale.
+            # Qt fallback dialogs follow the app locale; native pickers use the OS locale.
             for locale, expected in [('zh_CN', '取消'), ('en_US', 'Cancel')]:
                 controller.presentation.setLanguage(locale)
                 picker = QFileDialog()
@@ -228,22 +228,15 @@ def main():
             assert 'Current Project · Read-only' not in visible_texts()
             if os.environ.get('HR_PRESENTATION_SCREENSHOTS'):
                 window.grabWindow().save(str(Path(os.environ['HR_PRESENTATION_SCREENSHOTS']) / 'fixed-dark-workspace.png'))
-            picker_checks = []
-            def inspect_picker():
-                picker = QApplication.activeModalWidget()
-                try:
-                    assert isinstance(picker, QFileDialog)
-                    assert picker.style().objectName().lower() == 'fusion'
-                    assert picker.findChild(QSplitter, 'splitter').sizes()[0] >= 140
-                    if os.environ.get('HR_PRESENTATION_SCREENSHOTS'):
-                        picker.grab().save(str(Path(os.environ['HR_PRESENTATION_SCREENSHOTS']) / 'fixed-dark-picker.png'))
-                    picker_checks.append(True)
-                finally:
-                    if picker is not None:
-                        picker.reject()
-            QTimer.singleShot(150, inspect_picker)
-            selected = controller.presentation.file_dialog(QFileDialog.getExistingDirectory, None, '选择文件夹', temp)
-            assert selected == '' and picker_checks == [True], 'Picker cancellation or styling changed'
+            # Native dialogs cannot be inspected as Qt widgets in a headless probe.
+            # Check delegation and cancellation without opening a real OS picker.
+            for theme in ('light', 'dark'):
+                controller.presentation.setTheme(theme)
+                with patch.object(QFileDialog, 'getExistingDirectory', return_value='') as picker:
+                    selected = controller.presentation.file_dialog(
+                        QFileDialog.getExistingDirectory, None, '选择文件夹', temp)
+                    assert selected == '', 'Picker cancellation changed'
+                    picker.assert_called_once_with(None, 'Select Folder', temp)
             saved = json.loads(settings.read_text(encoding='utf-8'))
             assert saved['theme'] == 'dark' and saved['language'] == 'en_US'
             assert not errors, errors
