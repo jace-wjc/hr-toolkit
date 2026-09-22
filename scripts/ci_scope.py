@@ -99,7 +99,6 @@ ROUTES = {
     "hr_toolkit/ai/markdown.py": "ai_assistant",
     "hr_toolkit/ai/history.py": "ai_assistant",
     "hr_toolkit/ai/images.py": "ai_assistant",
-    "scripts/ai_assistant_demo.py": "ai_assistant",
     "hr_toolkit/tools/salary_headers.py": "salary_merge salary_split output_regression",
     "hr_toolkit/tools/registry.py": "tool_registry " + BUSINESS + " " + GUI,
     "hr_toolkit/tools/__init__.py": BUSINESS,

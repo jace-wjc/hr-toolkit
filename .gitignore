@@ -84,3 +84,10 @@ hr_toolkit/*.zip
 
 # Local agent workspace data
 .workbuddy/
+
+# Local AI credentials, conversations, cached attachments and review captures
+ai-assistant.json
+ai-conversations.json
+ai-conversations.json.corrupt-*
+ai-images/
+docs/ai-markdown-*.png
