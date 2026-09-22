@@ -9,7 +9,8 @@ from hr_toolkit.gui_qt.input_selection import selection_hint, selection_mode, va
 
 class InputSelectionTests(unittest.TestCase):
     def test_all_tool_variants_have_explicit_policies(self):
-        self.assertEqual(len(SPECS), 11)
+        self.assertTrue(SPECS)
+        self.assertEqual(len({(spec.nav_id, spec.variant) for spec in SPECS}), len(SPECS))
         for spec in SPECS:
             with self.subTest(tool=spec.tool_id):
                 self.assertEqual(selection_mode(spec, "input"), spec.input_mode)
@@ -22,6 +23,7 @@ class InputSelectionTests(unittest.TestCase):
         self.assertEqual(selection_mode(spec_for("social_security"), "support"), "excel_file")
         self.assertEqual(selection_mode(spec_for("personnel_change_merge"), "support"), "excel_or_folder")
         self.assertEqual(selection_mode(spec_for("archive_import", "export"), "support"), "excel_archive_or_folder")
+        self.assertEqual(selection_mode(spec_for("personnel_change_merge", "reconcile"), "support"), "excel_file")
 
     def test_types_counts_and_compound_archive_suffixes(self):
         with tempfile.TemporaryDirectory() as temp:
