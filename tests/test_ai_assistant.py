@@ -112,7 +112,7 @@ class AiConfigTests(unittest.TestCase):
                 providers={
                     "deepseek": ProviderConfig(
                         api_key="sk-test-key-123456",
-                        model="deepseek-reasoner",
+                        model="deepseek-v4-pro",
                         endpoint="",
                     )
                 },
@@ -123,9 +123,9 @@ class AiConfigTests(unittest.TestCase):
             self.assertEqual(loaded.temperature, 0.7)
             config = loaded.provider_config("deepseek")
             self.assertEqual(config.api_key, "sk-test-key-123456")
-            self.assertEqual(config.model, "deepseek-reasoner")
+            self.assertEqual(config.model, "deepseek-v4-pro")
             preset = loaded.preset("deepseek")
-            self.assertEqual(config.resolved_model(preset), "deepseek-reasoner")
+            self.assertEqual(config.resolved_model(preset), "deepseek-v4-pro")
             self.assertEqual(
                 config.resolved_endpoint(preset), preset.endpoint
             )
