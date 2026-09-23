@@ -14,6 +14,7 @@ Item {
     property bool workspaceAutoHidden: false
     property real workspacePanelLeft: 0
     property real aiPanelLeft: 0
+    property bool sharedPanel: false
     signal workspaceToggleRequested()
     // 右上角这排按钮要避开的右侧停靠面板（项目栏 / Sage）左边缘；
     // 面板都收起时它等于窗口右边缘。
@@ -76,7 +77,7 @@ Item {
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
         enabled: chrome.workspaceAvailable || chrome.workspaceExpanded
-        Accessible.name: Ui.text(chrome.workspaceAutoHidden ? "取消项目文件自动恢复"
+        Accessible.name: Ui.text(chrome.sharedPanel ? (chrome.workspaceExpanded ? "收起侧面板" : "展开侧面板") : chrome.workspaceAutoHidden ? "取消项目文件自动恢复"
                          : chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件")
         onClicked: chrome.workspaceToggleRequested()
         background: Rectangle {
@@ -98,7 +99,7 @@ Item {
         }
         ToolTip.visible: hovered
         ToolTip.delay: 700
-        ToolTip.text: Ui.text(chrome.workspaceAutoHidden ? "窗口较窄，项目文件将在放大后恢复；点击取消恢复"
+        ToolTip.text: Ui.text(chrome.sharedPanel ? (chrome.workspaceExpanded ? "收起侧面板" : "展开侧面板") : chrome.workspaceAutoHidden ? "窗口较窄，项目文件将在放大后恢复；点击取消恢复"
                       : chrome.workspaceExpanded ? "收起项目文件" : "展开项目文件")
     }
     Row {

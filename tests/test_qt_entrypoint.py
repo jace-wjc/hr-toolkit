@@ -73,7 +73,7 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("virtual notes: wrapping, resize, scroll, history and bounded delegates OK", completed.stdout)
 
-    def test_workspace_panel_allocates_width_and_restores_after_narrow_resize(self) -> None:
+    def test_workspace_panel_allocates_width_and_stays_closed_after_narrow_resize(self) -> None:
         self._qt_compat_or_skip()
         probe = Path(__file__).with_name("qt_workspace_panel_probe.py")
         completed = subprocess.run(
@@ -83,7 +83,7 @@ class QtEntrypointTests(unittest.TestCase):
             encoding="utf-8", errors="replace", timeout=45, check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-        self.assertIn("responsive workspace: non-overlap, animation, hysteresis, restore, focus and core widths OK", completed.stdout)
+        self.assertIn("responsive workspace: non-overlap, animation, explicit reopen, focus and core widths OK", completed.stdout)
 
     def test_ai_assistant_panel_and_popups_instantiate_without_layout_loops(self) -> None:
         self._qt_compat_or_skip()
@@ -537,13 +537,14 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("readonly property int contentMaxWidth: 820", source)
         chrome = (qml_path.parent / "components" / "WindowChrome.qml").read_text(encoding="utf-8")
         self.assertIn('objectName: "workspaceToggleButton"', chrome)
-        self.assertIn("workspaceAvailable: controller.hasProject", source)
+        self.assertIn("workspaceAvailable: true", source)
         self.assertIn("workspaceExpanded: workspaceDrawer.opened", source)
         self.assertIn("workspacePanelLeft: workspaceDrawer.x", source)
+        self.assertIn("anchors.rightMargin: root.width - workspaceDrawer.x + 54", source)
         self.assertIn("enabled: chrome.workspaceAvailable || chrome.workspaceExpanded", chrome)
         self.assertIn("onClicked: chrome.workspaceToggleRequested()", chrome)
         self.assertIn("onWorkspaceToggleRequested:", source)
-        self.assertIn("if (controller.workspaceExpanded) workspaceDrawer.close()", source)
+        self.assertIn("if (workspaceDrawer.opened) root.closeRightPanel()", source)
         self.assertIn("controller.setWorkspaceExpanded(true)", source)
         self.assertIn("workspaceDrawer.open()", source)
         self.assertIn('objectName: "runButton"', source)
@@ -563,7 +564,7 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("WorkspaceSidePanel {", source)
         self.assertIn("parent: workspaceLayout", source)
         self.assertIn("liveAvailableWidth: workspaceLayout.width - sidebar.reservedWidth", source)
-        self.assertIn("height: Math.max(0, workspaceDrawer.height - 16)", source)
+        self.assertIn("height: Math.max(0, workspaceDrawer.height - y - 8)", source)
         panel = (qml_path.parent / "components" / "WorkspaceSidePanel.qml").read_text(encoding="utf-8")
         self.assertIn("restoreThreshold: collapseThreshold + 80", panel)
         self.assertIn("Layout.preferredWidth: reservedWidth", panel)
@@ -607,8 +608,8 @@ class QtEntrypointTests(unittest.TestCase):
         panel = source.split("WorkspaceSidePanel {", 1)[1].split("Rectangle {", 1)[0]
         self.assertIn("parent: workspaceLayout", panel)
         surface = source.split("id: workspaceSurface", 1)[1].split("ColumnLayout {", 1)[0]
-        self.assertIn("x: 8; y: 8", surface)
-        self.assertIn("height: Math.max(0, workspaceDrawer.height - 16)", surface)
+        self.assertIn("x: 8; y: utilityTabs.y + utilityTabs.height + 8", surface)
+        self.assertIn("height: Math.max(0, workspaceDrawer.height - y - 8)", surface)
         self.assertIn("chrome.nativeMac ? 82 : chrome.nativeWindows", chrome)
         self.assertIn("chrome.sidebar.pinned ? Math.max(16, chrome.sidebar.width - width - 16) : 16", chrome)
         self.assertIn("chrome.nativeMac || chrome.nativeWindows ? 5 : 9", chrome)

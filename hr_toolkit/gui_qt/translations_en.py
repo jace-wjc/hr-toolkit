@@ -1,7 +1,13 @@
 """US English display catalog. Numbered placeholders preserve source data."""
 
 MESSAGES = {
+ '收起侧面板': 'Collapse Side Panel',
+ '展开侧面板': 'Open Side Panel',
+ '重置位置': 'Reset Position',
  '收起 Sage': 'Collapse Sage',
+ '拖动可移动位置；右键可重置位置。': 'Drag to move. Right-click to reset the position.',
+ '询问 Sage': 'Ask Sage',
+ '询问 Sage (Ctrl+K)': 'Ask Sage (Ctrl+K)',
  '回到最新消息': 'Jump to latest',
  '更多选项': 'More options',
  '数据发送说明': 'Data sharing details',

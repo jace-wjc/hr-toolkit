@@ -1,4 +1,4 @@
-"""Compile and instantiate the docked Sage panel, its popups and the detached window."""
+"""Compile and instantiate the Sage shared panel, its popups and the detached window."""
 from __future__ import annotations
 import os
 import struct
@@ -250,7 +250,7 @@ def sage_open_probe() -> int:
     engine.load(QUrl.fromLocalFile(str(qml)))
     assert engine.rootObjects(), errors
     root = engine.rootObjects()[0]
-    button = root.findChild(QObject, "sidebarAiButton")
+    button = root.findChild(QObject, "sageLauncher")
     assert button is not None
     for width in (1560, 1024, 1560):
         print("Sage open: width %d" % width, flush=True)
@@ -299,19 +299,494 @@ def sage_open_probe() -> int:
             QTest.mouseMove(window, QPoint(int(coordinates[0]), int(coordinates[1])))
             wait_for_events(80)
             assert evaluate(snapshot) == before, "Hover changed the settled conversation layout"
-        assert evaluate("(function(){var a=Array.prototype.filter.call(contentItem.children,function(c){return c.settledHeight!==undefined});"
+        assert evaluate("(function(){var a=Array.prototype.filter.call(contentItem.children,function(c){return c.settledHeight!==undefined && !c.pooled});"
                         "a.sort(function(a,b){return a.y-b.y});for(var i=0;i<a.length;++i){"
                         "if(Math.abs(a[i].height-a[i].implicitHeight)>1)return false;"
                         "if(i && a[i].y<a[i-1].y+a[i-1].height-1)return false;}return a.length>0;})()"), "Message rows overlap or retain provisional heights"
+        # This probe checks tail-following on reopening. Reading-position
+        # retention while followTail is false is covered by interaction_probe.
+        evaluate("followTail=true; positionViewAtEnd()")
+        wait_for_events(80)
         root.setProperty("aiPanelRequested", False)
         if detached is not None:
-            detached.setProperty("visible", False)
+            detached.setProperty("requestedOpen", False)
         wait_for_events(50)
     assert not errors, errors
     delete_qobject(root)
+    delete_qobject(engine)
     controller.close()
     application.setFont(original_font)
-    print("Sage open probe OK: restored CJK tables, tail following, docked/detached reopening, and stable hover/navigation")
+    print("Sage open probe OK: restored CJK tables, tail following, overlay reopening, and stable hover/navigation")
+    return 0
+
+
+def design_probe() -> int:
+    """Compare both reading widths/themes/languages using synthetic local data."""
+    from hr_toolkit.gui_qt.compat import delete_qobject
+    application = QApplication.instance() or QApplication([])
+    font = application.font()
+    if sys.platform == "darwin":
+        font.setFamily("PingFang SC")
+        application.setFont(font)
+    controller = Controller()
+    controller._save_workspace_preferences = lambda: None
+    controller._ai_settings = ai_config.AiSettings()
+    controller._ai_settings.provider_config().api_key = "offline-ui-fixture"
+    store = ai_history.ConversationStore(_PROBE_DIR / "design-history.json")
+    record = store.create("字段核对 / Review fields")
+    answer = ("## 字段差异\n\n**什么是字段差异：** 同一人、同一事件，汇总表和流程文件中某个字段的内容不一样。\n\n"
+              "本次核对有 **1 处**：\n\n| 姓名 | 字段 | 汇总表内容 | 流程内容 |\n| --- | --- | --- | --- |\n"
+              "| 示例员工 | 婚否 | 未婚 | 已婚 |\n\n## 如何处理\n\n"
+              "**系统行为：** 发现差异时，保留汇总表已有内容，不自动覆盖。\n\n"
+              "1. 确认哪个来源正确（询问本人、查原始档案）。\n2. 流程正确：在汇总表中手动更正。\n"
+              "3. 汇总表正确：保留原值，确认流程是否填写错误。\n\n"
+              "可核对 `employee_id` 与日期，避免同名人员混淆。")
+    record.messages = [{"role": "user", "content": "字段差异是什么意思？"}, {"role": "assistant", "content": answer}]
+    store.upsert(record)
+    controller._ai_conversation_store = store
+    controller._ai_restore_record(record)
+    engine = QQmlApplicationEngine()
+    errors = []
+    engine.warnings.connect(lambda messages: errors.extend(e.toString() for e in messages))
+    engine.rootContext().setContextProperty("controller", controller)
+    engine.rootContext().setContextProperty("appearance", controller.presentation)
+    source = '''import QtQuick 2.15
+import QtQuick.Window 2.15
+import "."
+Window {
+    width: 620; height: 920; visible: true; color: Ui.color("window")
+    property var savedHeading: null
+    function named(name) {
+        function scan(o) {
+            if (o.objectName === name) return o
+            var children = o.children || []
+            for (var i=0; i<children.length; ++i) { var found=scan(children[i]); if(found) return found }
+            return null
+        }
+        return scan(contentItem)
+    }
+    Component.onCompleted: Ui.backend = appearance
+    AiChatPanel { anchors.fill: parent; showDetachButton: false; showCollapseButton: false }
+}'''
+    base = Path(__file__).resolve().parents[1] / "hr_toolkit/gui_qt/qml/components/DesignProbe.qml"
+    engine.loadData(source.encode(), QUrl.fromLocalFile(str(base)))
+    assert engine.rootObjects(), errors
+    root = engine.rootObjects()[0]
+    panel = root.findChild(QObject, "aiChatPanel")
+    view = root.findChild(QObject, "aiChatView")
+    def evaluate(obj, expression):
+        query = QQmlExpression(engine.rootContext(), obj, expression)
+        value = query.evaluate()
+        assert not query.hasError(), query.error().toString()
+        return value[0] if isinstance(value, tuple) else value
+    for width in (400, 620):
+        root.setProperty("width", width)
+        for language in ("zh_CN", "en_US"):
+            controller.presentation.setLanguage(language)
+            for theme in ("light", "dark"):
+                controller.presentation.setTheme(theme)
+                wait_for_events(120)
+                evaluate(view, "followTail=false; positionViewAtBeginning()")
+                wait_for_events(60)
+                # Qt 5's offscreen platform cannot always read back a window.
+                # Geometry/state checks run in CI; image capture is opt-in locally.
+                if "--screenshots" in sys.argv:
+                    image = root.grabWindow()
+                    assert not image.isNull()
+                    image.save(str(_PROBE_DIR / ("sage-%d-%s-%s.png" % (width, language, theme))))
+                assert float(view.property("height")) > 400
+                assert evaluate(view, "(function(){var a=contentItem.children;for(var i=0;i<a.length;++i)if(a[i].settledHeight!==undefined && !a[i].pooled && Math.abs(a[i].height-a[i].implicitHeight)>1)return false;return true})()")
+    root.setProperty("width", 400)
+    root.setProperty("height", 520)
+    wait_for_events(100)
+    assert float(view.property("height")) > 200
+    assert evaluate(root, "(function(){var input=named('aiInputArea');return input.mapToItem(contentItem,0,input.height).y < height;})()")
+    root.setProperty("height", 920)
+    wait_for_events(100)
+    copied = []
+    controller.aiCopyMessage = lambda text: copied.append(text)
+    assert evaluate(root, "named('aiUserCopy')!==null")
+    evaluate(root, "named('aiUserCopy').forceActiveFocus(); named('aiUserCopy').clicked()")
+    assert copied == ["字段差异是什么意思？"]
+    assert evaluate(root, "named('aiUserCopy').label==='已复制'")
+    more = root.findChild(QObject, "aiMoreButton")
+    evaluate(more, "forceActiveFocus()")
+    QTest.keyClick(root, Qt.Key_Return)
+    wait_for_events(50)
+    menu = root.findChild(QObject, "aiMorePopup")
+    assert menu.property("opened")
+    privacy_button = root.findChild(QObject, "aiPrivacyButton")
+    assert click_item(engine, root, privacy_button)
+    wait_for_events(80)
+    privacy = root.findChild(QObject, "aiPrivacyPopup")
+    assert privacy.property("opened") and not menu.property("opened")
+    QTest.keyClick(root, Qt.Key_Escape)
+    wait_for_events(50)
+    assert not privacy.property("opened")
+    # Completed blocks must keep their native objects as streaming appends blocks.
+    controller._ai_chat_model.set_items([])
+    controller._ai_busy = True
+    controller._ai_chat_model.append({"role": "assistant", "content": "", "streaming": True})
+    controller._apply_ai_delta("## Stable heading\n\n")
+    controller._drain_ai_text(immediate=True)
+    wait_for_events(100)
+    assert evaluate(root, "savedHeading=named('aiMarkdownText'); savedHeading!==null")
+    for chunk in ("A short paragraph.\n\n", "**Another paragraph** with `code`.\n\n"):
+        controller._apply_ai_delta(chunk)
+        wait_for_events(250)
+        assert evaluate(root, "named('aiMarkdownText')===savedHeading")
+    controller._apply_ai_finished(True, "")
+    wait_for_events(350)
+    assert not controller.aiBusy and not controller._ai_text_timer.isActive()
+    # Long code stays selectable inside a bounded, horizontally scrollable block.
+    controller._ai_chat_model.set_items([{"role": "assistant", "content": "code",
+        **controller._ai_rendered("```text\n" + "employee_field_" * 100 + "\n```"), "streaming": False}])
+    wait_for_events(100)
+    assert evaluate(root, "named('aiCodeScroll').contentWidth > named('aiCodeScroll').width")
+    long_reply = "Paragraph for reading earlier content.\n\n" * 60
+    controller._ai_chat_model.set_items([{"role": "assistant", "content": long_reply,
+        **controller._ai_rendered(long_reply), "streaming": True}])
+    controller._ai_busy = True
+    wait_for_events(100)
+    evaluate(view, "followTail=false; positionViewAtBeginning()")
+    wait_for_events(60)
+    reading_y = float(view.property("contentY"))
+    controller._apply_ai_delta("A newly received ending.")
+    wait_for_events(300)
+    assert not view.property("followTail")
+    assert abs(float(view.property("contentY")) - reading_y) < 1
+    controller._apply_ai_finished(True, "")
+    wait_for_events(350)
+    # A reply without content shows a separate stopped status and no copy link.
+    controller._ai_chat_model.set_items([{"role": "assistant", "content": "", "streaming": False, "status": "stopped"}])
+    wait_for_events(100)
+    assert evaluate(panel, "(function scan(o){if(o.label==='复制' && o.visible)return false;var a=o.children||[];for(var i=0;i<a.length;++i)if(!scan(a[i]))return false;return true})(this)")
+    assert not errors, errors
+    print("Design probe OK: 400/620 px, Chinese/English, light/dark; stable streaming blocks and empty stopped state.%s" % ((" Screenshots: " + str(_PROBE_DIR)) if "--screenshots" in sys.argv else ""))
+    delete_qobject(root)
+    delete_qobject(engine)
+    controller.close()
+    return 0
+
+
+def long_scroll_probe() -> int:
+    """Reproduce scrollbar scrubbing with 2,400 paragraphs, without an API call.
+
+    Assert bounded live renderers, not machine-dependent timing thresholds.
+    Report event-loop timings for local before/after comparisons.
+    """
+    import time
+    from hr_toolkit.gui_qt.compat import delete_qobject
+    application = QApplication.instance() or QApplication([])
+    controller = Controller()
+    controller._save_workspace_preferences = lambda: None
+    engine = QQmlApplicationEngine()
+    engine.rootContext().setContextProperty("controller", controller)
+    engine.rootContext().setContextProperty("appearance", controller.presentation)
+    errors = []
+    engine.warnings.connect(lambda messages: errors.extend(e.toString() for e in messages))
+    source = '''import QtQuick 2.15
+import QtQuick.Window 2.15
+import "."
+Window {
+    width: 520; height: 800; visible: true
+    Component.onCompleted: Ui.backend = appearance
+    AiChatPanel { anchors.fill: parent }
+    function countText() {
+        function scan(o) {
+            var n=o.objectName === "aiMarkdownText" ? 1 : 0
+            var c=o.children || []
+            for(var i=0;i<c.length;++i) n+=scan(c[i])
+            return n
+        }
+        return scan(contentItem)
+    }
+}'''
+    base = Path(__file__).resolve().parents[1] / "hr_toolkit/gui_qt/qml/components/LongScrollProbe.qml"
+    engine.loadData(source.encode(), QUrl.fromLocalFile(str(base)))
+    assert engine.rootObjects(), errors
+    root = engine.rootObjects()[0]
+    view = root.findChild(QObject, "aiChatView")
+    bar = root.findChild(QObject, "aiConversationScrollBar")
+
+    def evaluate(obj, expression):
+        query = QQmlExpression(engine.rootContext(), obj, expression)
+        value = query.evaluate()
+        assert not query.hasError(), query.error().toString()
+        return value[0] if isinstance(value, tuple) else value
+
+    try:
+        answer = "\n\n".join("**段落 %d**：这是员工资料核对说明，请确认姓名、部门和入职日期。 Review employee records and verify dates." % i for i in range(300))
+        rows = []
+        for i in range(8):
+            rows.extend([
+                {"role": "user", "content": "Review batch %d" % i, "streaming": False},
+                {"role": "assistant", "content": answer, "streaming": False, **controller._ai_rendered(answer)},
+            ])
+        controller._ai_chat_model.set_items(rows)
+        wait_for_events(300)
+        assert int(view.property("count")) == 2416
+        peak = evaluate(root, "countText()")
+        timings = []
+        evaluate(view, "followTail=false")
+        for fraction in (0, .8, .2, .9, .1, 1, .5, 0, 1):
+            start = time.perf_counter()
+            evaluate(view, "contentY=originY+(contentHeight-height)*%s" % fraction)
+            wait_for_events(30)
+            timings.append(round((time.perf_counter() - start) * 1000))
+            peak = max(peak, evaluate(root, "countText()"))
+        assert peak < 80, "Offscreen paragraphs still eagerly rendered: %s" % peak
+
+        # Exercise the actual thumb, including while new blocks are inserted.
+        evaluate(view, "followTail=true; positionViewAtEnd()")
+        wait_for_events(100)
+        coords = evaluate(bar, "(function(){var p=mapToItem(null,width/2,topPadding+(visualPosition+visualSize/2)*availableHeight);return p.x+','+p.y})()")
+        x, y = [round(float(value)) for value in coords.split(",")]
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, QPoint(x, y))
+        assert bar.property("pressed") and not view.property("followTail")
+        top = evaluate(bar, "mapToItem(null,0,topPadding).y")
+        height = float(bar.property("availableHeight"))
+        for fraction in (.1, .8, .2, .9, .4):
+            QTest.mouseMove(root, QPoint(x, round(top + height * fraction)))
+            wait_for_events(40)
+            assert bar.property("pressed") and not view.property("followTail")
+        before_y = float(view.property("contentY"))
+        last = controller._ai_chat_model.item_at(15)
+        content = last["content"] + "\n\nNew ending while reading."
+        controller._ai_chat_model.update_at(15, {**last, "content": content, "streaming": True, **controller._ai_rendered(content, streaming=True)})
+        wait_for_events(80)
+        assert not view.property("followTail")
+        assert abs(float(view.property("contentY")) - before_y) < 1
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, QPoint(x, round(top + height * .4)))
+        assert not view.property("followTail")
+        # Recycled rows retain correct heights at both narrow and wide widths.
+        for width in (400, 620, 520):
+            root.setProperty("width", width)
+            wait_for_events(100)
+            evaluate(view, "positionViewAtBeginning()")
+            wait_for_events(100)
+            assert evaluate(view, "(function(){var last=null;for(var i=0;i<30;i++){var r=itemAtIndex(i);if(!r)continue;if(Math.abs(r.height-r.implicitHeight)>1)return false;if(last&&r.y<last.y+last.height-1)return false;last=r}return true})()")
+        evaluate(view, "followTail=true; positionViewAtEnd()")
+        wait_for_events(100)
+        assert evaluate(view, "atYEnd")
+        # The second user message follows 300 content rows; its Edit action
+        # must still address canonical message 2, not visual row 302.
+        evaluate(view, "followTail=false; positionViewAtIndex(302,0)")
+        wait_for_events(100)
+        assert evaluate(view, "(function(){function edit(o){if(o.label==='编辑并重发'){o.clicked();return true}var c=o.children||[];for(var i=0;i<c.length;++i)if(edit(c[i]))return true;return false}return edit(itemAtIndex(302))})()")
+        panel = root.findChild(QObject, "aiChatPanel")
+        assert int(panel.property("editingRow")) == 2
+        evaluate(panel, "cancelEdit()")
+        assert not errors, errors
+        print("Long scroll probe OK: 2400 paragraphs, peak %d live text blocks; scroll steps including 30 ms wait: %s ms; real thumb drag and streaming anchor preserved." % (peak, timings))
+    finally:
+        delete_qobject(root)
+        delete_qobject(engine)
+        controller.close()
+    return 0
+
+
+def interaction_probe() -> int:
+    """Sage shared panel/drag lifecycle, using local synthetic conversation data."""
+    from unittest.mock import Mock
+    from types import SimpleNamespace
+    from hr_toolkit.gui_qt.compat import delete_qobject
+    application = QApplication.instance() or QApplication([])
+    controller = Controller()
+    controller._save_workspace_preferences = Mock(return_value=True)
+    controller.refreshWorkspace = lambda: None
+    controller._project_store = SimpleNamespace(
+        workspace=SimpleNamespace(name="Local UI fixture"), writable=True, close=lambda: None)
+    controller._ai_settings = ai_config.AiSettings()
+    controller._ai_settings.provider_config().api_key = "offline-ui-fixture"
+    engine = QQmlApplicationEngine()
+    errors = []
+    engine.warnings.connect(lambda messages: errors.extend(e.toString() for e in messages))
+    engine.rootContext().setContextProperty("controller", controller)
+    qml = Path(__file__).resolve().parents[1] / "hr_toolkit/gui_qt/qml/Main.qml"
+    engine.load(QUrl.fromLocalFile(str(qml)))
+    assert engine.rootObjects(), errors
+    root = engine.rootObjects()[0]
+
+    def evaluate(obj, expression):
+        query = QQmlExpression(engine.rootContext(), obj, expression)
+        value = query.evaluate()
+        assert not query.hasError(), query.error().toString()
+        return value[0] if isinstance(value, tuple) else value
+
+    try:
+        root.setProperty("width", 1200)
+        root.setProperty("height", 800)
+        evaluate(root, "sidebarPanel.pinned=false")
+        wait_for_events(300)
+        launcher = root.findChild(QObject, "sageLauncher")
+        pane = root.findChild(QObject, "mainPane")
+        layout = root.findChild(QObject, "mainLayout")
+        geometry = (pane.property("width"), layout.property("height"))
+        assert click_item(engine, root, launcher)
+        wait_for_events(60)
+        panel = root.findChild(QObject, "aiSidePanel")
+        assert 0 < float(panel.property("reveal")) < 1, "Opening skipped the transition"
+        assert click_item(engine, root, launcher)
+        wait_for_events(35)
+        assert not root.property("aiPanelRequested")
+        assert click_item(engine, root, launcher)
+        wait_for_events(260)
+        assert float(panel.property("reveal")) == 1
+        assert pane.property("width") >= 640 and layout.property("height") == geometry[1]
+        assert abs(pane.property("width") + root.findChild(QObject, "workspaceDrawer").property("width") - geometry[0]) < 2
+        assert launcher.property("visible")
+
+        chat = root.findChild(QObject, "aiChatPanel")
+        draft = chat.findChild(QObject, "aiInputArea")
+        draft.setProperty("text", "Unsent draft / 未发送草稿")
+        content = "Review older records.\n\n" * 60
+        controller._ai_chat_model.set_items([
+            {"role": "user", "content": "Review"},
+            {"role": "assistant", "content": content, "streaming": True, **controller._ai_rendered(content)},
+        ])
+        controller._ai_busy = True
+        wait_for_events(120)
+        view = chat.findChild(QObject, "aiChatView")
+        evaluate(view, "followTail=false; positionViewAtBeginning()")
+        wait_for_events(60)
+        reading_y = float(view.property("contentY"))
+        # Both tabs retain their view state and use the same reserved column.
+        reserved = root.findChild(QObject, "workspaceDrawer").property("width")
+        settings_x = root.findChild(QObject, "appearanceButton").property("x")
+        assert click_item(engine, root, root.findChild(QObject, "projectFilesTab"))
+        wait_for_events(300)
+        assert not root.findChild(QObject, "aiPanelLoader").property("visible")
+        search = root.findChild(QObject, "workspaceSearchField")
+        search.setProperty("text", "Retained search")
+        assert root.findChild(QObject, "workspaceSurface").property("visible")
+        assert root.findChild(QObject, "workspaceDrawer").property("width") == reserved
+        assert click_item(engine, root, root.findChild(QObject, "sageTab"))
+        wait_for_events(300)
+        assert root.findChild(QObject, "aiChatPanel") == chat
+        assert search.property("text") == "Retained search"
+        assert draft.property("text") == "Unsent draft / 未发送草稿"
+        assert abs(float(view.property("contentY")) - reading_y) < 1
+        assert root.findChild(QObject, "appearanceButton").property("x") == settings_x
+        assert click_item(engine, root, launcher)
+        for _ in range(25):
+            wait_for_events(20)
+            if not panel.property("visible"): break
+        assert not panel.property("visible") and not panel.property("enabled"), (root.property("aiPanelRequested"), panel.property("requestedOpen"), panel.property("reveal"), launcher.property("x"), launcher.property("y"), root.property("aiWindowOpen"))
+        assert controller.aiBusy
+        controller._apply_ai_delta("A new paragraph while collapsed.")
+        controller._drain_ai_text(immediate=True)
+        assert click_item(engine, root, launcher)
+        wait_for_events(260)
+        assert root.findChild(QObject, "aiChatPanel") == chat
+        assert draft.property("text") == "Unsent draft / 未发送草稿"
+        assert abs(float(view.property("contentY")) - reading_y) < 1
+        assert controller._ai_chat_model.item_at(1)["content"].endswith("while collapsed.")
+        controller._apply_ai_finished(True, "")
+        wait_for_events(60)
+        assert click_item(engine, root, launcher)
+        wait_for_events(220)
+
+        # Drag uses global coordinates, persists once, and never toggles Sage.
+        before = (float(launcher.property("x")), float(launcher.property("y")))
+        start = QPoint(round(before[0] + 34), round(before[1] + 30))
+        destination = QPoint(start.x() - 180, start.y() - 90)
+        controller._save_workspace_preferences.reset_mock()
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, start)
+        QTest.mouseMove(root, start + QPoint(2, 1))
+        assert not launcher.property("moving")
+        QTest.mouseMove(root, destination)
+        wait_for_events(40)
+        assert launcher.property("moving")
+        assert not controller._save_workspace_preferences.called
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, destination)
+        wait_for_events(30)
+        assert not root.property("aiPanelRequested")
+        assert abs(float(launcher.property("x")) - (before[0] - 180)) < 2
+        assert abs(float(launcher.property("y")) - (before[1] - 90)) < 2
+        assert controller._save_workspace_preferences.call_count == 1
+        saved_position = controller.aiLauncherPosition
+        assert click_item(engine, root, launcher)
+        wait_for_events(260)
+        assert controller.aiLauncherPosition == saved_position
+        assert root.property("aiPanelRequested")
+        # Click outside the shared side panel should not dismiss it.
+        QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(300, 50))
+        assert root.property("aiPanelRequested")
+        evaluate(chat, "focusComposer()")
+        QTest.keyClick(root, Qt.Key_Escape)
+        wait_for_events(220)
+        assert not root.property("aiPanelRequested")
+        evaluate(launcher, "forceActiveFocus()")
+        QTest.keyClick(root, Qt.Key_Space)
+        wait_for_events(260)
+        assert root.property("aiPanelRequested")
+        assert click_item(engine, root, launcher)
+        wait_for_events(220)
+
+        # Shrinking collapses the overlay once; growing never reopens it.
+        QMetaObject.invokeMethod(launcher, "clicked")
+        wait_for_events(300)
+        assert root.property("aiPanelRequested")
+        root.setProperty("width", 760)
+        root.setProperty("height", 600)
+        wait_for_events(300)
+        assert not root.property("aiPanelRequested") and not panel.property("visible")
+        assert draft.property("text") == "Unsent draft / 未发送草稿"
+        QMetaObject.invokeMethod(launcher, "clicked")
+        wait_for_events(300)
+        compact_window = root.findChild(QObject, "aiWindowLoader").property("item")
+        assert compact_window.property("visible") and not panel.property("visible")
+        assert compact_window.findChild(QObject, "aiInputArea").property("text") == "Unsent draft / 未发送草稿"
+        QMetaObject.invokeMethod(launcher, "clicked")
+        wait_for_events(300)
+        assert not compact_window.property("visible")
+        for width, height in ((1200, 800), (1600, 900)):
+            root.setProperty("width", width); root.setProperty("height", height)
+            wait_for_events(300)
+            assert not root.property("aiPanelRequested"), "Growing reopened Sage without a user action"
+            assert evaluate(launcher, "x>=0 && y>=0 && x+width<=parent.width && y+height<=parent.height")
+            before_geometry = (pane.property("width"), layout.property("height"))
+            assert click_item(engine, root, launcher)
+            wait_for_events(260)
+            assert pane.property("width") >= 640 and layout.property("height") == before_geometry[1]
+            assert click_item(engine, root, launcher)
+            wait_for_events(220)
+        # Qt 5's offscreen cursor is constrained by its virtual desktop; keep
+        # real mouse events within that desktop after checking wide layouts.
+        root.setProperty("width", 1200)
+        root.setProperty("height", 800)
+        wait_for_events(300)
+        menu_point = QPoint(round(float(launcher.property("x"))+30), round(float(launcher.property("y"))+30))
+        QTest.mouseMove(root, menu_point)
+        QTest.mousePress(root, Qt.RightButton, Qt.NoModifier, menu_point)
+        wait_for_events(30)
+        QTest.mouseRelease(root, Qt.RightButton, Qt.NoModifier, menu_point)
+        wait_for_events(250)
+        menu = root.findChild(QObject, "sageLauncherMenu")
+        assert menu.property("opened"), {key: menu.property(key) for key in ("visible", "opened", "x", "y")}
+        QMetaObject.invokeMethod(root.findChild(QObject, "resetSagePosition"), "triggered")
+        QMetaObject.invokeMethod(menu, "close")
+        assert controller.aiLauncherPosition == [1.0, 1.0]
+        # Explicit detach remains available; the same pet closes that window.
+        QMetaObject.invokeMethod(root, "openAiWindow")
+        wait_for_events(260)
+        detached = root.findChild(QObject, "aiWindowLoader").property("item")
+        assert detached.property("visible")
+        assert detached.findChild(QObject, "aiInputArea").property("text") == "Unsent draft / 未发送草稿"
+        detached.findChild(QObject, "aiInputArea").setProperty("text", "Draft changed in detached window")
+        QMetaObject.invokeMethod(launcher, "clicked")
+        wait_for_events(300)
+        assert not detached.property("visible")
+        QMetaObject.invokeMethod(launcher, "clicked")
+        wait_for_events(300)
+        assert draft.property("text") == "Draft changed in detached window"
+        assert not errors, errors
+        print("Sage interaction probe OK: shared tabs, reversible transition, protected workspace, drag/click separation, reset, keyboard, retained draft/scroll/search, hidden streaming, and explicit detach.")
+    finally:
+        delete_qobject(root)
+        delete_qobject(engine)
+        controller.close()
     return 0
 
 
@@ -319,6 +794,9 @@ def main() -> int:
     application = QApplication([])
     markdown_probe()
     sage_open_probe()
+    design_probe()
+    long_scroll_probe()
+    interaction_probe()
     controller = Controller()
     controller._save_workspace_preferences = lambda: True
     engine = QQmlApplicationEngine()
@@ -335,7 +813,7 @@ def main() -> int:
     root = engine.rootObjects()[0]
     failures = []
 
-    # 给足宽度，否则停靠面板会按设计自动收起，后面的断言就没有意义了。
+    # Start with a settled workspace before comparing overlay geometry.
     root.setProperty("width", 1560)
     root.setProperty("height", 940)
     wait_for_events(400)
@@ -344,7 +822,7 @@ def main() -> int:
     require(main_pane is not None, "mainPane missing", failures)
     pane_width_before = float(main_pane.property("width")) if main_pane is not None else 0.0
 
-    # 打开 Sage：它是 RowLayout 的子项，应该「占住」宽度而不是浮在内容上面。
+    # Opening the shared column must reserve width without overlapping the tool.
     panel_loader = root.findChild(QObject, "aiPanelLoader")
     require(panel_loader is not None, "aiPanelLoader missing", failures)
     if panel_loader is None:
@@ -358,23 +836,18 @@ def main() -> int:
     require(panel_loader.property("active") is True, "aiPanelLoader did not activate", failures)
 
     side_panel = panel_loader.property("item")
-    require(side_panel is not None, "AI docked panel failed to instantiate", failures)
+    require(side_panel is not None, "AI overlay failed to instantiate", failures)
     require(root.findChild(QObject, "aiSidePanel") is not None, "aiSidePanel missing", failures)
     surface = root.findChild(QObject, "aiPanelSurface")
     require(surface is not None, "aiPanelSurface missing", failures)
 
-    reserved = float(panel_loader.property("reserved"))
-    require(reserved > 100, "docked panel reserved no width (%.1f)" % reserved, failures)
     pane_width_after = float(main_pane.property("width")) if main_pane is not None else 0.0
-    require(
-        pane_width_before - pane_width_after >= reserved - 1.0,
-        "middle content was covered instead of narrowed: %.1f -> %.1f, reserved %.1f"
-        % (pane_width_before, pane_width_after, reserved),
-        failures,
-    )
+    drawer = root.findChild(QObject, "workspaceDrawer")
+    require(pane_width_after >= 640 and abs(pane_width_before - pane_width_after - float(drawer.property("width"))) < 2,
+            "Sage did not reserve a separate column with a usable main workspace", failures)
     require(
         side_panel.property("opened") is True,
-        "docked panel reported itself closed",
+        "overlay reported itself closed",
         failures,
     )
 
@@ -388,17 +861,17 @@ def main() -> int:
             float(chat_panel.property("height")) > 200, "AI chat panel lost its height", failures
         )
         require(
-            float(chat_panel.property("x")) >= 4, "AI panel lost its floating gutter", failures
+            float(chat_panel.property("x")) == 1, "AI panel lost its border inset", failures
         )
     if surface is not None and chat_panel is not None:
         require(
-            abs(float(surface.property("width")) - float(chat_panel.property("width"))) <= 0.5,
-            "AI panel width drifted from the docked card",
+            abs(float(surface.property("width")) - float(chat_panel.property("width")) - 2) <= 0.5,
+            "AI panel width drifted from the overlay surface",
             failures,
         )
         require(
-            abs(float(surface.property("x")) - float(chat_panel.property("x"))) <= 0.5,
-            "AI panel is not aligned with the docked card",
+            abs(float(chat_panel.property("x")) - float(surface.property("x")) - 1) <= 0.5,
+            "AI panel is not aligned with the overlay surface",
             failures,
         )
 
@@ -569,7 +1042,7 @@ def main() -> int:
         ai_window = window_loader.property("item")
         require(ai_window is not None, "AI window failed to instantiate", failures)
         if ai_window is not None:
-            ai_window.setProperty("visible", True)
+            ai_window.setProperty("requestedOpen", True)
             wait_for_events(350)
 
     # 设置对话框：切服务商必须真的切过去。
@@ -789,42 +1262,19 @@ def main() -> int:
         QMetaObject.invokeMethod(model_popup, "close")
         wait_for_events(120)
 
-    # 收起：留一条窄轨，中间内容把宽度拿回去；再展开回到完整面板。
-    if side_panel is not None:
-        side_panel.setProperty("collapsed", True)
-        wait_for_events(300)
-        collapsed_reserved = float(panel_loader.property("reserved"))
-        rail = root.findChild(QObject, "aiPanelRail")
-        require(
-            collapsed_reserved < reserved,
-            "collapsing did not release width (%.1f -> %.1f)"
-            % (reserved, collapsed_reserved),
-            failures,
-        )
-        require(rail is not None, "aiPanelRail missing", failures)
-        if rail is not None:
-            require(rail.property("visible") is True, "collapsed rail is not visible", failures)
-        require(
-            float(main_pane.property("width")) > pane_width_after,
-            "middle content did not widen back after collapsing",
-            failures,
-        )
-        QMetaObject.invokeMethod(side_panel, "expand")
-        wait_for_events(300)
-        require(
-            abs(float(panel_loader.property("reserved")) - reserved) <= 1.0,
-            "expanding did not restore the reserved width",
-            failures,
-        )
-        if chat_panel is not None:
-            require(
-                chat_panel.property("visible") is True,
-                "chat panel stayed hidden after expanding",
-                failures,
-            )
+    # Collapsing hides the overlay after its exit transition, retaining the view.
+    root.setProperty("aiPanelRequested", False)
+    wait_for_events(250)
+    require(panel_loader.property("active") is True, "collapsed overlay was destroyed", failures)
+    require(not side_panel.property("visible"), "collapsed overlay stayed visible", failures)
+    require(abs(float(main_pane.property("width")) - pane_width_before) < 1,
+            "collapsing changed the workspace width", failures)
+    root.setProperty("aiPanelRequested", True)
+    wait_for_events(300)
+    require(side_panel.property("visible") is True, "overlay did not reopen", failures)
 
     if window_loader is not None and window_loader.property("item") is not None:
-        window_loader.property("item").setProperty("visible", False)
+        window_loader.property("item").setProperty("requestedOpen", False)
 
     # Exercise both catalogs/palettes and the small-window entry point.
     for language, theme in (("en_US", "dark"), ("zh_CN", "light"), ("en_US", "light"), ("zh_CN", "dark")):
@@ -834,16 +1284,17 @@ def main() -> int:
         if os.environ.get("HR_AI_REVIEW_CAPTURE") and language == "en_US":
             root.grabWindow().save(os.environ["HR_AI_REVIEW_CAPTURE"] + "-" + theme + ".png")
     root.setProperty("aiPanelRequested", False)
+    if window_loader is not None and window_loader.property("item") is not None:
+        window_loader.property("item").setProperty("requestedOpen", False)
     root.setProperty("width", 1024)
     wait_for_events(250)
     QMetaObject.invokeMethod(root, "toggleAiPanel")
     wait_for_events(250)
-    detached = window_loader.property("item") if window_loader is not None else None
-    require(detached is not None and detached.property("visible"),
-            "small-window entry point did not open usable detached chat", failures)
-    if detached is not None:
-        require(float(detached.property("width")) >= 360, "detached chat is too narrow", failures)
-        detached.setProperty("visible", False)
+    require(not root.property("aiPanelRequested") and not side_panel.property("visible")
+            and window_loader.property("item").property("requestedOpen"),
+            "small-window entry did not use the detached assistant", failures)
+    require(float(side_panel.property("width")) <= float(root.property("width")) - 24,
+            "small-window overlay exceeds the window", failures)
 
     chat_model.clear()
 
@@ -862,7 +1313,7 @@ def main() -> int:
     ]
     failures.extend(runtime)
 
-    # 关闭面板：Loader 失活，AiSidePanel / AiChatPanel 全部销毁，不应崩。
+    # Close without destroying the retained conversation view.
     root.setProperty("aiPanelRequested", False)
     wait_for_events(250)
 
@@ -872,16 +1323,18 @@ def main() -> int:
             print(failure)
         controller.close()
         return 1
+    from hr_toolkit.gui_qt.compat import delete_qobject
+    delete_qobject(root)
+    delete_qobject(engine)
     controller.close()
     print(
-        "AI probe OK: docked panel reserves width (%.0f px), collapses to a rail, the input box "
+        "AI probe OK: shared column protects workspace geometry and survives collapse, the input box "
         "does not rubber-band, and the "
         "chat delegates, pending attachments, drop area, vision hint, image preview, "
         "history/model popups, settings dialog and detached window all instantiate cleanly"
-        % reserved
     )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(sage_open_probe() if "--sage-open-only" in sys.argv else markdown_probe() if "--markdown-only" in sys.argv else main())
+    sys.exit(interaction_probe() if "--interaction-only" in sys.argv else long_scroll_probe() if "--long-scroll-only" in sys.argv else design_probe() if "--design-only" in sys.argv else sage_open_probe() if "--sage-open-only" in sys.argv else markdown_probe() if "--markdown-only" in sys.argv else main())

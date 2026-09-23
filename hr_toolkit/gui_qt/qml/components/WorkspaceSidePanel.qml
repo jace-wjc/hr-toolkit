@@ -9,15 +9,16 @@ FocusScope {
     property real availableWidth: 0
     property real liveAvailableWidth: availableWidth
     readonly property real coreMinimumWidth: 640
-    readonly property real minimumPanelWidth: 320
-    readonly property real maximumPanelWidth: 360
+    property real minimumPanelWidth: 320
+    property real maximumPanelWidth: 360
+    property real preferredPanelWidth: liveAvailableWidth * 0.29
     readonly property real gutter: 16
     readonly property real collapseThreshold: coreMinimumWidth + minimumPanelWidth + gutter
     readonly property real restoreThreshold: collapseThreshold + 80
     property bool autoCollapsed: false
     readonly property bool opened: requestedOpen && !autoCollapsed
     readonly property real panelWidth: Math.max(minimumPanelWidth,
-        Math.min(maximumPanelWidth, liveAvailableWidth * 0.29))
+        Math.min(maximumPanelWidth, preferredPanelWidth, liveAvailableWidth - coreMinimumWidth - gutter))
     property real reveal: opened ? 1 : 0
     readonly property real reservedWidth: Math.max(0, Math.min(
         reveal * (panelWidth + gutter), liveAvailableWidth - coreMinimumWidth))

@@ -61,46 +61,57 @@ ApplicationWindow {
             windowMoveSettle.restart()
         }
     }
-    // Sage 面板停靠在主 RowLayout 右侧（见 AiSidePanel），中间内容区随之收窄而不被遮挡。
     property bool aiPanelRequested: false
+    property bool aiPanelCreated: false
+    property string rightPanelTab: "files"
+    readonly property bool sidePanelFits: !workspaceDrawer.autoCollapsed && height >= 640
+    onSidePanelFitsChanged: if (!sidePanelFits) closeRightPanel()
+    function closeRightPanel() {
+        aiPanelRequested = false
+        controller.setWorkspaceExpanded(false)
+    }
+    function openProjectPanel() {
+        if (!controller.hasProject) return
+        rightPanelTab = "files"
+        aiPanelRequested = false
+        controller.setWorkspaceExpanded(true)
+    }
+    function openSagePanel() {
+        if (!sidePanelFits || aiWindowOpen) { openAiWindow(); return }
+        rightPanelTab = "sage"
+        aiPanelRequested = true
+    }
+    readonly property bool aiWindowOpen: aiWindowLoader.item ? aiWindowLoader.item.requestedOpen : false
+    readonly property bool aiAssistantOpen: aiPanelRequested || aiWindowOpen
     function toggleAiPanel() {
         if (aiWindowLoader.item && aiWindowLoader.item.visible) {
-            aiWindowLoader.item.raise()
-            aiWindowLoader.item.requestActivate()
+            aiWindowLoader.item.requestedOpen = !aiWindowLoader.item.requestedOpen
             return
         }
-        if (!aiPanelRequested || (aiPanelLoader.item && aiPanelLoader.item.autoCollapsed)) {
-            if (workspaceLayout.width - (sidebar.pinned ? sidebar.width : 0) < 1048) {
-                openAiWindow()
-                return
-            }
-            aiPanelRequested = true
-            return
-        }
-        // 已展开：先展开收起的窄轨，再点才真的关掉——避免「点一下就没影了」。
-        if (aiPanelLoader.item && aiPanelLoader.item.collapsed) {
-            aiPanelLoader.item.expand()
-            return
-        }
-        aiPanelRequested = false
+        if (aiPanelRequested) closeRightPanel()
+        else openSagePanel()
     }
     function openAiWindow() {
         aiPanelRequested = false
+        // Detaching leaves the shared column available for project files.
+        if (controller.hasProject && sidePanelFits) openProjectPanel()
         aiWindowLoader.active = true
         if (aiWindowLoader.item) {
-            aiWindowLoader.item.visible = true
+            aiWindowLoader.item.requestedOpen = true
             aiWindowLoader.item.raise()
+            aiWindowLoader.item.requestActivate()
         }
     }
-    // 右侧停靠面板（项目栏 / Sage）的左边缘。两者都收起时等于窗口右边缘——
-    // 它们都是 RowLayout 的子项，收起后仍占一个 0 宽的槽，x 恰好落在右边界。
-    readonly property real rightPanelLeft: Math.min(workspaceDrawer.x, aiPanelLoader.x)
-    readonly property bool rightPanelOpen: rightPanelLeft < width - 1
     Shortcut { sequence: "Ctrl+K"; onActivated: root.toggleAiPanel() }
-    // 与项目栏互斥：两者都停靠右侧，同开会把中间内容挤到低于最小宽度。
     onAiPanelRequestedChanged: {
-        if (aiPanelRequested && controller.workspaceExpanded)
-            controller.setWorkspaceExpanded(false)
+        if (aiPanelRequested && !sidePanelFits) openAiWindow()
+        else if (aiPanelRequested) {
+            rightPanelTab = "sage"
+            workspaceAddMenu.close()
+            workspaceUseMenu.close()
+            aiPanelCreated = true
+        }
+        else if (rightPanelTab === "sage") sageLauncher.forceActiveFocus()
     }
     onXChanged: noteWindowMotion()
     onYChanged: noteWindowMotion()
@@ -167,7 +178,7 @@ ApplicationWindow {
         objectName: "appearanceButton"
         anchors.top: parent.top; anchors.topMargin: 8
         anchors.right: parent.right
-        anchors.rightMargin: root.rightPanelOpen ? root.width - root.rightPanelLeft + 54 : 54
+        anchors.rightMargin: root.width - workspaceDrawer.x + 54
         z: 31
         text: "设置"; variant: "link"
         ToolTip.visible: hovered
@@ -190,15 +201,15 @@ ApplicationWindow {
         width: parent.width
         window: root
         sidebar: root.sidebarPanel
-        workspaceAvailable: controller.hasProject
+        workspaceAvailable: true
         workspaceExpanded: workspaceDrawer.opened
-        workspaceAutoHidden: workspaceDrawer.requestedOpen && workspaceDrawer.autoCollapsed
+        workspaceAutoHidden: false
         workspacePanelLeft: workspaceDrawer.x
-        aiPanelLeft: aiPanelLoader.x
+        aiPanelLeft: root.width
+        sharedPanel: true
         onWorkspaceToggleRequested: {
-            // Sage 与项目栏互斥：两者都停靠在右侧，同时展开会把中间内容挤得太窄。
-            if (root.aiPanelRequested) root.aiPanelRequested = false
-            if (controller.workspaceExpanded) workspaceDrawer.close()
+            if (workspaceDrawer.opened) root.closeRightPanel()
+            else if (root.rightPanelTab === "sage" || !controller.hasProject) root.openSagePanel()
             else workspaceDrawer.open()
         }
         nativeMac: root.nativeTitleIntegrated
@@ -496,43 +507,6 @@ ApplicationWindow {
                     MouseArea { id: historyNavMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { controller.requestHistory(); historyDrawer.open() } }
                 }
                 Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 6; color: Ui.color("border12") }
-                AppButton {
-                    id: sidebarAiButton
-                    objectName: "sidebarAiButton"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 32
-                    text: "Sage"
-                    variant: "link"
-                    leftPadding: 9
-                    rightPadding: 9
-                    Accessible.name: Ui.text("Sage")
-                    ToolTip.visible: hovered
-                    // 全角括号会让这句整串都不含汉字，翻译表按设计只处理含汉字的串，
-                    // 于是英文界面永远不会被翻译；写成半角括号两种语言都直接可用。
-                    ToolTip.text: Ui.text("Sage (Ctrl+K)")
-                    onClicked: root.toggleAiPanel()
-                    contentItem: RowLayout {
-                        spacing: 8
-                        Item {
-                            Layout.preferredWidth: 18
-                            Layout.fillHeight: true
-                            ToolIcon {
-                                anchors.centerIn: parent
-                                width: 16; height: 16
-                                iconId: "ai_spark"
-                                strokeColor: sidebarAiButton.enabled ? root.textMain : root.textDisabled
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: Ui.text(sidebarAiButton.text)
-                            color: sidebarAiButton.enabled ? root.textMain : root.textDisabled
-                            font.pixelSize: 13
-                            elide: Text.ElideRight
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                    }
-                }
                 AppButton {
                     id: sidebarUpdateCheckButton
                     objectName: "sidebarUpdateCheckButton"
@@ -1642,32 +1616,133 @@ ApplicationWindow {
             }
 
         }
+    }
 
-        // Sage 停靠面板：必须写在 workspaceLayout 里才是它的布局子项，
-        // 只有这样 Loader 上的 Layout.* 才会生效、中间内容区才会随之收窄
-        //（写在 ApplicationWindow 下会被当成普通子项，直接盖在内容上面）。
-        // 用 Loader 保持懒加载——没打开时宽度为 0，AI 的配置/历史文件不会被拖进启动路径。
-        Loader {
-            id: aiPanelLoader
-            objectName: "aiPanelLoader"
-            active: root.aiPanelRequested
-            // Loader 本身才是布局子项，所以预留宽度必须挂在 Loader 上，
-            // 挂在被加载的项上不会生效。
-            readonly property real reserved: item ? item.reservedWidth : 0
-            Layout.fillHeight: true
-            Layout.minimumWidth: reserved
-            Layout.preferredWidth: reserved
-            Layout.maximumWidth: reserved
-            sourceComponent: AiSidePanel {
-                id: aiPanel
-                requestedOpen: root.aiPanelRequested
-                availableWidth: workspaceLayout.width - (sidebar.pinned ? sidebar.width : 0)
-                liveAvailableWidth: workspaceLayout.width - sidebar.reservedWidth
-                onCloseRequested: root.aiPanelRequested = false
-                onSettingsRequested: aiSettingsDialog.open()
-                onDetachRequested: root.openAiWindow()
-                onCollapseRequested: aiPanel.collapsed = !aiPanel.collapsed
+    // Keep the conversation loaded while the shared column shows project files.
+    Loader {
+        id: aiPanelLoader
+        objectName: "aiPanelLoader"
+        active: root.aiPanelCreated
+        parent: workspaceDrawer
+        visible: root.rightPanelTab === "sage" && workspaceDrawer.reservedWidth > 0
+        x: 8
+        y: utilityTabs.y + utilityTabs.height + 8
+        width: workspaceDrawer.panelWidth
+        height: Math.max(0, workspaceDrawer.height - y - 8)
+        z: 1
+        sourceComponent: AiSidePanel {
+            requestedOpen: root.aiPanelRequested && workspaceDrawer.opened
+            onCloseRequested: root.closeRightPanel()
+            onSettingsRequested: aiSettingsDialog.open()
+            onDetachRequested: root.openAiWindow()
+        }
+    }
+
+    Button {
+        id: sageLauncher
+        objectName: "sageLauncher"
+        readonly property real minX: 12
+        readonly property real minY: windowChrome.height + 8
+        readonly property real rangeX: Math.max(0, root.width - width - minX - 12)
+        readonly property real rangeY: Math.max(0, root.height - height - minY - 12)
+        // Keep the launcher outside the conversation, including its closing
+        // transition. Only an explicit drag changes the saved resting position.
+        readonly property bool besidePanel: aiPanelLoader.visible && aiPanelLoader.item !== null && aiPanelLoader.item.visible
+        readonly property real maxX: besidePanel ? Math.max(minX, workspaceDrawer.x + aiPanelLoader.x - width - 12) : minX + rangeX
+        readonly property real maxY: besidePanel ? Math.max(minY, aiPanelLoader.y + aiPanelLoader.height - height - 12) : minY + rangeY
+        property bool moving: false
+        property real dragX: 0
+        property real dragY: 0
+        x: Math.max(minX, Math.min(maxX, moving ? dragX : minX + rangeX * controller.aiLauncherPosition[0]))
+        y: Math.max(minY, Math.min(maxY, moving ? dragY : minY + rangeY * controller.aiLauncherPosition[1]))
+        width: 68
+        height: 76
+        z: 25
+        padding: 0
+        focusPolicy: Qt.StrongFocus
+        hoverEnabled: true
+        Accessible.name: Ui.text(root.aiAssistantOpen ? "收起 Sage" : "询问 Sage")
+        Accessible.description: Ui.text("拖动可移动位置；右键可重置位置。")
+        onClicked: root.toggleAiPanel()
+        background: Rectangle {
+            radius: 12
+            color: "transparent"
+            border.width: sageLauncher.visualFocus ? 1 : 0
+            border.color: root.primary
+        }
+        contentItem: Column {
+            opacity: launcherMouse.pressed && !sageLauncher.moving ? 0.85 : 1
+            Image {
+                objectName: "sageMascotImage"
+                width: 68; height: 60
+                source: Qt.resolvedUrl("components/sage-companion.png")
+                sourceSize.width: 160; sourceSize.height: 160
+                fillMode: Image.PreserveAspectFit
+                smooth: true
             }
+            Text {
+                width: 68; height: 16
+                text: "Sage"
+                color: root.aiAssistantOpen || launcherMouse.containsMouse ? root.primary : root.textMuted
+                font.pixelSize: 11
+                horizontalAlignment: Text.AlignHCenter
+            }
+        }
+        MouseArea {
+            id: launcherMouse
+            objectName: "sageLauncherMouse"
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            preventStealing: true
+            cursorShape: sageLauncher.moving ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+            property point startPoint
+            property point startPosition
+            onPressed: function(mouse) {
+                if (mouse.button !== Qt.LeftButton) return
+                startPoint = mapToItem(root.contentItem, mouse.x, mouse.y)
+                startPosition = Qt.point(sageLauncher.x, sageLauncher.y)
+            }
+            onPositionChanged: function(mouse) {
+                if (!(pressedButtons & Qt.LeftButton)) return
+                var point = mapToItem(root.contentItem, mouse.x, mouse.y)
+                var dx = point.x - startPoint.x
+                var dy = point.y - startPoint.y
+                if (!sageLauncher.moving && Math.sqrt(dx * dx + dy * dy) < Qt.styleHints.startDragDistance) return
+                sageLauncher.dragX = startPosition.x + dx
+                sageLauncher.dragY = startPosition.y + dy
+                sageLauncher.moving = true
+            }
+            onReleased: function(mouse) {
+                if (mouse.button === Qt.RightButton) { launcherMenu.popup(mouse.x, mouse.y); return }
+                if (sageLauncher.moving) {
+                    controller.setAiLauncherPosition(
+                        sageLauncher.rangeX > 0 ? (sageLauncher.x - sageLauncher.minX) / sageLauncher.rangeX : 1,
+                        sageLauncher.rangeY > 0 ? (sageLauncher.y - sageLauncher.minY) / sageLauncher.rangeY : 1)
+                    sageLauncher.moving = false
+                } else sageLauncher.clicked()
+            }
+            onCanceled: sageLauncher.moving = false
+        }
+        Menu {
+            id: launcherMenu
+            objectName: "sageLauncherMenu"
+            MenuItem {
+                objectName: "resetSagePosition"
+                text: Ui.text("重置位置")
+                onTriggered: controller.setAiLauncherPosition(1, 1)
+            }
+        }
+        ToolTip {
+            id: sageTooltip
+            visible: !sageLauncher.moving && !launcherMouse.pressed && (launcherMouse.containsMouse || sageLauncher.visualFocus)
+            delay: 450
+            text: Ui.text(root.aiAssistantOpen ? "收起 Sage" : "询问 Sage") + " (Ctrl+K)"
+            x: Math.max(-sageLauncher.x + 4, Math.min((sageLauncher.width - width) / 2, root.width - sageLauncher.x - width - 4))
+            y: sageLauncher.y >= height + 8 ? -height - 4 : sageLauncher.height + 4
+            padding: 10
+            contentItem: Text { text: sageTooltip.text; color: root.textMain; font.pixelSize: 12 }
+            background: Rectangle { radius: 12; color: root.surface; border.color: root.border }
         }
     }
 
@@ -1998,25 +2073,58 @@ ApplicationWindow {
         id: workspaceDrawer
         objectName: "workspaceDrawer"
         parent: workspaceLayout
-        requestedOpen: controller.workspaceExpanded && controller.hasProject
+        requestedOpen: root.aiPanelRequested || (root.rightPanelTab === "files" && controller.workspaceExpanded && controller.hasProject)
+        onRequestedOpenChanged: if (requestedOpen && !root.sidePanelFits) root.closeRightPanel()
+        minimumPanelWidth: 400
+        maximumPanelWidth: 480
+        preferredPanelWidth: 480
         availableWidth: workspaceLayout.width - (sidebar.pinned ? sidebar.width : 0)
         liveAvailableWidth: workspaceLayout.width - sidebar.reservedWidth
-        onOpenRequested: controller.setWorkspaceExpanded(true)
-        onCloseRequested: controller.setWorkspaceExpanded(false)
+        onOpenRequested: root.openProjectPanel()
+        onCloseRequested: root.closeRightPanel()
         onOpenedChanged: {
+            if (!opened && autoCollapsed && requestedOpen) root.closeRightPanel()
             if (!opened) {
                 workspaceAddMenu.close()
                 workspaceUseMenu.close()
                 if (activeFocus) mainScroll.forceActiveFocus()
             }
         }
+        RowLayout {
+            id: utilityTabs
+            objectName: "utilityTabs"
+            x: 8; y: 8
+            width: workspaceDrawer.panelWidth
+            height: 34
+            spacing: 4
+            visible: workspaceDrawer.reservedWidth > 0
+            AppButton {
+                objectName: "projectFilesTab"
+                Layout.fillWidth: true
+                text: "项目文件"
+                enabled: controller.hasProject
+                variant: root.rightPanelTab === "files" ? "tonal" : "link"
+                Accessible.checkable: true
+                Accessible.checked: root.rightPanelTab === "files"
+                onClicked: root.openProjectPanel()
+            }
+            AppButton {
+                objectName: "sageTab"
+                Layout.fillWidth: true
+                text: "Sage"
+                variant: root.rightPanelTab === "sage" ? "tonal" : "link"
+                Accessible.checkable: true
+                Accessible.checked: root.rightPanelTab === "sage"
+                onClicked: root.openSagePanel()
+            }
+        }
         Rectangle {
             id: workspaceSurface
             objectName: "workspaceSurface"
-            visible: workspaceDrawer.reservedWidth > 0
-            x: 8; y: 8
+            visible: workspaceDrawer.reservedWidth > 0 && root.rightPanelTab === "files"
+            x: 8; y: utilityTabs.y + utilityTabs.height + 8
             width: workspaceDrawer.panelWidth
-            height: Math.max(0, workspaceDrawer.height - 16)
+            height: Math.max(0, workspaceDrawer.height - y - 8)
             color: root.surface; border.color: root.border; radius: 12
             ColumnLayout {
                 anchors.fill: parent
@@ -2730,20 +2838,38 @@ ApplicationWindow {
         active: false
         sourceComponent: Window {
             id: aiWindow
-            width: 460
-            height: 620
+            width: Math.min(620, root.currentScreenAvailableWidth - 40)
+            height: Math.min(800, root.currentScreenAvailableHeight - 40)
             minimumWidth: 360
             minimumHeight: 460
             title: "Sage"
             color: Ui.color("window")
-            visible: false
-            onClosing: visible = false
+            property bool requestedOpen: false
+            property real reveal: 0
+            visible: requestedOpen || reveal > 0
+            onRequestedOpenChanged: {
+                if (requestedOpen) detachedChat.prepareToShow()
+                else detachedChat.prepareToHide()
+                reveal = requestedOpen ? 1 : 0
+            }
+            Behavior on reveal {
+                NumberAnimation {
+                    duration: aiWindow.requestedOpen ? 200 : 160
+                    easing.type: Easing.OutCubic
+                    onRunningChanged: if (!running && aiWindow.requestedOpen) detachedChat.focusComposer()
+                }
+            }
+            onClosing: function(close) { close.accepted = false; requestedOpen = false }
             AiChatPanel {
+                id: detachedChat
+                opacity: aiWindow.reveal
+                enabled: aiWindow.requestedOpen
+                transform: Translate { y: (1 - aiWindow.reveal) * 12 }
                 anchors.fill: parent
                 showDetachButton: false
                 // 独立窗口里没有「停靠列」可收，收起按钮没有意义。
                 showCollapseButton: false
-                onCloseRequested: aiWindow.close()
+                onCloseRequested: aiWindow.requestedOpen = false
                 onSettingsRequested: aiSettingsDialog.open()
             }
         }

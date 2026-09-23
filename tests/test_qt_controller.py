@@ -100,6 +100,29 @@ class QtControllerTests(unittest.TestCase):
         messages.clear()
         self.assertEqual(len(timeline), 0)
 
+    def test_ai_launcher_position_is_bounded_and_persists_without_changing_other_settings(self):
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "workspace-ui.json"
+            path.write_text(json.dumps({"unrelated_setting": "preserve"}), encoding="utf-8")
+            controller._settings_path = lambda: path
+            controller._save_workspace_preferences = lambda: AppController._save_workspace_preferences(controller)
+            controller.setAiLauncherPosition(0.25, 0.75)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["ai_launcher_position"], [0.25, 0.75])
+            self.assertEqual(saved["unrelated_setting"], "preserve")
+            self.assertEqual(controller._validated_ai_launcher_position(saved["ai_launcher_position"]), [0.25, 0.75])
+            controller.setAiLauncherPosition(-2, 5)
+            self.assertEqual(controller.aiLauncherPosition, [0.0, 1.0])
+            controller.setAiLauncherPosition(float("nan"), float("inf"))
+            self.assertEqual(controller.aiLauncherPosition, [1.0, 1.0])
+            for invalid in (None, "wrong", [1], ["bad", 0]):
+                self.assertEqual(controller._validated_ai_launcher_position(invalid), [1.0, 1.0])
+            self.assertTrue(controller._ai_launcher_position_edited)
+            # Closing after the temporary directory is removed must not write.
+            controller._save_workspace_preferences = lambda: None
+
     def test_reconcile_variant_and_result_paths_are_available(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

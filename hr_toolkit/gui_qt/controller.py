@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import os
 import sys
@@ -191,6 +192,7 @@ class AppController(QObject):
     _invocationReady = Signal(object, object, bool)
     _startupReady = Signal(object, object, object)
     aiChanged = Signal()
+    aiLauncherPositionChanged = Signal()
     aiSettingsChanged = Signal()
     aiStatusChanged = Signal()
     aiHistoryChanged = Signal()
@@ -271,6 +273,8 @@ class AppController(QObject):
         self._run_coordinator = ProjectRunCoordinator()
         self._preview_cancel_event: threading.Event | None = None
         self._presentation = Presentation(self)
+        self._ai_launcher_position = [1.0, 1.0]
+        self._ai_launcher_position_edited = False
         self._presentation.preferencesChanged.connect(self._save_workspace_preferences)
         self._rename_review = RenameReview(self)
         self._rename_review.confirmed.connect(self._execute_reviewed_rename)
@@ -2124,6 +2128,9 @@ class AppController(QObject):
         self._startup_loading = False
         self._set_busy(False)
         self._presentation.restore(state.get("theme"), state.get("language"))
+        if not self._ai_launcher_position_edited:
+            self._ai_launcher_position = self._validated_ai_launcher_position(state.get("ai_launcher_position"))
+            self.aiLauncherPositionChanged.emit()
         self._recent_projects = recent
         if self._startup_cancelled:
             # A cancelled disk check must not discard unexamined history.
@@ -2219,6 +2226,7 @@ class AppController(QObject):
                 "release_notes_seen_version": self._release_notes_seen_version,
                 "theme": self._presentation.theme,
                 "language": self._presentation.language,
+                "ai_launcher_position": self._ai_launcher_position,
             }
         )
         # Re-read on every call to preserve external settings changes, but do
@@ -4842,6 +4850,32 @@ class AppController(QObject):
     @constant_property(QObject)
     def aiChatModel(self):
         return self._ai_chat_model
+
+    @staticmethod
+    def _validated_ai_launcher_position(value):
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            return [1.0, 1.0]
+        try:
+            position = [float(part) for part in value]
+        except (TypeError, ValueError, OverflowError):
+            return [1.0, 1.0]
+        if not all(math.isfinite(part) for part in position):
+            return [1.0, 1.0]
+        return [max(0.0, min(1.0, part)) for part in position]
+
+    @Property("QVariantList", notify=aiLauncherPositionChanged)
+    def aiLauncherPosition(self):
+        return list(self._ai_launcher_position)
+
+    @Slot(float, float)
+    def setAiLauncherPosition(self, x: float, y: float) -> None:
+        self._ai_launcher_position_edited = True
+        position = self._validated_ai_launcher_position([x, y])
+        if position != self._ai_launcher_position:
+            self._ai_launcher_position = position
+            self.aiLauncherPositionChanged.emit()
+            # Persist on release/reset only, never on individual mouse moves.
+            self._save_workspace_preferences()
 
     @constant_property(QObject)
     def aiTimelineModel(self):

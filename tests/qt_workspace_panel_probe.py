@@ -219,35 +219,36 @@ def main():
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier,
         QPoint(int(chrome_button.x() + chrome_button.width() / 2), int(chrome_button.y() + chrome_button.height() / 2)))
     opening = sample()
-    assert 320 <= panel.property("panelWidth") <= 360
+    assert 400 <= panel.property("panelWidth") <= 480
     assert any(0 < width < opening[-1] - 1 for width in opening)
     assert all(a <= b + 1 for a, b in zip(opening, opening[1:]))
-    root.setWidth(1240); sample()
+    root.setWidth(1320); sample()
     assert panel.property("opened")
-    root.setWidth(1220); sample()
-    assert not panel.property("opened") and controller.workspaceExpanded
-    for width in (1230, 1280, 1226, 1298, 1280):
-        root.setWidth(width); sample(30)
-        assert not panel.property("opened"), "Hysteresis failed"
-    root.setWidth(1304); sample()
+    root.setWidth(1280); sample()
+    assert not panel.property("opened") and not controller.workspaceExpanded
+    for width in (1300, 1380, 1320, 1400):
+        root.setWidth(width); sample(50)
+        assert not panel.property("opened"), "Resize reopened the panel without user input"
+    panel.open(); sample()
     assert panel.property("opened")
     root.setWidth(760); root.setHeight(600); sample()
-    assert panel.width() == 0 and controller.workspaceExpanded
+    assert panel.width() == 0 and not controller.workspaceExpanded
     root.setWidth(1400); root.setHeight(820); sample()
-    assert panel.property("opened")
-    closing = None
+    assert not panel.property("opened")
+    panel.open(); sample()
     panel.close(); closing = sample()
     assert all(a >= b - 1 for a, b in zip(closing, closing[1:]))
     for width in (760, 1600):
         root.setWidth(width); sample()
         assert panel.width() == 0 and not controller.workspaceExpanded
-    root.setWidth(1100); sidebar.setProperty("pinned", False)
+    root.setWidth(1200); sidebar.setProperty("pinned", False); sample()
     panel.open(); sample()
     assert panel.property("opened")
     sidebar.setProperty("pinned", True); sample()
-    assert not panel.property("opened") and controller.workspaceExpanded
+    assert not panel.property("opened") and not controller.workspaceExpanded
     sidebar.setProperty("pinned", False); sample()
-    assert panel.property("opened")
+    assert not panel.property("opened")
+    panel.open(); sample()
     search = root.findChild(QObject, "workspaceSearchField")
     search.forceActiveFocus(Qt.TabFocusReason)
     QTest.keyClick(root, Qt.Key_Escape); sample()
@@ -263,6 +264,7 @@ def main():
             "path": "/virtual/input/%d.xlsx" % i, "kind": "xlsx", "detail": "测试资料"} for i in range(100)])
         controller._log_model.append_batch([{"time": "12:00", "text": "用于检查窄窗口日志换行与滚动区域的长内容。" * 8,
             "level": "info"} for _ in range(5)])
+        root.setWidth(1400); sample()
         panel.open()
         for width in (1400, 1240, 760):
             root.setWidth(width); sample()
@@ -371,7 +373,7 @@ def main():
     sample(30)
     assert not errors, warning_contexts or errors
     (output / "geometry.json").write_text(json.dumps(frames, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("responsive workspace: non-overlap, animation, hysteresis, restore, focus and core widths OK", flush=True)
+    print("responsive workspace: non-overlap, animation, explicit reopen, focus and core widths OK", flush=True)
     print(str(output), flush=True)
     controller.close()
     # This isolated process checks layout, not native application shutdown.
