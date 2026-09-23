@@ -468,17 +468,11 @@ def _read_statistics_file(file_path: Path, warnings: list[str]) -> tuple[list[At
         explicit = {name: role for role, name in choices.items() if role in roles and name is not None}
         pending, used_sheets, found_roles = [], set(), set()
         for ws in workbook.worksheets:
-            # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
-            grid = SheetGrid(ws)
+            # 先读取识别范围；确认用途后顺序读取正文，避免只读表随机访问。
+            grid = SheetGrid(ws, max_rows=30)
             if ignored_sheet(grid, file_path.name) and grid.title not in explicit:
                 recognized_sheet = True
                 continue
-            if grid.dimension_recovered:
-                warnings.append(
-                    f"{file_path.name} 工作表「{grid.title}」的导出范围 "
-                    f"{grid.declared_dimension or '未知'} 不完整，已自动扫描并恢复为 "
-                    f"{grid.actual_dimension}。"
-                )
             if active():
                 try:
                     mapped = _adapt_statistics_grid(grid, file_path.name, role_override=explicit.get(grid.title), source_sheets=workbook.worksheets)
@@ -515,6 +509,13 @@ def _read_statistics_file(file_path: Path, warnings: list[str]) -> tuple[list[At
                 )
                 continue
             headers = _read_headers(grid, header_row)
+            grid.materialize()
+            if grid.dimension_recovered:
+                warnings.append(
+                    f"{file_path.name} 工作表「{grid.title}」的导出范围 "
+                    f"{grid.declared_dimension or '未知'} 不完整，已自动扫描并恢复为 "
+                    f"{grid.actual_dimension}。"
+                )
             if _is_attendance_sheet(headers):
                 recognized_sheet = True
                 used_sheets.add(grid.title)
@@ -1147,7 +1148,7 @@ def _read_expected_reporters(staff_path: Path, temp_dir: Path, warnings: list[st
         candidates = [selected] if selected is not None else workbook.worksheets
         used_sheets = set()
         for ws in candidates:
-            grid = SheetGrid(ws)
+            grid = SheetGrid(ws, max_rows=30)
             if active():
                 grid = map_sheet(grid, "staff", required=selected is not None or len(candidates) == 1, file=staff_path.name)
                 if grid is None:
@@ -1157,6 +1158,7 @@ def _read_expected_reporters(staff_path: Path, temp_dir: Path, warnings: list[st
                 continue
             used_sheets.add(grid.title)
             headers = _read_headers(grid, header_row)
+            grid.materialize()
             for row_index in range(header_row + 1, grid.max_row + 1):
                 name = _cell_text(_header_value_any(grid, row_index, headers, ("姓名", "汇报人", "员工姓名", "人员姓名")))
                 if not name:

@@ -26,6 +26,34 @@ from hr_toolkit.tools.data_statistics import (
 
 
 class DataStatisticsTest(unittest.TestCase):
+    def test_unrelated_sheet_reads_only_recognition_prefix(self) -> None:
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+        from hr_toolkit.tools.data_statistics import _read_statistics_file
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "考勤.xlsx"
+            _write_attendance_file(path)
+            expected = _read_statistics_file(path, [])
+            wb = load_workbook(path)
+            extra = wb.create_sheet("sheet9")
+            extra["A1"] = "无关说明"
+            extra["A9000"] = "不需要读取的正文"
+            wb.save(path)
+            wb.close()
+            original = ReadOnlyWorksheet.iter_rows
+            visited = []
+
+            def guarded(ws, *args, **kwargs):
+                for index, row in enumerate(original(ws, *args, **kwargs), 1):
+                    if ws.title == "sheet9":
+                        visited.append(index)
+                        self.assertLessEqual(index, 30)
+                    yield row
+
+            with patch.object(ReadOnlyWorksheet, "iter_rows", guarded):
+                actual = _read_statistics_file(path, [])
+            self.assertEqual(actual, expected)
+            self.assertTrue(visited)
+
     def test_attendance_output_follows_staff_without_changing_records(self) -> None:
         from hr_toolkit.tools.data_statistics import _order_attendance_for_output
         rows = [SimpleNamespace(name=name, value=index) for index, name in
