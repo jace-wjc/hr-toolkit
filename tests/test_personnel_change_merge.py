@@ -13,6 +13,27 @@ from hr_toolkit.tools import personnel_change_merge as changes
 
 
 class PersonnelChangeMergeTest(unittest.TestCase):
+    def test_input_reader_does_not_scan_unrelated_sheet_body(self) -> None:
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "2026年4月异动.xlsx"
+            _write_change_file(path, {"增员": [["测试甲", "110101199001010011", "生产人员", "2026-04-01"]]})
+            book = load_workbook(path)
+            book.create_sheet("sheet9")["A9000"] = "不参与业务"
+            book.save(path)
+            book.close()
+            original = ReadOnlyWorksheet.iter_rows
+            def guarded(ws, *args, **kwargs):
+                self.assertNotEqual(ws.title, "sheet9")
+                return original(ws, *args, **kwargs)
+            with patch.object(ReadOnlyWorksheet, "iter_rows", guarded):
+                rows, warnings = changes._read_change_file(path)
+            self.assertEqual(len(rows["增员"]), 1)
+            with patch.object(changes, "load_workbook", side_effect=lambda p, **kw: load_workbook(p, data_only=kw.get("data_only", False))):
+                normal_rows, normal_warnings = changes._read_change_file(path)
+            self.assertEqual(rows, normal_rows)
+            self.assertEqual(warnings, normal_warnings)
+
     def test_conflict_diagnostics_keep_original_values_and_merge_counts(self) -> None:
         wb = Workbook()
         ws = wb.active
