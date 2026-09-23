@@ -39,6 +39,30 @@ from hr_toolkit.common.resources import open_template_resource
 
 
 class ExcelHelperTest(unittest.TestCase):
+    def test_strict_formatting_does_not_reuse_a_degraded_conversion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "工资.xls"
+            source.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 64)
+
+            def values_converter(_source, destination):
+                wb = Workbook()
+                wb.active["A1"] = "仅数据"
+                wb.save(destination)
+                wb.close()
+
+            with (
+                patch("hr_toolkit.common.excel_compat.sys.platform", "linux"),
+                patch("hr_toolkit.common.excel_compat._convert_with_libreoffice", side_effect=RuntimeError("不可用")) as native,
+                patch("hr_toolkit.common.excel_compat._convert_with_xlrd", side_effect=values_converter) as fallback,
+            ):
+                converted = ensure_xlsx_workbook(source, root / "temp", preserve_formatting=True)
+                self.assertTrue(converted.exists())
+                with self.assertRaisesRegex(RuntimeError, "无法保留.*原始格式"):
+                    ensure_xlsx_workbook(source, root / "temp", require_formatting=True)
+            fallback.assert_called_once()
+            self.assertEqual(native.call_count, 2)
+
     def test_sheet_grid_preview_is_bounded_and_materializes_once(self) -> None:
         class Source:
             title = "业务数据"

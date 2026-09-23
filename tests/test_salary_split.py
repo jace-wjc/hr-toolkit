@@ -3,16 +3,125 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from copy import copy
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
-from openpyxl.styles import PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from hr_toolkit.tools.salary_split import split_salary_by_company, _remap_summary_formula
 
 
 class SalarySplitTest(unittest.TestCase):
+    def test_single_total_preserves_styles_with_different_company_sizes(self) -> None:
+        def style(cell):
+            return (copy(cell.font), copy(cell.fill), copy(cell.border), copy(cell.alignment),
+                    cell.number_format, copy(cell.protection))
+
+        for merged in (False, True):
+            with self.subTest(merged=merged), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "单合计工资.xlsx"
+                _write_case4_flat_sample(source)
+                wb = load_workbook(source)
+                detail, summary = wb["明细表"], wb["汇总表"]
+                detail.cell(11, 40).value = "公司C"
+                for row in range(6, 13):
+                    detail.row_dimensions[row].height = 20 + row
+                    detail.row_dimensions[row].outlineLevel = 1 if row < 12 else 0
+                    detail.row_dimensions[row].hidden = row == 10
+                    for column in (1, 2, 3, 16, 40, 41, 42):
+                        cell = detail.cell(row, column)
+                        cell.font = Font(name="宋体", size=11, bold=row == 12)
+                        cell.fill = PatternFill("solid", fgColor="FFF2CC" if row == 12 else "DDEBF7")
+                        cell.border = Border(left=Side(style="thin"), right=Side(style="medium"),
+                                             top=Side(style="thin"), bottom=Side(style="thin"))
+                        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                        cell.number_format = "#,##0.00" if column == 16 else "General"
+                if merged:
+                    detail.merge_cells("A12:C12")
+                else:
+                    detail["B12"] = "原表未合并"
+                summary["F6"].border = Border(right=Side(style="medium"))
+                summary["A6"].fill = PatternFill("solid", fgColor="FFF2CC")
+                wb.save(source)
+                wb.close()
+                original_bytes = source.read_bytes()
+                original = load_workbook(source)
+                try:
+                    result = split_salary_by_company(source, root / "out")
+                    self.assertEqual(sum(item.employee_count for item in result.outputs), 6)
+                    for item in result.outputs:
+                        source_rows = [row for row in range(6, 12)
+                                       if original["明细表"].cell(row, 40).value == item.company]
+                        self.assertEqual(item.employee_count, len(source_rows))
+                        output = load_workbook(item.file_path)
+                        try:
+                            target = output["明细表"]
+                            total_row = 6 + len(source_rows)
+                            for new_row, old_row in zip(range(6, total_row + 1), [*source_rows, 12]):
+                                for column in (1, 2, 3, 16, 40, 41, 42):
+                                    self.assertEqual(style(target.cell(new_row, column)),
+                                                     style(original["明细表"].cell(old_row, column)))
+                                self.assertEqual(target.row_dimensions[new_row].height, 20 + old_row)
+                                self.assertEqual(target.row_dimensions[new_row].hidden, old_row == 10)
+                                self.assertEqual(target.row_dimensions[new_row].outlineLevel, 1 if old_row < 12 else 0)
+                                self.assertIsNone(target.cell(new_row, 41).value)
+                                self.assertIsNone(target.cell(new_row, 42).value)
+                            self.assertEqual(f"A{total_row}:C{total_row}" in target.merged_cells, merged)
+                            self.assertEqual(target.cell(total_row, 16).value, f"=SUM(P6:P{total_row - 1})")
+                            if not merged:
+                                self.assertEqual(target.cell(total_row, 2).value, "原表未合并")
+                            self.assertEqual(style(output["汇总表"]["F6"]), style(original["汇总表"]["F6"]))
+                            self.assertEqual(style(output["汇总表"]["A6"]), style(original["汇总表"]["A6"]))
+                        finally:
+                            output.close()
+                finally:
+                    original.close()
+                self.assertEqual(source.read_bytes(), original_bytes)
+
+    def test_xls_split_uses_formatted_conversion_or_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "工资.xls"
+            original_bytes = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 64
+            source.write_bytes(original_bytes)
+
+            def formatted_converter(sandbox, destination):
+                self.assertNotEqual(sandbox, source)
+                self.assertEqual(sandbox.read_bytes(), original_bytes)
+                _write_case4_flat_sample(destination)
+                wb = load_workbook(destination)
+                wb["明细表"]["A12"].fill = PatternFill("solid", fgColor="FFF2CC")
+                wb.save(destination)
+                wb.close()
+
+            with (
+                patch("hr_toolkit.common.excel_compat.sys.platform", "linux"),
+                patch("hr_toolkit.common.excel_compat._convert_with_libreoffice", side_effect=formatted_converter),
+                patch("hr_toolkit.common.excel_compat._convert_with_xlrd") as values_only,
+            ):
+                result = split_salary_by_company(source, root / "out")
+                values_only.assert_not_called()
+            for item in result.outputs:
+                wb = load_workbook(item.file_path)
+                try:
+                    self.assertEqual(wb["明细表"].cell(6 + item.employee_count, 1).fill.fgColor.rgb, "00FFF2CC")
+                finally:
+                    wb.close()
+            with (
+                patch("hr_toolkit.common.excel_compat.sys.platform", "linux"),
+                patch("hr_toolkit.common.excel_compat._convert_with_libreoffice", side_effect=RuntimeError("不可用")),
+                patch("hr_toolkit.common.excel_compat._convert_with_xlrd") as values_only,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "无法保留.*原始格式"):
+                    split_salary_by_company(source, root / "failed")
+                values_only.assert_not_called()
+            self.assertFalse((root / "failed").exists())
+            self.assertEqual(source.read_bytes(), original_bytes)
+
     def test_split_sample_workbook(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

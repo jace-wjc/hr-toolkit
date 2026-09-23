@@ -6,7 +6,7 @@ from hr_toolkit.common.run_temp import temporary_directory
 from bisect import bisect_left
 from collections import OrderedDict
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -88,6 +88,11 @@ class EmployeeRow:
     section: str
     category: str | None
     snapshot: RowSnapshot
+
+
+@dataclass(frozen=True)
+class SalaryRowSnapshot(RowSnapshot):
+    row_dimension: Any = None
 
 
 @dataclass(frozen=True)
@@ -226,7 +231,9 @@ def split_salary_by_company(
         raise ValueError("当前工资拆分工具仅支持 .xlsx 或 .xls 文件")
 
     with temporary_directory(prefix="hr_salary_split_") as temp_root:
-        working_input_path = ensure_xlsx_workbook(input_path, Path(temp_root))
+        working_input_path = ensure_xlsx_workbook(
+            input_path, Path(temp_root), preserve_formatting=True, require_formatting=True,
+        )
         workbook = load_workbook(working_input_path, data_only=False)
         try:
             layout = _detect_layout(workbook, file=input_path.name)
@@ -304,6 +311,41 @@ def _find_detail_max_col(ws: Worksheet, header_row: int) -> int:
             if ws.cell(r, c).value is not None:
                 max_col = max(max_col, c)
     return max_col
+
+
+def _snapshot_detail_row(ws: Worksheet, row_index: int, business_max_column: int) -> SalaryRowSnapshot:
+    # Index only existing styled cells once. Do not expand every row to an
+    # unrelated far-right style, or let styling widen the sum/data range.
+    style_ends = getattr(ws, "_salary_style_row_ends", None)
+    if style_ends is None:
+        style_ends = {}
+        for (row, column), cell in ws._cells.items():
+            if cell.has_style:
+                style_ends[row] = max(style_ends.get(row, 0), column)
+        ws._salary_style_row_ends = style_ends
+    width = max(business_max_column, style_ends.get(row_index, 0))
+    snapshot = snapshot_row(ws, row_index, width)
+    # Extra columns carry formatting only, not new business values/formulas.
+    cells = [cell if column <= business_max_column else replace(cell, value=None)
+             for column, cell in enumerate(snapshot.cells, 1)]
+    return SalaryRowSnapshot(
+        source_row=snapshot.source_row, height=snapshot.height, cells=cells,
+        source_workbook=snapshot.source_workbook,
+        row_dimension=copy(ws.row_dimensions.get(row_index)),
+    )
+
+
+def _apply_detail_snapshot(ws: Worksheet, row: int, snapshot: RowSnapshot, *, translate_formulas: bool) -> None:
+    # delete_rows does not move row dimensions. Restore the source row's
+    # height/hidden/grouping/style instead of inheriting the old target row.
+    ws.row_dimensions.pop(row, None)
+    dimension = getattr(snapshot, "row_dimension", None)
+    if dimension is not None:
+        dimension = copy(dimension)
+        dimension.index = row
+        dimension.parent = ws
+        ws.row_dimensions[row] = dimension
+    apply_row_snapshot(ws, row, snapshot, translate_formulas=translate_formulas)
 
 
 def _detect_layout(workbook, *, file="") -> SalarySheetLayout:
@@ -498,7 +540,7 @@ def _detect_detail_hierarchy(ws: Worksheet, layout: SalarySheetLayout) -> Detail
             grand_total_info = GrandTotalInfo(
                 label=label,
                 total_row=row_index,
-                total_snapshot=snapshot_row(ws, row_index, layout.max_column),
+                total_snapshot=_snapshot_detail_row(ws, row_index, layout.max_column),
                 merged_ranges=_get_row_merged_ranges(ws, row_index),
             )
             break
@@ -525,7 +567,7 @@ def _detect_detail_hierarchy(ws: Worksheet, layout: SalarySheetLayout) -> Detail
                 source_start_row=section_start,
                 source_end_row=row_index - 1,
                 subtotal_row=row_index,
-                subtotal_snapshot=snapshot_row(ws, row_index, layout.max_column),
+                subtotal_snapshot=_snapshot_detail_row(ws, row_index, layout.max_column),
                 merged_ranges=_get_row_merged_ranges(ws, row_index),
                 inferred_subtotal=inferred_subtotal,
             )
@@ -537,7 +579,7 @@ def _detect_detail_hierarchy(ws: Worksheet, layout: SalarySheetLayout) -> Detail
                 cat = CategoryGroup(
                     label=label,
                     total_row=row_index,
-                    total_snapshot=snapshot_row(ws, row_index, layout.max_column),
+                    total_snapshot=_snapshot_detail_row(ws, row_index, layout.max_column),
                     leaf_labels=tuple(item.label for item in current_category_leaves),
                     merged_ranges=_get_row_merged_ranges(ws, row_index),
                 )
@@ -550,7 +592,7 @@ def _detect_detail_hierarchy(ws: Worksheet, layout: SalarySheetLayout) -> Detail
                     source_start_row=section_start,
                     source_end_row=row_index - 1,
                     subtotal_row=row_index,
-                    subtotal_snapshot=snapshot_row(ws, row_index, layout.max_column),
+                    subtotal_snapshot=_snapshot_detail_row(ws, row_index, layout.max_column),
                     merged_ranges=_get_row_merged_ranges(ws, row_index),
                 )
                 leaves.append(leaf)
@@ -619,7 +661,7 @@ def _collect_employees(
                 company=company,
                 section=leaf.label,
                 category=leaf_to_cat.get(leaf.label),
-                snapshot=snapshot_row(ws, row_index, layout.max_column),
+                snapshot=_snapshot_detail_row(ws, row_index, layout.max_column),
             )
         )
     if not employees:
@@ -680,13 +722,11 @@ def _apply_row_merged_ranges(
     ws: Worksheet,
     target_row: int,
     source_merged_ranges: tuple[tuple[int, int], ...],
-    default_end_col: int | None,
     *,
     merge_writer: _RowMergeWriter | None = None,
 ) -> None:
     if merge_writer is not None:
-        ranges = source_merged_ranges or (((1, default_end_col),) if default_end_col is not None else ())
-        for min_col, max_col in ranges:
+        for min_col, max_col in source_merged_ranges:
             merge_writer.merge(target_row, min_col, max_col)
         return
     if source_merged_ranges:
@@ -697,13 +737,6 @@ def _apply_row_merged_ranges(
                 end_row=target_row,
                 end_column=max_col,
             )
-    elif default_end_col is not None:
-        ws.merge_cells(
-            start_row=target_row,
-            start_column=1,
-            end_row=target_row,
-            end_column=default_end_col,
-        )
 
 
 def _write_company_workbook(
@@ -752,6 +785,9 @@ def _rebuild_detail_sheet(
     }
     unmerge_ranges_from_row(ws, layout.data_start_row)
     ws.delete_rows(layout.data_start_row, ws.max_row - layout.data_start_row + 1)
+    for row in list(ws.row_dimensions):
+        if row >= layout.data_start_row:
+            del ws.row_dimensions[row]
     merge_writer = _RowMergeWriter(ws)
 
     current_row = layout.data_start_row
@@ -761,7 +797,6 @@ def _rebuild_detail_sheet(
 
     rows_by_leaf = _group_sections(rows)
     leaf_by_label = {leaf.label: leaf for leaf in hierarchy.leaves}
-    default_merge_end = max(1, layout.id_card_col - 1)
 
     if hierarchy.categories:
         leaves_in_categories = set()
@@ -779,7 +814,7 @@ def _rebuild_detail_sheet(
                 for emp in section_rows:
                     if employee_seq % 500 == 0:
                         _check_cancelled(cancelled)
-                    apply_row_snapshot(ws, current_row, emp.snapshot, translate_formulas=True)
+                    _apply_detail_snapshot(ws, current_row, emp.snapshot, translate_formulas=True)
                     ws.cell(current_row, layout.seq_col).value = employee_seq
                     row_map[emp.source_row] = current_row
                     current_row += 1
@@ -787,10 +822,10 @@ def _rebuild_detail_sheet(
                 data_end_row = current_row - 1
                 if leaf.subtotal_snapshot is not None:
                     subtotal_row = current_row
-                    apply_row_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
+                    _apply_detail_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
                     ws.cell(subtotal_row, 1).value = leaf.label
                     _write_detail_section_total_formulas(ws, layout, subtotal_row, data_start_row, data_end_row, preserve_rounding=leaf.inferred_subtotal)
-                    _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end, merge_writer=merge_writer)
+                    _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, merge_writer=merge_writer)
                     if leaf.subtotal_row is not None:
                         row_map[leaf.subtotal_row] = subtotal_row
                     current_row += 1
@@ -810,11 +845,11 @@ def _rebuild_detail_sheet(
 
             if cat_rendered_leaves:
                 group_total_row = current_row
-                apply_row_snapshot(ws, group_total_row, cat.total_snapshot, translate_formulas=False)
+                _apply_detail_snapshot(ws, group_total_row, cat.total_snapshot, translate_formulas=False)
                 ws.cell(group_total_row, 1).value = cat.label
                 sub_rows = [l.new_subtotal_row for l in cat_rendered_leaves if l.new_subtotal_row is not None]
                 _write_detail_group_total_formulas(ws, layout, group_total_row, sub_rows)
-                _apply_row_merged_ranges(ws, group_total_row, cat.merged_ranges, default_merge_end, merge_writer=merge_writer)
+                _apply_row_merged_ranges(ws, group_total_row, cat.merged_ranges, merge_writer=merge_writer)
                 row_map[cat.total_row] = group_total_row
                 rendered_groups.append(
                     RenderedGroup(
@@ -836,7 +871,7 @@ def _rebuild_detail_sheet(
             for emp in section_rows:
                 if employee_seq % 500 == 0:
                     _check_cancelled(cancelled)
-                apply_row_snapshot(ws, current_row, emp.snapshot, translate_formulas=True)
+                _apply_detail_snapshot(ws, current_row, emp.snapshot, translate_formulas=True)
                 ws.cell(current_row, layout.seq_col).value = employee_seq
                 row_map[emp.source_row] = current_row
                 current_row += 1
@@ -844,10 +879,10 @@ def _rebuild_detail_sheet(
             data_end_row = current_row - 1
             if leaf.subtotal_snapshot is not None:
                 subtotal_row = current_row
-                apply_row_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
+                _apply_detail_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
                 ws.cell(subtotal_row, 1).value = leaf.label
                 _write_detail_section_total_formulas(ws, layout, subtotal_row, data_start_row, data_end_row, preserve_rounding=leaf.inferred_subtotal)
-                _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end, merge_writer=merge_writer)
+                _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, merge_writer=merge_writer)
                 if leaf.subtotal_row is not None:
                     row_map[leaf.subtotal_row] = subtotal_row
                 current_row += 1
@@ -872,7 +907,7 @@ def _rebuild_detail_sheet(
             for emp in section_rows:
                 if employee_seq % 500 == 0:
                     _check_cancelled(cancelled)
-                apply_row_snapshot(ws, current_row, emp.snapshot, translate_formulas=True)
+                _apply_detail_snapshot(ws, current_row, emp.snapshot, translate_formulas=True)
                 ws.cell(current_row, layout.seq_col).value = employee_seq
                 row_map[emp.source_row] = current_row
                 current_row += 1
@@ -880,10 +915,10 @@ def _rebuild_detail_sheet(
             data_end_row = current_row - 1
             if leaf.subtotal_snapshot is not None:
                 subtotal_row = current_row
-                apply_row_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
+                _apply_detail_snapshot(ws, subtotal_row, leaf.subtotal_snapshot, translate_formulas=False)
                 ws.cell(subtotal_row, 1).value = leaf.label
                 _write_detail_section_total_formulas(ws, layout, subtotal_row, data_start_row, data_end_row, preserve_rounding=leaf.inferred_subtotal)
-                _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, None if leaf.inferred_subtotal else default_merge_end, merge_writer=merge_writer)
+                _apply_row_merged_ranges(ws, subtotal_row, leaf.merged_ranges, merge_writer=merge_writer)
                 if leaf.subtotal_row is not None:
                     row_map[leaf.subtotal_row] = subtotal_row
                 current_row += 1
@@ -903,7 +938,7 @@ def _rebuild_detail_sheet(
     rendered_grand_total_row: int | None = None
     if hierarchy.grand_total is not None:
         grand_total_row = current_row
-        apply_row_snapshot(ws, grand_total_row, hierarchy.grand_total.total_snapshot, translate_formulas=False)
+        _apply_detail_snapshot(ws, grand_total_row, hierarchy.grand_total.total_snapshot, translate_formulas=False)
         ws.cell(grand_total_row, 1).value = hierarchy.grand_total.label
 
         if rendered_groups:
@@ -917,7 +952,7 @@ def _rebuild_detail_sheet(
             last_data = max(l.data_end_row for l in rendered_leaves)
             _write_detail_section_total_formulas(ws, layout, grand_total_row, first_data, last_data)
 
-        _apply_row_merged_ranges(ws, grand_total_row, hierarchy.grand_total.merged_ranges, default_merge_end, merge_writer=merge_writer)
+        _apply_row_merged_ranges(ws, grand_total_row, hierarchy.grand_total.merged_ranges, merge_writer=merge_writer)
         row_map[hierarchy.grand_total.total_row] = grand_total_row
         rendered_grand_total_row = grand_total_row
         current_row += 1

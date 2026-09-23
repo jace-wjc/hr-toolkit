@@ -167,8 +167,11 @@ def ensure_xlsx_workbook(
     temp_dir: Path,
     *,
     preserve_formatting: bool = False,
+    require_formatting: bool = False,
     warning_callback: Callable[[str], None] | None = None,
 ) -> Path:
+    # Strict callers must never reuse a previous values-only fallback.
+    preserve_formatting = preserve_formatting or require_formatting
     path = Path(path).expanduser().resolve()
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED_EXCEL_SUFFIXES:
@@ -177,7 +180,8 @@ def ensure_xlsx_workbook(
     file_kind = _detect_excel_file_kind(path)
     if suffix == ".xlsx" and file_kind == "xlsx":
         return path
-    output_dir = _conversion_dir(path, temp_dir, preserve_formatting=preserve_formatting)
+    output_dir = _conversion_dir(path, temp_dir, preserve_formatting=preserve_formatting,
+                                 require_formatting=require_formatting)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{path.stem}.xlsx"
     from .template_mapping import register_source_origin
@@ -195,6 +199,7 @@ def ensure_xlsx_workbook(
             output_path,
             temp_dir=temp_dir,
             preserve_formatting=preserve_formatting,
+            require_formatting=require_formatting,
             warning_callback=warning_callback,
         )
     if not _is_usable_xlsx(output_path):
@@ -212,8 +217,9 @@ def _detect_excel_file_kind(path: Path) -> str:
     return path.suffix.lower().lstrip(".")
 
 
-def _conversion_dir(path: Path, temp_dir: Path, *, preserve_formatting: bool = False) -> Path:
-    mode = "formatted" if preserve_formatting else "values"
+def _conversion_dir(path: Path, temp_dir: Path, *, preserve_formatting: bool = False,
+                    require_formatting: bool = False) -> Path:
+    mode = "formatted-strict" if require_formatting else ("formatted" if preserve_formatting else "values")
     digest = hashlib.sha1(f"{path}\0{mode}".encode("utf-8")).hexdigest()[:12]
     return temp_dir / "xls_converted" / digest
 
@@ -277,8 +283,10 @@ def _convert_xls_to_xlsx(
     temp_dir: Path | None = None,
     *,
     preserve_formatting: bool = False,
+    require_formatting: bool = False,
     warning_callback: Callable[[str], None] | None = None,
 ) -> None:
+    preserve_formatting = preserve_formatting or require_formatting
     errors: list[str] = []
 
     if not preserve_formatting:
@@ -293,7 +301,7 @@ def _convert_xls_to_xlsx(
             return
 
     # 优先让 Excel/WPS/LibreOffice 在只读沙箱副本上保留格式、公式和结构。
-    # 这些组件不可用时，格式不能成为阻断项，后面会自动退回 xlrd 数据模式。
+    # 普通调用保留兼容降级；要求保留格式的调用不允许退回纯数据模式。
     sandbox_dir = (temp_dir or output_path.parent) / "xls_sandbox"
     digest = hashlib.sha1(str(source).encode("utf-8")).hexdigest()[:8]
     sandbox_source = sandbox_dir / f"{digest}_{source.name}"
@@ -326,6 +334,14 @@ def _convert_xls_to_xlsx(
                     sandbox_source.unlink()
                 except OSError:
                     pass
+
+    if require_formatting:
+        message = (
+            "无法保留此 .xls 文件的原始格式，已停止处理，未使用仅复制数据的兼容模式。"
+            "请在 Excel/WPS 中另存为 .xlsx 后重新选择文件，"
+            "或在本机安装可用的 Excel/WPS/LibreOffice 表格转换组件。"
+        )
+        raise RuntimeError(message + (" 详细信息：" + "；".join(errors) if errors else ""))
 
     if preserve_formatting and _try_xls_converter(
         "内置 xlrd 兼容转换",
