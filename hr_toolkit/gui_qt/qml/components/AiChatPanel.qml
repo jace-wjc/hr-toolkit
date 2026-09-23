@@ -269,7 +269,13 @@ Item {
                 model: controller.aiChatModel
                 spacing: 12
                 topMargin: 14
-                bottomMargin: 14
+                // Keep breathing room inside the scrollable content so
+                // positionViewAtEnd includes it after streamed text/actions.
+                bottomMargin: 0
+                footer: Item {
+                    width: aiChatView.width
+                    height: aiChatView.count > 0 ? 24 : 0
+                }
                 // 流式输出时跟着最新内容走；用户手动上滚就暂停跟随，回到底部再恢复。
                 property bool followTail: true
                 // Virtualized rows must retain their measured size when they
@@ -301,6 +307,9 @@ Item {
                     scheduleTail()
                 }
                 onContentHeightChanged: scheduleTail()
+                // The composer can grow or shrink without changing messages.
+                // Preserve the bottom gap only while following new replies.
+                onHeightChanged: scheduleTail()
                 onMovementStarted: { followTail = false; tailTimer.stop() }
                 onMovementEnded: followTail = atYEnd
                 Component.onCompleted: scheduleTail()
