@@ -1027,7 +1027,8 @@ class WindowsPackagingTests(unittest.TestCase):
         configuration = validation.split("\n    steps:", 1)[0]
         self.assertIn("runs-on: windows-latest", configuration)
         self.assertNotIn("needs:", configuration)
-        self.assertIn("python -m unittest discover -s tests -v", validation)
+        self.assertIn("python scripts/run_isolated_tests.py --timeout 300", validation)
+        self.assertIn("timeout-minutes: 20", configuration)
         self.assertIn("-r requirements-build.txt -c constraints/python312-production.txt", validation)
         modern_build = workflow.split("\n  build-windows:", 1)[1].split(
             "\n  build-windows-win7:", 1

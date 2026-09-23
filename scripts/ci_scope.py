@@ -110,6 +110,7 @@ ROUTES = {
     "hr_toolkit_qt_app.py": GUI,
     "hr_toolkit_updater.py": "app_update",
     "scripts/ci_scope.py": "ci_scope",
+    "scripts/run_isolated_tests.py": "run_isolated_tests windows_packaging ci_scope",
     "scripts/versioning.py": "versioning release release_metadata",
     "scripts/bump_version.py": "versioning",
     "scripts/release.py": "release versioning",

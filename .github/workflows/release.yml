@@ -86,6 +86,7 @@ jobs:
   validate-windows:
     name: Validate Windows source
     runs-on: windows-latest
+    timeout-minutes: 20
     env:
       PYTHONUTF8: "1"
       PYTHONDONTWRITEBYTECODE: "1"
@@ -112,7 +113,8 @@ jobs:
           python -m pip check
 
       - name: Run complete Windows unit test suite
-        run: python -m unittest discover -s tests -v
+        # Keep full discovery; isolate native Qt state and bound stuck modules.
+        run: python scripts/run_isolated_tests.py --timeout 300
 
   build-windows:
     name: Build Windows x64 EXE
