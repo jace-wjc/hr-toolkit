@@ -65,7 +65,12 @@ ApplicationWindow {
     property bool aiPanelCreated: false
     property string rightPanelTab: "files"
     readonly property bool sidePanelFits: !workspaceDrawer.autoCollapsed && height >= 640
-    onSidePanelFitsChanged: if (!sidePanelFits) closeRightPanel()
+    onSidePanelFitsChanged: Qt.callLater(root.closeUnavailableRightPanel)
+    function closeUnavailableRightPanel() {
+        // Open-state notifications can run while requestedOpen is evaluating.
+        // Recheck after bindings settle before changing their source state.
+        if (!sidePanelFits && workspaceDrawer.requestedOpen) closeRightPanel()
+    }
     function closeRightPanel() {
         aiPanelRequested = false
         controller.setWorkspaceExpanded(false)
@@ -2074,7 +2079,7 @@ ApplicationWindow {
         objectName: "workspaceDrawer"
         parent: workspaceLayout
         requestedOpen: root.aiPanelRequested || (root.rightPanelTab === "files" && controller.workspaceExpanded && controller.hasProject)
-        onRequestedOpenChanged: if (requestedOpen && !root.sidePanelFits) root.closeRightPanel()
+        onRequestedOpenChanged: Qt.callLater(root.closeUnavailableRightPanel)
         minimumPanelWidth: 400
         maximumPanelWidth: 480
         preferredPanelWidth: 480
@@ -2083,7 +2088,6 @@ ApplicationWindow {
         onOpenRequested: root.openProjectPanel()
         onCloseRequested: root.closeRightPanel()
         onOpenedChanged: {
-            if (!opened && autoCollapsed && requestedOpen) root.closeRightPanel()
             if (!opened) {
                 workspaceAddMenu.close()
                 workspaceUseMenu.close()

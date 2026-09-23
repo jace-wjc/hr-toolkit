@@ -215,11 +215,21 @@ def main():
             controller._project_store = ProjectStore.create(Path(temp) / 'project', '2026年9月人事月度工作01')
             controller._project_path = controller._project_store.root
             controller.projectChanged.emit()
+            # Opening/restoring a project in a narrow window must clear the
+            # request without changing a binding's source during evaluation.
+            controller.setWorkspaceExpanded(True)
+            wait(30)
+            assert not controller.workspaceExpanded
+            assert not js('workspaceDrawer.opened')
+            assert not errors, errors
             window.setWidth(1600); window.setHeight(900)
+            wait(30)
+            assert not js('workspaceDrawer.opened'), 'Resize reopened the collapsed panel'
             js('sidebar.pinned = true')
             controller.selectTool('social_security')
             controller.setWorkspaceExpanded(True)
             wait(250)
+            assert js('workspaceDrawer.opened'), 'Explicit project panel reopen failed'
             assert js('sidebarProjectCard.width <= sidebar.width - 24'), 'Sidebar contents overflow'
             assert js('navScroll.width <= sidebar.width - 24'), 'Sidebar navigation overflows'
             assert js('workspaceRefreshButton.contentItem.implicitWidth <= workspaceRefreshButton.availableWidth'), 'Refresh label overflows'
