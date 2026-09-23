@@ -78,6 +78,38 @@ FILL_HEADERS = ("异动", "姓名", "身份证号码", "补入字段", "补入�
 FILLED = PatternFill("solid", fgColor="E4EFEA")
 WARNING = PatternFill("solid", fgColor="FFF2CC")
 
+# Keep the exported legend next to the notice vocabulary used below.
+NOTICE_DESCRIPTIONS = {
+    "未核对": "缺少对应流程，或无法确定核对月份，本项未完成核对。",
+    "日期缺失或无效": "异动表事件日期为空或无法识别，保留记录，不自动补齐。",
+    "流程待确认": "流程状态、日期或身份信息不完整，暂不能用于明确关联。",
+    "重复流程待确认": "同一人员、公司存在多条候选流程，需要人工核实，不自动选取。",
+    "身份信息不完整": "异动表缺少身份证或公司，不能自动关联。",
+    "公司对应不唯一": "公司名称匹配到多个全称，请维护公司对应关系。",
+    "对应流程待确认": "同一人员的候选流程存在不完整信息，暂不补齐。",
+    "重复记录待确认": "异动表与流程无法建立一对一关系，人工确认前不补齐。",
+    "姓名不一致": "身份证相同但姓名不同，不自动补齐。",
+    "工号不一致": "两边填写的工号不同，不自动补齐。",
+    "身份证待确认": "身份证脱敏、格式异常或以数字存储，仅核对，不自动补齐。",
+    "字段差异": "两边已有字段值不同，保留异动表原值。",
+    "日期差异": "存在同一人员、公司的候选流程，但事件日期不一致。",
+    "公司差异": "存在同一身份证的候选流程，但公司未能对应。",
+    "异动表有、流程无": "在本次核对范围及适用筛选条件内，未找到对应流程。",
+    "流程有、异动表无": "在本次核对范围内，未找到对应异动记录。",
+    "待确认": "存在身份、日期缺失或其他日期的同一人员，不能直接判定漏登记。",
+}
+
+
+def _result_explanations(highlight):
+    return [
+        ("结果颜色说明", "颜色用于结果副本；源文件不修改。"),
+        ("浅绿色", "异动表原为空，本次从明确匹配的流程中自动补入。"),
+        ("浅黄色", "两边已有值不同，保留异动表原值，只标记差异。"),
+        ("无颜色", "不代表全部核对通过，也可能未匹配、未补入或关闭了高亮。"),
+        ("本次高亮", "已开启" if highlight else "已关闭；补入记录和预警明细仍完整保留。"),
+        *(("预警类型：" + name, description) for name, description in NOTICE_DESCRIPTIONS.items()),
+    ]
+
 
 def text(value: Any) -> str:
     if value is None:
@@ -421,7 +453,12 @@ def reconcile_personnel_changes(
             report = Workbook()
             report.remove(report.active)
             try:
-                _table(report, "核对说明", ("项目", "内容"), info, cancelled)
+                _table(report, "核对说明", ("项目", "内容"), info + _result_explanations(highlight), cancelled)
+                legend = report["核对说明"]
+                for row in legend.iter_rows(min_row=2):
+                    if row[0].value in {"浅绿色", "浅黄色"}:
+                        for cell in row:
+                            cell.fill = FILLED if row[0].value == "浅绿色" else WARNING
                 _table(report, "预警明细", NOTICE_HEADERS, notices, cancelled)
                 _table(report, "补入记录", FILL_HEADERS, fills, cancelled)
                 output_dir.mkdir(parents=True, exist_ok=True)
