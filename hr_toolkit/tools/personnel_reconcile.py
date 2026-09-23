@@ -23,7 +23,7 @@ from openpyxl.utils.datetime import from_excel
 from hr_toolkit.common.excel_compat import ensure_xlsx_workbook
 from hr_toolkit.common.run_temp import temporary_directory
 from hr_toolkit.common.template_mapping import (
-    active, assigned_role, file_template_source, map_sheet, request_selection,
+    active, assigned_role, file_template_source, has_sheet_profile, map_sheet, request_selection,
     template_tool,
 )
 from hr_toolkit.tools.personnel_change_merge import _iter_input_files
@@ -342,12 +342,12 @@ def _records(ws, role, source, leave_date_field, cancelled):
 
 class _SparseSheet:
     """Compact value-only view for template mapping; skip empty format rows."""
-    def __init__(self, ws, cancelled):
+    def __init__(self, ws, cancelled, *, max_rows=None):
         self.title = ws.title
         self.rows = {}
         self.max_row = self.max_column = 0
         ws.reset_dimensions()
-        for r, values in enumerate(ws.iter_rows(max_col=512, values_only=True), 1):
+        for r, values in enumerate(ws.iter_rows(max_row=max_rows, max_col=512, values_only=True), 1):
             if r % 128 == 0:
                 _check(cancelled)
             cells = {c: v for c, v in enumerate(values, 1) if v is not None}
@@ -372,10 +372,18 @@ def _read_flows(path, source, leave_date_field, cancelled):
     found = defaultdict(list)
     try:
         for original in book:
-            ws = _SparseSheet(original, cancelled)
+            roles = ["flow_join", "flow_leave"]
+            # Legacy sparse profiles include the body's occupied column width.
+            # Keep their full view so a saved explicit mapping still wins.
+            complete = has_sheet_profile(original, roles)
+            ws = _SparseSheet(original, cancelled, max_rows=None if complete else 30)
+            if not ws.max_row:
+                # An empty prefix does not prove the entire sheet is empty.
+                # Retain the original treatment of data placed further down.
+                ws = _SparseSheet(original, cancelled)
+                complete = True
             if not ws.max_row:
                 continue
-            roles = ["flow_join", "flow_leave"]
             role = assigned_role(ws, roles, file=source, confirmed_only=True) if active() else None
             if not role:
                 headers = {norm(ws.cell(r, c).value) for r in range(1, min(ws.max_row, 20) + 1)
@@ -388,6 +396,8 @@ def _read_flows(path, source, leave_date_field, cancelled):
                 if active():
                     request_selection([ws], roles, file=source, message="请选择这张表是入职流程还是离职流程。")
                 raise ValueError(f"{source} / {ws.title}：无法识别流程类型。")
+            if not complete:
+                ws = _SparseSheet(original, cancelled)
             found[ROLES[role][1]].extend(_records(ws, role, source, leave_date_field, cancelled))
     finally:
         book.close()

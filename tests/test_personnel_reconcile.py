@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 
@@ -42,6 +43,28 @@ def join_row(identity=ID_A, **changes):
 
 
 class PersonnelReconcileTests(unittest.TestCase):
+    def test_unknown_flow_sheet_keeps_error_without_reading_entire_body(self):
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+        from hr_toolkit.tools.personnel_reconcile import _read_flows
+        self.write_flow([join_row()])
+        wb = load_workbook(self.flow)
+        extra = wb.create_sheet("sheet9")
+        extra["A1"] = "无关说明"
+        extra["A9000"] = "不需要读取的正文"
+        wb.save(self.flow)
+        wb.close()
+        original = ReadOnlyWorksheet.iter_rows
+
+        def guarded(ws, *args, **kwargs):
+            for index, row in enumerate(original(ws, *args, **kwargs), 1):
+                if ws.title == "sheet9":
+                    self.assertLessEqual(index, 30)
+                yield row
+
+        with patch.object(ReadOnlyWorksheet, "iter_rows", guarded):
+            with self.assertRaisesRegex(ValueError, "sheet9.*无法识别流程类型"):
+                _read_flows(self.flow, self.flow.name, "离职日期", None)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
