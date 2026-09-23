@@ -1357,7 +1357,8 @@ ApplicationWindow {
                                         visible: modelData.visible && !groupedAttendanceField
                                         active: visible
                                         property var field: modelData
-                                        sourceComponent: field.kind === "text" ? textFieldComponent
+                                        sourceComponent: field.id === "company_aliases" ? companyRulesComponent
+                                                       : field.kind === "text" ? textFieldComponent
                                                        : field.kind === "choice" ? choiceFieldComponent
                                                        : field.kind === "check" ? checkFieldComponent
                                                        : field.kind === "date_range" ? dateRangeFieldComponent
@@ -1802,6 +1803,17 @@ ApplicationWindow {
         }
     }
 
+    Component {
+        id: companyRulesComponent
+        ColumnLayout {
+            RowLayout {
+                Text { Layout.preferredWidth: 145; text: Ui.text("公司对应（可选）"); color: root.textMain; font.pixelSize: 13 }
+                AppButton { text: "管理对应规则"; enabled: controller.selectionEnabled; onClicked: companyRulesDialog.open() }
+                Text { text: Ui.text(field.value ? "已保存，下次自动使用" : "未设置，使用自动匹配"); color: root.textMuted; font.pixelSize: 12 }
+            }
+            Text { Layout.fillWidth: true; text: Ui.text("用于对应公司简称与全称，只影响核对，不修改原表。"); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+        }
+    }
     Component {
         id: textFieldComponent
         RowLayout {
@@ -2889,6 +2901,7 @@ ApplicationWindow {
         MenuItem { text: Ui.text("打开"); enabled: controller.selectionEnabled; onTriggered: controller.openSelectedInput(selectedInputMenu.inputPath) }
         MenuItem { text: Ui.text("打开所在文件夹"); enabled: controller.selectionEnabled; onTriggered: controller.revealSelectedInput(selectedInputMenu.inputPath) }
     }
+    CompanyRulesDialog { id: companyRulesDialog; backend: controller; anchors.centerIn: parent }
     RegionCodeDialog { id: regionCodeDialog; backend: controller; anchors.centerIn: parent }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }
     RenameReviewDialog { backend: controller.renameReview }

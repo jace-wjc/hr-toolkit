@@ -43,6 +43,7 @@ PIN_TEST = (
 
 # Entries add caller coverage to the matching test_<filename>.py, when it exists.
 ROUTES = {
+    "hr_toolkit/gui_qt/qml/components/CompanyRulesDialog.qml": "personnel_reconcile " + GUI,
     "hr_toolkit/gui_qt/qml/components/AiMarkdownTable.qml": "ai_assistant " + GUI,
     "hr_toolkit/gui_qt/qml/components/AiResponseBody.qml": "ai_assistant " + GUI,
     "hr_toolkit/gui_qt/qml/components/RecentSelectionButton.qml": "input_selection " + GUI,

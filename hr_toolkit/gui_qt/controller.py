@@ -282,6 +282,7 @@ class AppController(QObject):
         self._rename_review_context = None
         self._salary_header_profiles: dict[str, dict[str, Any]] = {}
         self._header_name_rules: dict[str, dict[str, Any]] = {}
+        self._company_aliases = ""
         self._template_issue: dict[str, Any] = {}
         self._template_settings_tool = ""
         self._template_issue_project = ""
@@ -463,6 +464,8 @@ class AppController(QObject):
         key = (spec.nav_id, spec.variant)
         if key not in self._form_states:
             values = default_values(spec)
+            if spec.tool_id == "personnel_reconcile":
+                values["company_aliases"] = self._company_aliases
             if spec.tool_id == "material_collector":
                 values["material_types"] = list(self._material_preferences.available_materials)
             self._form_states[key] = values
@@ -2152,6 +2155,16 @@ class AppController(QObject):
         )
         salary_profiles = state.get("salary_header_profiles")
         header_rules = state.get("header_name_rules")
+        from hr_toolkit.tools.personnel_reconcile import parse_company_aliases
+        try:
+            aliases = str(state.get("reconcile_company_aliases") or "")
+            parse_company_aliases(aliases)
+            self._company_aliases = aliases
+            for key, values in self._form_states.items():
+                if key == ("personnel_change_merge", "reconcile"):
+                    values["company_aliases"] = aliases
+        except ValueError as exc:
+            self._append_log("公司对应规则未加载：" + str(exc), "warning")
         if isinstance(header_rules, dict):
             self._header_name_rules = {str(key): value for key, value in header_rules.items() if isinstance(value, dict)}
         if isinstance(salary_profiles, dict):
@@ -2223,6 +2236,7 @@ class AppController(QObject):
                 "recent_selections_by_tool": self._recent_selections,
                 "salary_header_profiles": self._salary_header_profiles,
                 "header_name_rules": self._header_name_rules,
+                "reconcile_company_aliases": self._company_aliases,
                 "release_notes_seen_version": self._release_notes_seen_version,
                 "theme": self._presentation.theme,
                 "language": self._presentation.language,
@@ -2689,6 +2703,44 @@ class AppController(QObject):
                 open_path(target)
             except OSError as exc:
                 self.notificationRequested.emit("无法打开资料", str(exc), "warning")
+
+    @Slot(result="QVariantList")
+    def companyRuleRows(self):
+        return [{"alias": parts[0].strip(), "company": parts[1].strip()}
+                for item in re.split(r"[;；\n]+", self._company_aliases) if item.strip()
+                for parts in [re.split(r"[=＝]", item)] if len(parts) == 2]
+
+    @Slot(str, str, str, bool, result=str)
+    def saveCompanyRule(self, original: str, alias: str, company: str, remove: bool) -> str:
+        if not self.selectionEnabled:
+            return "当前不能修改规则，请等待处理结束。"
+        from hr_toolkit.tools.personnel_reconcile import company_text, parse_company_aliases
+        alias, company = alias.strip(), company.strip()
+        if not remove and (not alias or not company or any(c in alias + company for c in "=＝;；\n\r")):
+            return "请分别填写公司简称和完整名称，不要输入分号、等号或换行。"
+        rows = self.companyRuleRows()
+        if original and not any(row["alias"] == original for row in rows):
+            return "这条规则已经变化，请重新打开规则列表。"
+        rows = [row for row in rows if row["alias"] != original]
+        if not remove:
+            if any(company_text(row["alias"]) == company_text(alias) for row in rows):
+                return "这个简称已经存在，请使用对应行的修改按钮。"
+            rows.append({"alias": alias, "company": company})
+        value = "；".join(row["alias"] + "=" + row["company"] for row in rows)
+        try:
+            parse_company_aliases(value)
+        except ValueError as exc:
+            return str(exc)
+        previous = self._company_aliases
+        self._company_aliases = value
+        if not self._save_workspace_preferences():
+            self._company_aliases = previous
+            return "保存失败，原有规则未更改，请检查配置目录是否可写。"
+        key = ("personnel_change_merge", "reconcile")
+        if key in self._form_states:
+            self._form_states[key]["company_aliases"] = value
+        self._bump_form_revision()
+        return ""
 
     @Slot(int)
     def openWorkspaceRow(self, row: int) -> None:
