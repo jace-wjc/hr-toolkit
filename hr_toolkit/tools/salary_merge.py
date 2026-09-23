@@ -179,7 +179,7 @@ def merge_monthly_salary(
                 warnings.append(f"用户选择不合并：{file_path.name}")
                 continue
             try:
-                month = _detect_month(file_path)
+                month = _month_from_text(file_path.stem)
                 file_records, file_warnings = _read_salary_file(
                     file_path,
                     month,
@@ -338,10 +338,10 @@ def inspect_salary_templates(
             if progress_callback:
                 progress_callback(index, len(sources), f"正在检查列头 {index + 1}/{len(sources)}：{path.name}")
             try:
-                if role == "detail":
-                    _detect_month(path)
                 workbook = load_workbook(path, read_only=True, data_only=False)
                 try:
+                    if role == "detail":
+                        _detect_month(path, workbook=workbook)
                     group = inspect_workbook(workbook, role=role, profiles=profiles, hint=hints.get(source_key))
                     if role == "summary" and not group.get("sheet_needs_confirmation") and not _read_month_columns(workbook[group["sheet"]], group["header_bottom"]):
                         raise ValueError("已有汇总表未找到月份列，请确认表头包含 202601 这类月份")
@@ -399,7 +399,7 @@ def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
 
 def _read_salary_file(
     file_path: Path,
-    month: str,
+    month: str | None,
     *,
     cancelled: Callable[[], bool] | None = None,
     header_profiles: dict[str, Any] | None = None,
@@ -410,6 +410,8 @@ def _read_salary_file(
     try:
         value_wb = load_workbook(file_path, data_only=True, read_only=True)
         try:
+            if month is None:
+                month = _detect_month(file_path, workbook=value_wb)
             layout = _detect_source_layout(formula_wb, header_profiles=header_profiles, layout_hint=layout_hint)
             warnings.extend(unused_sheet_notices(formula_wb.worksheets, {layout.detail_sheet_name}, file_path.name))
             formula_ws = formula_wb[layout.detail_sheet_name]
@@ -521,23 +523,30 @@ def _find_data_start_row(ws: Worksheet, header_row: int) -> int:
     return bottom + 1
 
 
-def _detect_month(file_path: Path) -> str:
+def _detect_month(file_path: Path, *, workbook=None) -> str:
     month = _month_from_text(file_path.stem)
     if month:
         return month
 
-    workbook = load_workbook(file_path, data_only=True, read_only=True)
+    # The header inspection workbook is formula-mode. A formula in the date
+    # prefix needs the original cached-value path, not a different date result.
+    owned = workbook is None
+    if owned:
+        workbook = load_workbook(file_path, data_only=True, read_only=True)
     try:
         for ws in workbook.worksheets:
             max_row = ws.max_row or 5
             max_col = ws.max_column or 5
             for row in ws.iter_rows(min_row=1, max_row=min(max_row, 5), max_col=min(max_col, 5)):
                 for cell in row:
+                    if not owned and cell.data_type == "f":
+                        return _detect_month(file_path)
                     month = _month_from_value(cell.value)
                     if month:
                         return month
     finally:
-        workbook.close()
+        if owned:
+            workbook.close()
     raise ValueError(f"无法识别工资表月份：{file_path.name}。请在文件名中包含 202604 或 2026年4月")
 
 

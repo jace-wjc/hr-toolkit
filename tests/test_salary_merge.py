@@ -17,6 +17,28 @@ from hr_toolkit.tools.salary_split import split_salary_by_company
 
 
 class SalaryMergeTest(unittest.TestCase):
+    def test_month_detection_reuses_open_workbook(self) -> None:
+        from hr_toolkit.tools.salary_merge import _detect_month
+        wb = Workbook()
+        self.addCleanup(wb.close)
+        wb.active["A1"] = date(2026, 7, 1)
+        with patch("hr_toolkit.tools.salary_merge.load_workbook") as loader:
+            self.assertEqual(_detect_month(Path("工资.xlsx"), workbook=wb), "202607")
+        loader.assert_not_called()
+
+    def test_month_detection_uses_cached_value_before_later_date(self) -> None:
+        from hr_toolkit.tools.salary_merge import _detect_month
+        formulas = Workbook()
+        cached = Workbook()
+        self.addCleanup(formulas.close)
+        self.addCleanup(cached.close)
+        formulas.active["A1"] = "=DATE(2026,7,1)"
+        formulas.active["B1"] = date(2026, 8, 1)
+        cached.active["A1"] = date(2026, 7, 1)
+        with patch("hr_toolkit.tools.salary_merge.load_workbook", return_value=cached) as loader:
+            self.assertEqual(_detect_month(Path("工资.xlsx"), workbook=formulas), "202607")
+        loader.assert_called_once_with(Path("工资.xlsx"), data_only=True, read_only=True)
+
     def test_accept_monthly_gross_header_and_first_id_column(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
