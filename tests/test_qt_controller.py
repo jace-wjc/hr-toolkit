@@ -497,6 +497,81 @@ class QtControllerTests(unittest.TestCase):
         self.assertEqual(len(seen), 2)
         self.assertTrue(all(phrases for phrases in seen))
 
+    def _streaming_controller(self):
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._ai_sync_conversation = Mock()
+        controller._ai_busy = True
+        controller._ai_chat_model.append({"role": "user", "content": "question"})
+        controller._ai_chat_model.append({"role": "assistant", "content": "", "streaming": True})
+        return controller
+
+    def test_ai_stream_paces_bursts_without_losing_or_reordering_text(self):
+        controller = self._streaming_controller()
+        chunks = ["这是第一段回答。" * 8, "\n\n**Second paragraph**\n", "| Name | Count |\n| --- | --- |\n| A | 2 |"]
+        received = ""
+        for chunk in chunks:
+            controller._apply_ai_delta(chunk)
+            received += chunk
+            controller._drain_ai_text()
+            shown = controller._ai_chat_model.item_at(1)["content"]
+            self.assertTrue(shown)
+            self.assertTrue(received.startswith(shown))
+            self.assertLess(len(shown), len(received))
+        controller._apply_ai_finished(True, "")
+        self.assertTrue(controller.aiBusy)
+        controller._ai_sync_conversation.assert_not_called()
+        for _ in range(6):
+            controller._drain_ai_text()
+        final = controller._ai_chat_model.item_at(1)
+        self.assertEqual(final["content"], received)
+        self.assertEqual(final["html"], controller._ai_render(received))
+        self.assertFalse(final["streaming"])
+        self.assertFalse(controller.aiBusy)
+        self.assertFalse(controller._ai_text_timer.isActive())
+        controller._ai_sync_conversation.assert_called_once()
+
+    def test_ai_stop_during_presentation_drain_preserves_received_text(self):
+        controller = self._streaming_controller()
+        session = SimpleNamespace(stopped=False, last_context_body="")
+        session.request_stop = lambda: setattr(session, "stopped", True)
+        controller._ai_session = session
+        text = "已经收到的完整回答。" * 20
+        controller._apply_ai_delta(text)
+        controller._apply_ai_finished(True, "")
+        controller.aiStopGenerating()
+        final = controller._ai_chat_model.item_at(1)
+        self.assertTrue(final["content"].startswith(text + "\n\n"))
+        self.assertFalse(final["streaming"])
+        self.assertFalse(controller.aiBusy)
+        self.assertEqual(controller._ai_pending_text, "")
+        self.assertFalse(controller._ai_text_timer.isActive())
+        controller._ai_sync_conversation.assert_called_once()
+
+    def test_ai_stream_error_flushes_received_text_before_error(self):
+        controller = self._streaming_controller()
+        text = "Partial answer\n" * 20
+        controller._apply_ai_delta(text)
+        controller._apply_ai_finished(False, "connection failed")
+        final = controller._ai_chat_model.item_at(1)
+        self.assertEqual(final["content"], text + "\n\n⚠ connection failed")
+        self.assertFalse(controller.aiBusy)
+        self.assertFalse(controller._ai_text_timer.isActive())
+        controller._ai_sync_conversation.assert_called_once()
+
+    def test_ai_close_cancels_pending_presentation_updates(self):
+        controller = self._streaming_controller()
+        controller._apply_ai_delta("pending reply")
+        controller._apply_ai_finished(True, "")
+        controller.close()
+        controller._drain_ai_text()
+        controller._apply_ai_delta("late reply")
+        controller._apply_ai_finished(True, "")
+        self.assertFalse(controller._ai_text_timer.isActive())
+        self.assertEqual(controller._ai_pending_text, "")
+        self.assertIsNone(controller._ai_pending_finish)
+        controller._ai_sync_conversation.assert_not_called()
+
     def test_ai_restore_and_retry_keep_saved_attachment_context(self):
         from hr_toolkit.ai.history import ConversationRecord, ConversationStore
         with tempfile.TemporaryDirectory() as folder:

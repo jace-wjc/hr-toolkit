@@ -436,6 +436,15 @@ class AppController(QObject):
         # 等待首个字时轮流显示的状态文案：按这一轮实际发出去的附件类型生成，
         # 每轮换一组（见 hr_toolkit.ai.status）。
         self._ai_status_phrases: list[str] = []
+        # Pace only the presentation of received text, never the API/history.
+        # One GUI timer absorbs uneven provider chunks without one event per glyph.
+        self._ai_pending_text = ""
+        self._ai_pending_finish = None
+        self._ai_finish_frames = 0
+        self._ai_text_timer = QTimer(self)
+        self._ai_text_timer.setSingleShot(True)
+        self._ai_text_timer.setInterval(33)
+        self._ai_text_timer.timeout.connect(self._drain_ai_text)
         self._aiDeltaIncoming.connect(self._apply_ai_delta)
         self._aiFinishedIncoming.connect(self._apply_ai_finished)
         self._aiAttachmentsReady.connect(self._apply_ai_attachments)
@@ -5356,6 +5365,11 @@ class AppController(QObject):
         self.aiStatusChanged.emit()
 
     def _ai_begin_turn(self, question: str, attachment_rows, sent_attachments, *, context_body=None) -> None:
+        self._ai_text_timer.stop()
+        self._ai_text_timer.setInterval(33)
+        self._ai_pending_text = ""
+        self._ai_pending_finish = None
+        self._ai_finish_frames = 0
         session = self._ai_session_obj()
         self._ai_ensure_conversation(question)
         session.prepare_request()
@@ -5393,7 +5407,7 @@ class AppController(QObject):
             from hr_toolkit.ai.client import ChatError
 
             buffer: list[str] = []
-            last_flush = time.monotonic()
+            last_flush = 0.0
 
             def flush() -> None:
                 nonlocal last_flush
@@ -5408,7 +5422,7 @@ class AppController(QObject):
                     if self._closed:
                         return
                     buffer.append(delta)
-                    if time.monotonic() - last_flush >= 0.12:
+                    if time.monotonic() - last_flush >= 0.03:
                         flush()
                 flush()
                 if not self._closed:
@@ -5453,6 +5467,8 @@ class AppController(QObject):
             self.aiChanged.emit()
         if self._ai_session is not None:
             self._ai_session.request_stop()
+        # Do not leave a typewriter animation running after Stop is pressed.
+        self._drain_ai_text(immediate=True)
 
     @Slot()
     def aiClearConversation(self) -> None:
@@ -5617,18 +5633,57 @@ class AppController(QObject):
     def _apply_ai_delta(self, text: str) -> None:
         if self._closed:
             return
+        self._ai_pending_text += str(text)
+        if self._ai_pending_text and not self._ai_text_timer.isActive():
+            self._ai_text_timer.start()
+
+    def _drain_ai_text(self, *, immediate: bool = False) -> None:
+        if self._closed:
+            return
         row = len(self._ai_chat_model) - 1
         item = self._ai_chat_model.item_at(row)
-        if not item:
+        if not item or item.get("role") != "assistant" or not item.get("streaming"):
+            self._ai_text_timer.stop()
+            self._ai_pending_text = ""
+            self._ai_pending_finish = None
             return
-        item["content"] = (item.get("content") or "") + str(text)
-        item.update(self._ai_rendered(item["content"]))
-        self._ai_chat_model.update_at(row, item)
+        pending = self._ai_pending_text
+        if pending:
+            stopped = self._ai_session is not None and self._ai_session.stopped
+            frames = self._ai_finish_frames if self._ai_pending_finish else 4
+            # Catch up proportionally to backlog; completion drains in at most
+            # six frames instead of adding seconds to an already finished reply.
+            count = len(pending) if immediate or stopped else max(2, (len(pending) + frames - 1) // frames)
+            self._ai_pending_text = pending[count:]
+            item["content"] = (item.get("content") or "") + pending[:count]
+            item.update(self._ai_rendered(item["content"]))
+            self._ai_chat_model.update_at(row, item)
+            if self._ai_pending_finish:
+                self._ai_finish_frames = max(1, self._ai_finish_frames - 1)
+        if self._ai_pending_text:
+            # Large responses cost more to lay out; bound their repaint rate.
+            self._ai_text_timer.start(50 if len(item.get("content") or "") > 12000 else 33)
+        else:
+            self._ai_text_timer.stop()
+            finished = self._ai_pending_finish
+            self._ai_pending_finish = None
+            if finished is not None:
+                self._apply_ai_finished(*finished)
 
     @Slot(bool, str)
     def _apply_ai_finished(self, ok: bool, error: str) -> None:
         if self._closed:
             return
+        stopped = self._ai_session is not None and self._ai_session.stopped
+        self._ai_pending_finish = None
+        if self._ai_pending_text:
+            if ok and not stopped:
+                self._ai_pending_finish = (ok, error)
+                self._ai_finish_frames = 6
+                if not self._ai_text_timer.isActive():
+                    self._ai_text_timer.start()
+                return
+            self._drain_ai_text(immediate=True)
         row = len(self._ai_chat_model) - 1
         item = self._ai_chat_model.item_at(row)
         if item is not None and item.get("role") == "assistant":
@@ -5804,6 +5859,9 @@ class AppController(QObject):
         if hasattr(self, "_log_flush_timer") and self._log_flush_timer.isActive():
             self._log_flush_timer.stop()
         self._closed = True
+        self._ai_text_timer.stop()
+        self._ai_pending_text = ""
+        self._ai_pending_finish = None
         if self._ai_session is not None:
             self._ai_session.request_stop()
         self._clear_trash_items()
