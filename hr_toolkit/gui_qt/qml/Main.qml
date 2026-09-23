@@ -1011,9 +1011,11 @@ ApplicationWindow {
                                                     MouseArea {
                                                         anchors.fill: parent; hoverEnabled: true
                                                         enabled: controller.selectionEnabled
+                                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                                        onClicked: function(mouse) { if (mouse.button === Qt.RightButton) { selectedInputMenu.inputPath = path; selectedInputMenu.popup() } }
                                                         onDoubleClicked: controller.openSelectedInput(path)
                                                         ToolTip.visible: containsMouse; ToolTip.delay: 600
-                                                        ToolTip.text: Ui.text(path + "\n双击打开")
+                                                        ToolTip.text: Ui.text(path + "\n双击打开；右键打开所在文件夹")
                                                     }
                                                 }
                                                 AppButton { text: "移除"; variant: "link"; enabled: controller.selectionEnabled; implicitWidth: Math.max(54, contentItem.implicitWidth + 12); implicitHeight: 30; onClicked: controller.removeInput(index) }
@@ -1148,9 +1150,11 @@ ApplicationWindow {
                                                 MouseArea {
                                                     anchors.fill: parent; hoverEnabled: true
                                                     enabled: controller.selectionEnabled && !!controller.supportPath
+                                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                                    onClicked: function(mouse) { if (mouse.button === Qt.RightButton) { selectedInputMenu.inputPath = controller.supportPath; selectedInputMenu.popup() } }
                                                     onDoubleClicked: controller.openSelectedInput(controller.supportPath)
                                                     ToolTip.visible: containsMouse; ToolTip.delay: 600
-                                                    ToolTip.text: Ui.text(controller.supportPath + "\n双击打开")
+                                                    ToolTip.text: Ui.text(controller.supportPath + "\n双击打开；右键打开所在文件夹")
                                                 }
                                             }
                                             AppButton { enabled: controller.selectionEnabled; text: controller.currentTool === "material_collector" ? "选择文件" : controller.supportButtonText; variant: "link"; onClicked: controller.chooseSupportFile() }
@@ -2879,6 +2883,12 @@ ApplicationWindow {
         }
     }
 
+    Menu {
+        id: selectedInputMenu
+        property string inputPath: ""
+        MenuItem { text: Ui.text("打开"); enabled: controller.selectionEnabled; onTriggered: controller.openSelectedInput(selectedInputMenu.inputPath) }
+        MenuItem { text: Ui.text("打开所在文件夹"); enabled: controller.selectionEnabled; onTriggered: controller.revealSelectedInput(selectedInputMenu.inputPath) }
+    }
     RegionCodeDialog { id: regionCodeDialog; backend: controller; anchors.centerIn: parent }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }
     RenameReviewDialog { backend: controller.renameReview }

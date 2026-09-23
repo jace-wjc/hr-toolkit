@@ -2670,13 +2670,23 @@ class AppController(QObject):
 
     @Slot(str)
     def openSelectedInput(self, path_text: str) -> None:
+        self._open_selected_input(path_text, containing_folder=False)
+
+    @Slot(str)
+    def revealSelectedInput(self, path_text: str) -> None:
+        self._open_selected_input(path_text, containing_folder=True)
+
+    def _open_selected_input(self, path_text: str, *, containing_folder: bool) -> None:
         if not self.selectionEnabled:
             return
         path = Path(path_text)
         if path in self._input_states[self._state_key()] or path_text == self.supportPath:
             # Explicit user action only; use the same OS opener as project files.
             try:
-                open_path(path)
+                target = path.parent if containing_folder else path
+                if not target.exists():
+                    raise FileNotFoundError(f"文件或文件夹不存在，可能已被移动或删除：{target}")
+                open_path(target)
             except OSError as exc:
                 self.notificationRequested.emit("无法打开资料", str(exc), "warning")
 
