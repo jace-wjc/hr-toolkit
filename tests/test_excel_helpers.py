@@ -18,6 +18,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from hr_toolkit.common import resources as package_resources
 from hr_toolkit.common.excel import (
     _translate_same_row_formula,
+    SheetGrid,
     apply_row_snapshot,
     cached_style_id,
     insert_rows,
@@ -38,6 +39,47 @@ from hr_toolkit.common.resources import open_template_resource
 
 
 class ExcelHelperTest(unittest.TestCase):
+    def test_sheet_grid_preview_is_bounded_and_materializes_once(self) -> None:
+        class Source:
+            title = "业务数据"
+            max_row, max_column = 100, 2
+            reads = 0
+
+            def iter_rows(self, *, values_only):
+                for i in range(100):
+                    self.reads += 1
+                    yield (i, "姓名" if i == 0 else "测试")
+
+        source = Source()
+        grid = SheetGrid(source, max_rows=30)
+        self.assertEqual(source.reads, 30)
+        prefix = list(grid.iter_rows())
+        self.assertIs(grid.materialize(), grid)
+        self.assertEqual(source.reads, 130)
+        self.assertEqual(grid.max_row, 100)
+        self.assertEqual(list(grid.iter_rows())[:30], prefix)
+        grid.materialize()
+        self.assertEqual(source.reads, 130)
+
+    def test_sheet_grid_preview_keeps_short_sheet_profile_unchanged(self) -> None:
+        from hr_toolkit.common.template_mapping import preview
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "short.xlsx"
+            book = Workbook()
+            book.active.append(["姓名", "身份证"])
+            book.active.append(["测试", "001"])
+            book.save(path)
+            book.close()
+            source = load_workbook(path, read_only=True, data_only=True)
+            try:
+                bounded = SheetGrid(source.active, max_rows=30)
+                full = SheetGrid(source.active)
+                self.assertEqual(preview(bounded), preview(full))
+                self.assertEqual(bounded.max_row, 2)
+                self.assertIs(bounded.materialize(), bounded)
+            finally:
+                source.close()
+
     def test_translate_same_row_formula_only_rewrites_cell_reference_rows(self) -> None:
         formula = "=A1+B10+SUM(C1:D1)+E$1+$F1+LOG10(100)"
 

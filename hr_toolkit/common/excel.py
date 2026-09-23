@@ -4,6 +4,7 @@ import re
 import weakref
 from copy import copy
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any, Iterator, NamedTuple
 
 from openpyxl.formula.translate import Translator
@@ -282,13 +283,19 @@ class SheetGrid:
         "actual_dimension",
         "dimension_recovered",
         "_rows",
+        "_source",
+        "_partial",
+        "_declared_max_row",
+        "_declared_max_column",
     )
 
-    def __init__(self, ws: Any) -> None:
+    def __init__(self, ws: Any, *, max_rows: int | None = None) -> None:
         self.title: str = ws.title
+        self._source = ws
+        self._partial = max_rows is not None
         self.declared_dimension: str | None = None
-        declared_max_row = getattr(ws, "max_row", None)
-        declared_max_column = getattr(ws, "max_column", None)
+        self._declared_max_row = getattr(ws, "max_row", None)
+        self._declared_max_column = getattr(ws, "max_column", None)
 
         # ReadOnlyWorksheet 默认信任源文件 sheet XML 的 <dimension ref="...">。
         # 部分业务系统导出的 XLSX 会把它错误写成 A1:A1 或只包含表头行，
@@ -302,7 +309,22 @@ class SheetGrid:
                 self.declared_dimension = None
             reset_dimensions()
 
-        self._rows: list[tuple[Any, ...]] = [tuple(row) for row in ws.iter_rows(values_only=True)]
+        self._read_rows(max_rows)
+
+    def _read_rows(self, max_rows: int | None) -> None:
+        rows = self._source.iter_rows(values_only=True)
+        try:
+            # Do not pass max_row: read-only sheets pad short sheets to that
+            # bound, which would change existing saved ignore/profile keys.
+            self._rows = [tuple(row) for row in (islice(rows, max_rows) if max_rows is not None else rows)]
+        finally:
+            close = getattr(rows, "close", None)
+            if close is not None:
+                close()
+        if max_rows is not None and len(self._rows) < max_rows:
+            self._partial = False
+        if not self._partial:
+            self._source = None
         self.max_row: int = len(self._rows)
         self.max_column: int = max((len(row) for row in self._rows), default=0)
         self.actual_dimension: str = (
@@ -311,13 +333,21 @@ class SheetGrid:
             else "空表"
         )
         self.dimension_recovered: bool = bool(
-            declared_max_row is not None
-            and declared_max_column is not None
+            not self._partial
+            and self._declared_max_row is not None
+            and self._declared_max_column is not None
             and (
-                self.max_row > declared_max_row
-                or self.max_column > declared_max_column
+                self.max_row > self._declared_max_row
+                or self.max_column > self._declared_max_column
             )
         )
+
+    def materialize(self) -> "SheetGrid":
+        """Load the body only after header recognition; existing views stay valid."""
+        if self._partial:
+            self._partial = False
+            self._read_rows(None)
+        return self
 
     def iter_rows(self) -> Iterator[tuple[Any, ...]]:
         return iter(self._rows)
