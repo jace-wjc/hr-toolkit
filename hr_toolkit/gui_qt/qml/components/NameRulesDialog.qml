@@ -99,18 +99,29 @@ AppDialog {
             }
         }
     }
-    footer: RowLayout {
-        spacing: 10
-        Item { Layout.fillWidth: true }
-        AppButton { text: dialog.confirmation ? "取消本次核对" : "关闭"; onClicked: dialog.close() }
-        AppButton {
-            visible: dialog.confirmation; text: "确认并继续核对"; variant: "primary"; enabled: backend.selectionEnabled
-            onClicked: {
-                var selected = []
-                for (var i = 0; i < ruleModel.count; i++) if (ruleModel.get(i).chosen) selected.push(i)
-                var error = backend.confirmNameRules(JSON.stringify(selected))
-                if (error) dialog.errorText = error
-                else dialog.close()
+    footer: Rectangle {
+        implicitHeight: 74
+        color: Ui.color("surface")
+        radius: 12
+        Rectangle {
+            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+            height: 1; color: Ui.color("divider")
+        }
+        RowLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 10
+            Item { Layout.fillWidth: true }
+            AppButton { text: dialog.confirmation ? "取消本次核对" : "关闭"; onClicked: dialog.close() }
+            AppButton {
+                visible: dialog.confirmation; text: "确认并继续核对"; variant: "primary"; enabled: backend.selectionEnabled
+                onClicked: {
+                    var selected = []
+                    for (var i = 0; i < ruleModel.count; i++) if (ruleModel.get(i).chosen) selected.push(i)
+                    var error = backend.confirmNameRules(JSON.stringify(selected))
+                    if (error) dialog.errorText = error
+                    else dialog.close()
+                }
             }
         }
     }
