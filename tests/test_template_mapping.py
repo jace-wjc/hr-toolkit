@@ -38,6 +38,53 @@ def invoke(tool, callback, rules=None):
 
 
 class TemplateMappingTest(unittest.TestCase):
+    def test_readonly_preview_is_cached_per_open_sheet_and_copied(self):
+        from hr_toolkit.common.template_mapping import preview
+        buffer = BytesIO()
+        wb = Workbook()
+        wb.active.append(["姓名", "日期"])
+        wb.save(buffer)
+        wb.close()
+        buffer.seek(0)
+        source = load_workbook(buffer, read_only=True)
+        self.addCleanup(source.close)
+        ws = source.active
+        with patch.object(ws, "iter_rows", wraps=ws.iter_rows) as rows:
+            first = preview(ws)
+            expected = [row[:] for row in first]
+            first[0][0] = "不可污染缓存"
+            self.assertEqual(preview(ws), expected)
+            self.assertEqual(rows.call_count, 1)
+            ws.reset_dimensions()
+            preview(ws)
+            self.assertEqual(rows.call_count, 2)
+
+    def test_value_grid_keeps_rectangular_saved_header_mapping(self):
+        from hr_toolkit.common.template_mapping import map_value_sheet, preview
+        buffer = BytesIO()
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["自定义姓名", "自定义身份证", "自定义公司"])
+        ws.append(["测试甲", "123", "公司甲", None, "正文额外列"])
+        wb.save(buffer)
+        original_preview = preview(ws)
+        wb.close()
+        buffer.seek(0)
+        source = load_workbook(buffer, read_only=True)
+        self.addCleanup(source.close)
+        with self.assertRaises(TemplateSelectionRequired) as error:
+            invoke("archive_import", lambda: map_sheet(source.active, "transfer", file="资料.xlsx"))
+        self.assertEqual(error.exception.payload["sheets"][0]["rows"], original_preview)
+        saved = save_choice("archive_import", {}, error.exception.payload, {
+            "role": "transfer", "sheet": source.active.title, "row": 1,
+            "columns": {"公司": 3, "姓名": 1, "身份证": 2},
+        })
+        mapped = invoke("archive_import", lambda: map_value_sheet(source.active, "transfer", file="资料.xlsx"), saved)
+        self.assertEqual(mapped.header_row, 1)
+        self.assertIsInstance(mapped.source, SheetGrid)
+        self.assertEqual(mapped.cell(1, 1).value, "姓名")
+        self.assertEqual(mapped.cell(2, 5).value, "正文额外列")
+
     def test_same_basename_files_do_not_share_absence_confirmation(self):
         from hr_toolkit.tools.personnel_change_merge import _read_change_file, TARGET_SHEETS
         with tempfile.TemporaryDirectory() as tmp:

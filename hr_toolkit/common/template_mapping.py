@@ -251,6 +251,14 @@ def _title(sheet):
 
 
 def preview(sheet):
+    # A read-only worksheet cannot be edited through this view. Cache only on
+    # that open worksheet (not by path or globally), and invalidate dimensions
+    # when a caller resets an incorrect export range.
+    cacheable = callable(getattr(sheet, "reset_dimensions", None)) and not hasattr(sheet, "_rows")
+    cache_key = (sheet.max_row, sheet.max_column) if cacheable else None
+    cached = getattr(sheet, "_hr_template_preview", None) if cacheable else None
+    if cached is not None and cached[0] == cache_key:
+        return [row[:] for row in cached[1]]
     if hasattr(sheet, "nrows"):
         rows = [sheet.row_values(r)[:512] for r in range(min(sheet.nrows, 30))]
     elif hasattr(sheet, "_rows"):
@@ -267,7 +275,10 @@ def preview(sheet):
             width = max(min(sheet.max_column or 512, 512), max((c for _, c in occupied), default=0))
             height = max(min(sheet.max_row or 30, 30), max((r for r, _ in occupied), default=0))
             rows = [row[:width] for row in rows[:height]]
-    return [[str(v)[:200] if v is not None else "" for v in row[:512]] for row in rows]
+    result = [[str(v)[:200] if v is not None else "" for v in row[:512]] for row in rows]
+    if cacheable:
+        sheet._hr_template_preview = (cache_key, [row[:] for row in result])
+    return result
 
 
 def profile_key(sheet, row, values):
@@ -335,6 +346,12 @@ def ignored_sheet(sheet, file):
         return False
     profiles = [p for p in _current.get()[1]["profiles"] if p["role"] == "_ignore" and p.get("file") == str(file) and p.get("sheet") == _title(sheet)]
     return bool(profiles) and any(p["key"] == _ignore_key(file, _title(sheet), preview(sheet)) for p in profiles)
+
+
+def has_sheet_profile(sheet, roles):
+    """Whether legacy profile fingerprints require the original sheet view."""
+    return active() and any(p.get("sheet") == _title(sheet) and p["role"] in roles
+                            for p in _current.get()[1]["profiles"])
 
 
 def assigned_role(sheet, roles, *, confirmed_only=False, file="", source_sheets=None):
@@ -539,6 +556,24 @@ def choose_content_sheet(sheets, role, default=None, *, file=""):
     if len(sheets) == 1:
         return sheets[0]  # 单页文件直接确认缺失列，避免无意义地再选唯一的页。
     request_sheet_selection(sheets, [role], file=file)
+
+
+def map_value_sheet(sheet, role, **kwargs):
+    """Map the original rectangular preview before switching to a value grid.
+
+    Existing Worksheet-based profiles include trailing empty header cells.
+    A ragged SheetGrid preview must not change those saved fingerprints.
+    """
+    from .excel import SheetGrid
+
+    mapped = map_sheet(sheet, role, **kwargs)
+    if mapped is None:
+        return None
+    grid = SheetGrid(sheet)
+    if isinstance(mapped, HeaderView):
+        mapped.source = grid
+        return mapped
+    return grid
 
 
 class HeaderView:
