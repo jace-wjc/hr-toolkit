@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+import json
 import re
 from typing import Any, Callable
 from uuid import uuid4
@@ -40,6 +41,7 @@ COMMON_FIELDS = {
     "毕业时间": ("毕业时间",), "备注": ("备注",),
     "人员分类": ("人员分类",), "用工状态": ("用工状态",),
     "试用期工资": ("试用期工资",), "薪资结算日期": ("薪资结算日期",),
+    "项目": ("项目", "项目名称", "所属项目"),
 }
 SUMMARY_FIELDS = {
     **COMMON_FIELDS,
@@ -77,6 +79,50 @@ NOTICE_HEADERS = ("类型", "异动", "姓名", "身份证号码", "字段", "�
 FILL_HEADERS = ("异动", "姓名", "身份证号码", "补入字段", "补入内容", "汇总表位置", "流程位置")
 FILLED = PatternFill("solid", fgColor="E4EFEA")
 WARNING = PatternFill("solid", fgColor="FFF2CC")
+NAME_FIELDS = ("地市", "所属专业", "项目")
+NAME_CONFIRMATION_PREFIX = "HR_RECONCILE_NAMES:"
+
+
+def clean_name_rules(rows):
+    """Field/company-scoped explicit aliases; never infer equivalence."""
+    if not isinstance(rows, list) or len(rows) > 2000:
+        raise ValueError("名称对应规则应为列表，最多保存 2000 条。")
+    result, mappings = [], {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("名称对应规则格式无效。")
+        item = {key: str(row.get(key) or "").strip() for key in ("company", "field", "left", "right")}
+        if item["field"] not in NAME_FIELDS or any(not value or len(value) > 500 for value in item.values()):
+            raise ValueError("请填写公司、字段和两边名称，每项不超过 500 字。")
+        scope = (company_text(item["company"]), item["field"])
+        mapping = mappings.setdefault(scope, {})
+        left, right = norm(item["left"]), norm(item["right"])
+        if left in mapping and mapping[left] != right:
+            raise ValueError("同一公司、字段的名称不能对应两个不同名称，请先修改原规则。")
+        if left not in mapping:
+            result.append(item)
+        mapping[left] = right
+    for mapping in mappings.values():
+        if any(target in mapping and mapping[target] != target for target in mapping.values()):
+            raise ValueError("名称对应请指向同一个最终名称，不能循环或连续转换。")
+    return result
+
+
+def name_rule_key(row):
+    return (company_text(row["company"]), row["field"], *sorted((norm(row["left"]), norm(row["right"]))))
+
+
+def name_rule_index(rows):
+    result = {}
+    for row in rows:
+        result.setdefault((company_text(row["company"]), row["field"]), {})[norm(row["left"])] = norm(row["right"])
+    return result
+
+
+def equivalent_name(index, company, field_name, left, right):
+    mapping = index.get((company_text(company), field_name), {})
+    left, right = norm(left), norm(right)
+    return mapping.get(left, left) == mapping.get(right, right)
 
 # Keep the exported legend next to the notice vocabulary used below.
 NOTICE_DESCRIPTIONS = {
@@ -394,6 +440,8 @@ def reconcile_personnel_changes(
     output_dir: str | Path,
     *, month: str = "", leave_date_field: str = "离职日期",
     company_aliases: str = "", highlight: bool = True,
+    name_rules: list[dict[str, str]] | None = None,
+    confirm_names: bool = False, reviewed_names: list[dict[str, str]] | None = None,
     cancelled: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> ReconcileResult:
@@ -407,6 +455,9 @@ def reconcile_personnel_changes(
     if leave_date_field not in {"离职日期", "预计离职日期"}:
         raise ValueError("离职日期列只能选择离职日期或预计离职日期。")
     overrides = parse_company_aliases(company_aliases)
+    name_rules = clean_name_rules(name_rules or [])
+    reviewed = {name_rule_key(clean_name_rules([row])[0]) for row in (reviewed_names or [])}
+    pending_names = {}
     inputs = [Path(p).expanduser().resolve() for p in (input_dir if isinstance(input_dir, list) else [input_dir])]
     source = Path(template_path).expanduser().resolve()
     if not source.is_file() or not inputs:
@@ -448,8 +499,14 @@ def reconcile_personnel_changes(
         book = load_workbook(summary_path, data_only=False)
         try:
             _reconcile(book, source, flows, month, leave_date_field,
-                       overrides, highlight, result, notices, fills, info, cancelled)
+                       overrides, highlight, result, notices, fills, info, cancelled,
+                       name_index=name_rule_index(name_rules), pending_names=pending_names)
             _check(cancelled)
+            pending = [row for key, row in pending_names.items() if key not in reviewed]
+            if confirm_names and pending:
+                # Ask before creating any output. The desktop resumes with saved
+                # aliases and the reviewed pairs; existing sources are untouched.
+                raise ValueError(NAME_CONFIRMATION_PREFIX + json.dumps(pending, ensure_ascii=False))
             report = Workbook()
             report.remove(report.active)
             try:
@@ -497,7 +554,10 @@ def _summary_rows(path, book, cancelled):
 
 
 def _reconcile(book, source, flows, month, leave_date_field,
-               overrides, highlight, result, notices, fills, info, cancelled):
+               overrides, highlight, result, notices, fills, info, cancelled,
+               *, name_index=None, pending_names=None):
+    name_index = name_index or {}
+    applied_names = set()
     summaries = _summary_rows(source, book, cancelled)
     info.extend([
         ("核对范围", "按本次导入资料核对增员、减员，其他工作表不处理；核对范围取决于提供的资料。"),
@@ -621,7 +681,7 @@ def _reconcile(book, source, flows, month, leave_date_field,
                 identity_safe = isinstance(row.values.get("身份证号码"), str) and isinstance(flow.values.get("身份证号码"), str) and bool(re.fullmatch(r"(?:\d{17}[0-9X]|\d{15})", row.identity))
                 if not identity_safe:
                     notices.append(_notice("身份证待确认", row, flow, "身份证号码", "身份证脱敏、格式异常或以数字存储；仅列出核对结果，不自动补齐。"))
-                for name in FILL_FIELDS:
+                for name in (*FILL_FIELDS, "项目"):
                     if name not in row.columns or name not in flow.columns:
                         continue
                     value, original = flow.values.get(name), row.values.get(name)
@@ -635,7 +695,7 @@ def _reconcile(book, source, flows, month, leave_date_field,
                     if cell.data_type == "f":
                         continue
                     if not text(original):
-                        if identity_safe:
+                        if identity_safe and name in FILL_FIELDS:
                             _safe_value(cell, value)
                             if isinstance(value, date):
                                 cell.number_format = "yyyy/m/d"
@@ -643,6 +703,16 @@ def _reconcile(book, source, flows, month, leave_date_field,
                                 cell.fill = FILLED
                             fills.append([kind, row.values.get("姓名"), row.identity, name, value, row.location, flow.location])
                     elif (parse_date(original) != value if name in DATE_FIELDS else norm(original) != norm(value)):
+                        if name in NAME_FIELDS:
+                            if equivalent_name(name_index, canonical, name, original, value):
+                                applied_names.add((canonical, name, text(original), text(value)))
+                                continue
+                            if identity_safe and pending_names is not None:
+                                item = {"company": canonical, "field": name, "left": text(original), "right": text(value)}
+                                key = name_rule_key(item)
+                                if key not in pending_names:
+                                    pending_names[key] = {**item, "count": 0}
+                                pending_names[key]["count"] += 1
                         notices.append(_notice("字段差异", row, flow, name, "保留汇总表已有内容。"))
                         if highlight:
                             cell.fill = WARNING
@@ -666,4 +736,6 @@ def _reconcile(book, source, flows, month, leave_date_field,
                 notices.append(_notice("待确认" if uncertain else "流程有、异动表无", flow=flow,
                                        detail="汇总表存在身份/日期缺失或其他日期的同一人员，请人工确认事件。" if uncertain else "本次汇总表及日期范围内未找到对应人员，请核实是否漏登记。"))
         info.append((kind + "核对状态", "存在待确认数据，详见预警明细" if uncertain_by_id or incomplete else "已完成范围内比对，异常见预警明细"))
+    info.extend(("本次使用的名称对应", f"{company} / {name}：{left} = {right}")
+                for company, name, left, right in sorted(applied_names))
     info.extend([("明确关联记录数", result.matched_count), ("补入字段数", len(fills)), ("预警明细数", len(notices))])

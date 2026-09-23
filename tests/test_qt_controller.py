@@ -123,6 +123,55 @@ class QtControllerTests(unittest.TestCase):
             # Closing after the temporary directory is removed must not write.
             controller._save_workspace_preferences = lambda: None
 
+    def test_name_confirmation_accepts_thread_and_windows_worker_messages(self) -> None:
+        from hr_toolkit.tools.personnel_reconcile import NAME_CONFIRMATION_PREFIX
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("personnel_change_merge")
+        controller.selectVariant("reconcile")
+        rows = [{"company": "甲公司", "field": "地市", "left": "南昌", "right": "南昌市", "count": 1}]
+        prompts = []
+        controller.notificationRequested.connect(lambda *args: prompts.append(args))
+        for prefix in ("", "ValueError: "):
+            controller._name_pending = []
+            controller._apply_run_error(prefix + NAME_CONFIRMATION_PREFIX + json.dumps(rows))
+            self.assertEqual(controller._name_pending, rows)
+        self.assertEqual(prompts, [])
+
+    def test_name_confirmation_saves_checked_rows_and_reviews_unchecked_rows(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("personnel_change_merge")
+        controller.selectVariant("reconcile")
+        rows = [{"company": "甲公司", "field": "地市", "left": "南昌", "right": "南昌市"},
+                {"company": "甲公司", "field": "项目", "left": "达州设备安装项目", "right": "达州（达州设备安装）"}]
+        controller._name_pending = rows
+        controller._name_input_snapshot = controller._template_current_inputs()
+        controller._save_workspace_preferences = Mock(return_value=True)
+        with patch("hr_toolkit.gui_qt.controller.QTimer.singleShot") as resume:
+            self.assertEqual(controller.confirmNameRules("[1]"), "")
+            self.assertEqual(controller._name_rules, [rows[1]])
+            self.assertEqual(controller._name_reviewed, rows)
+            self.assertEqual(controller._name_pending, [])
+            resume.assert_called_once()
+
+    def test_name_confirmation_save_failure_preserves_pending_and_rules(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("personnel_change_merge")
+        controller.selectVariant("reconcile")
+        row = {"company": "甲公司", "field": "地市", "left": "南昌", "right": "南昌市"}
+        controller._name_pending = [row]
+        controller._name_input_snapshot = controller._template_current_inputs()
+        controller._save_workspace_preferences = Mock(return_value=False)
+        with patch("hr_toolkit.gui_qt.controller.QTimer.singleShot") as resume:
+            self.assertIn("保存失败", controller.confirmNameRules("[0]"))
+            self.assertEqual(controller._name_rules, [])
+            self.assertEqual(controller._name_pending, [row])
+            resume.assert_not_called()
+        controller.setFieldValue("reconcile_month", "2026-08")
+        self.assertIn("已改变", controller.confirmNameRules("[]"))
+
     def test_reconcile_variant_and_result_paths_are_available(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

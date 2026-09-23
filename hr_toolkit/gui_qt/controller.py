@@ -133,6 +133,7 @@ class AppController(QObject):
     salaryMappingClosed = Signal()
     templateRulesRequested = Signal()
     templateSelectionRequested = Signal()
+    nameConfirmationRequested = Signal()
     workspaceBusyChanged = Signal()
     workspaceChanged = Signal()
     workspaceSelectionChanged = Signal()
@@ -283,6 +284,11 @@ class AppController(QObject):
         self._salary_header_profiles: dict[str, dict[str, Any]] = {}
         self._header_name_rules: dict[str, dict[str, Any]] = {}
         self._company_aliases = ""
+        self._name_rules: list[dict[str, str]] = []
+        self._name_pending: list[dict[str, Any]] = []
+        self._name_reviewed: list[dict[str, str]] = []
+        self._name_input_snapshot = ""
+        self._name_continuing = False
         self._template_issue: dict[str, Any] = {}
         self._template_settings_tool = ""
         self._template_issue_project = ""
@@ -2155,7 +2161,7 @@ class AppController(QObject):
         )
         salary_profiles = state.get("salary_header_profiles")
         header_rules = state.get("header_name_rules")
-        from hr_toolkit.tools.personnel_reconcile import parse_company_aliases
+        from hr_toolkit.tools.personnel_reconcile import clean_name_rules, parse_company_aliases
         try:
             aliases = str(state.get("reconcile_company_aliases") or "")
             parse_company_aliases(aliases)
@@ -2165,6 +2171,10 @@ class AppController(QObject):
                     values["company_aliases"] = aliases
         except ValueError as exc:
             self._append_log("公司对应规则未加载：" + str(exc), "warning")
+        try:
+            self._name_rules = clean_name_rules(state.get("reconcile_name_rules", []))
+        except ValueError as exc:
+            self._append_log("名称对应规则未加载：" + str(exc), "warning")
         if isinstance(header_rules, dict):
             self._header_name_rules = {str(key): value for key, value in header_rules.items() if isinstance(value, dict)}
         if isinstance(salary_profiles, dict):
@@ -2237,6 +2247,7 @@ class AppController(QObject):
                 "salary_header_profiles": self._salary_header_profiles,
                 "header_name_rules": self._header_name_rules,
                 "reconcile_company_aliases": self._company_aliases,
+                "reconcile_name_rules": self._name_rules,
                 "release_notes_seen_version": self._release_notes_seen_version,
                 "theme": self._presentation.theme,
                 "language": self._presentation.language,
@@ -2750,6 +2761,89 @@ class AppController(QObject):
                 self.toggleWorkspaceRow(row)
             elif path.exists():
                 open_path(path)
+
+    @Slot(result="QVariantList")
+    def nameRuleRows(self):
+        return [dict(row) for row in self._name_rules]
+
+    @Property("QVariantList", notify=nameConfirmationRequested)
+    def pendingNameRules(self):
+        return [dict(row) for row in self._name_pending]
+
+    def _store_name_rules(self, rows) -> str:
+        from hr_toolkit.tools.personnel_reconcile import clean_name_rules
+        try:
+            validated = clean_name_rules(rows)
+        except ValueError as exc:
+            return str(exc)
+        previous = self._name_rules
+        self._name_rules = validated
+        if not self._save_workspace_preferences():
+            self._name_rules = previous
+            return "保存失败，原有规则未更改，请检查配置目录是否可写。"
+        return ""
+
+    @Slot(int, str, bool, result=str)
+    def saveNameRule(self, index: int, payload: str, remove: bool) -> str:
+        if not self.selectionEnabled:
+            return "当前不能修改规则，请等待处理结束。"
+        rows = [dict(row) for row in self._name_rules]
+        if index < -1 or index >= len(rows) or (remove and index < 0):
+            return "规则已经变化，请重新打开列表。"
+        try:
+            if remove:
+                rows.pop(index)
+            elif index < 0:
+                rows.append(json.loads(payload))
+            else:
+                rows[index] = json.loads(payload)
+            return self._store_name_rules(rows)
+        except (ValueError, TypeError) as exc:
+            return str(exc)
+
+    @Slot(str, result=str)
+    def confirmNameRules(self, payload: str) -> str:
+        if not self.selectionEnabled or not self._name_pending:
+            return "当前不能继续，请等待处理结束或重新开始核对。"
+        if self._name_input_snapshot != self._template_current_inputs():
+            return "项目、文件或选项已改变，请关闭窗口后重新开始核对。"
+        try:
+            indices = json.loads(payload)
+            if not isinstance(indices, list) or any(type(i) is not int or i < 0 or i >= len(self._name_pending) for i in indices):
+                return "选择内容无效，请重新选择。"
+            additions = [self._name_pending[i] for i in sorted(set(indices))]
+            if additions:
+                error = self._store_name_rules(self._name_rules + additions)
+                if error:
+                    return error
+            self._name_reviewed.extend(self._name_pending)
+            self._name_pending = []
+            QTimer.singleShot(0, self._continue_name_run)
+            return ""
+        except (ValueError, TypeError) as exc:
+            return str(exc)
+
+    @Slot()
+    def cancelNameConfirmation(self) -> None:
+        if self._name_pending:
+            self._name_pending = []
+            self._name_reviewed = []
+            self._append_log("已取消名称确认，本次未生成核对结果；源文件不变。", "warning")
+            self._flush_logs()
+
+    def _continue_name_run(self) -> None:
+        if self._closed or self._shutdown_requested:
+            return
+        if self._busy or self._name_input_snapshot != self._template_current_inputs():
+            self.notificationRequested.emit("请重新核对", "项目、文件或处理状态已改变，请重新开始。", "warning")
+            return
+        self._name_continuing = True
+        self._template_continuing = True
+        try:
+            self.runOrCancel()
+        finally:
+            self._name_continuing = False
+            self._template_continuing = False
 
     @Slot()
     def launchWorkspaceSelection(self) -> None:
@@ -3759,6 +3853,9 @@ class AppController(QObject):
             return
         if not self._template_continuing:
             self._reset_template_session()
+        if not self._name_continuing and not self._template_continuing:
+            self._name_reviewed = []
+            self._name_pending = []
         self._prepare_invocation(preview=self._spec.tool_id == "folder_rename")
 
     @Slot(result="QVariantMap")
@@ -4505,6 +4602,11 @@ class AppController(QObject):
         store = self._project_store
         if store is None:
             return
+        if invocation.tool_id == "personnel_reconcile":
+            self._name_input_snapshot = self._template_current_inputs()
+            invocation = replace(invocation, kwargs={**invocation.kwargs,
+                "name_rules": [dict(row) for row in self._name_rules],
+                "confirm_names": True, "reviewed_names": [dict(row) for row in self._name_reviewed]})
         from hr_toolkit.common.template_mapping import SUPPORTED_TOOLS
         if invocation.tool_id in SUPPORTED_TOOLS:
             self._template_settings_tool = invocation.tool_id
@@ -4669,6 +4771,21 @@ class AppController(QObject):
     def _apply_run_error(self, message: str) -> None:
         self._drain_run_progress()
         self._flush_material_progress()
+        from hr_toolkit.tools.personnel_reconcile import NAME_CONFIRMATION_PREFIX
+        # Frozen Windows workers prefix serialized business errors with their
+        # exception type; never match a marker embedded in a finalization error.
+        name_message = message[len("ValueError: "):] if message.startswith("ValueError: ") else message
+        if self._spec.tool_id == "personnel_reconcile" and name_message.startswith(NAME_CONFIRMATION_PREFIX):
+            try:
+                rows = json.loads(name_message[len(NAME_CONFIRMATION_PREFIX):])
+                if not isinstance(rows, list) or not rows:
+                    raise ValueError("名称确认内容无效")
+                self._name_pending = rows
+                self._append_log("发现尚未确认的地区/项目名称，请确认是否含义相同；未勾选的仍按差异输出。", "warning_emphasis")
+                self._flush_logs()
+                return  # Open after the worker has safely released its batch.
+            except (ValueError, TypeError):
+                pass
         if self._run_progress_visible:
             self._run_progress_message = "处理失败：" + message
             self.runProgressChanged.emit()
@@ -4715,6 +4832,8 @@ class AppController(QObject):
         self._run_progress_timer.stop()
         self._flush_logs()
         self._set_busy(False)
+        if self._name_pending and not self._closed and not self._shutdown_requested:
+            self.nameConfirmationRequested.emit()
 
     @Slot()
     def _flush_logs(self) -> None:

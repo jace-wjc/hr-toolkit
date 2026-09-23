@@ -1812,6 +1812,10 @@ ApplicationWindow {
                 Text { text: Ui.text(field.value ? "已保存，下次自动使用" : "未设置，使用自动匹配"); color: root.textMuted; font.pixelSize: 12 }
             }
             Text { Layout.fillWidth: true; text: Ui.text("用于对应公司简称与全称，只影响核对，不修改原表。"); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+            RowLayout {
+                Text { Layout.preferredWidth: 145; text: Ui.text("地区 / 项目名称"); color: root.textMain; font.pixelSize: 13 }
+                AppButton { text: "管理名称规则"; enabled: controller.selectionEnabled; onClicked: nameRulesDialog.showRules() }
+            }
         }
     }
     Component {
@@ -2902,6 +2906,7 @@ ApplicationWindow {
         MenuItem { text: Ui.text("打开所在文件夹"); enabled: controller.selectionEnabled; onTriggered: controller.revealSelectedInput(selectedInputMenu.inputPath) }
     }
     CompanyRulesDialog { id: companyRulesDialog; backend: controller; anchors.centerIn: parent }
+    NameRulesDialog { id: nameRulesDialog; backend: controller; anchors.centerIn: parent }
     RegionCodeDialog { id: regionCodeDialog; backend: controller; anchors.centerIn: parent }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }
     RenameReviewDialog { backend: controller.renameReview }
@@ -2911,6 +2916,7 @@ ApplicationWindow {
         function onSalaryMappingRequested() { templateChoiceDialog.showSalaryData(controller.salaryMappingData) }
         function onSalaryMappingClosed() { templateChoiceDialog.dismissSalary() }
         function onTemplateRulesRequested() { templateChoiceDialog.showRules(controller.templateRuleSections) }
+        function onNameConfirmationRequested() { nameRulesDialog.showConfirmation() }
         function onTemplateSelectionRequested() { templateChoiceDialog.showData(controller.templateSelectionData) }
         function onNotificationRequested(title, message, level) { notificationDialog.showMessage(title, message, level) }
         function onUpdatePromptRequested(prompt) { updatePromptDialog.showPrompt(prompt) }

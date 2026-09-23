@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from openpyxl import Workbook, load_workbook
 
 from hr_toolkit.tools.personnel_reconcile import (
     company_mapping, parse_company_aliases, reconcile_personnel_changes,
+    NAME_CONFIRMATION_PREFIX, clean_name_rules, equivalent_name, name_rule_index,
 )
 
 
@@ -48,15 +50,16 @@ class PersonnelReconcileTests(unittest.TestCase):
         self.flow = self.root / "流程.xlsx"
         self.output = self.root / "results"
 
-    def write_summary(self, joins=(), leaves=()):
+    def write_summary(self, joins=(), leaves=(), *, headers=None):
+        headers = headers or SUMMARY_HEADERS
         book = Workbook()
         book.remove(book.active)
         for name, rows in (("增员", joins), ("减员", leaves)):
             ws = book.create_sheet(name)
             ws.append(["异动汇总表"])
-            ws.append(SUMMARY_HEADERS)
+            ws.append(headers)
             for row in rows:
-                ws.append([row.get(field) for field in SUMMARY_HEADERS])
+                ws.append([row.get(field) for field in headers])
         book.create_sheet("调动")["A1"] = "原有内容"
         book.save(self.summary)
         book.close()
@@ -122,6 +125,48 @@ class PersonnelReconcileTests(unittest.TestCase):
         info = dict(list(report["核对说明"].values)[1:])
         self.assertIn("未进行状态筛选", info["入职流程状态来源"])
         self.assertNotIn("用户已确认", info["核对范围"])
+
+    def test_name_confirmation_precedes_output_and_remembers_only_approved_pairs(self):
+        self.write_summary([summary_row(地市="南昌"), summary_row(ID_B, 姓名="测试乙", 地市="南昌")],
+                           headers=[*SUMMARY_HEADERS, "地市"])
+        self.write_flow([join_row(所属市="南昌市"), join_row(ID_B, 姓名="测试乙", 所属市="南昌市")],
+                        headers=[*JOIN_HEADERS, "所属市"])
+        originals = self.summary.read_bytes(), self.flow.read_bytes()
+        with self.assertRaises(ValueError) as raised:
+            self.run_check(confirm_names=True)
+        pending = json.loads(str(raised.exception).split(NAME_CONFIRMATION_PREFIX, 1)[1])
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["count"], 2)
+        self.assertFalse(self.output.exists())
+        notices, _, _ = self.read_result(self.run_check(confirm_names=True, reviewed_names=pending))
+        self.assertEqual(sum(row[0] == "字段差异" and row[4] == "地市" for row in notices), 2)
+        notices, filled, _ = self.read_result(self.run_check(confirm_names=True, name_rules=pending))
+        self.assertFalse(any(row[0] == "字段差异" and row[4] == "地市" for row in notices))
+        self.assertEqual(filled["增员"].cell(3, len(SUMMARY_HEADERS) + 1).value, "南昌")
+        self.assertEqual(originals, (self.summary.read_bytes(), self.flow.read_bytes()))
+
+    def test_name_rules_are_field_company_scoped_and_reject_conflicts(self):
+        row = {"company": "甲公司", "field": "地市", "left": "南昌", "right": "南昌市"}
+        index = name_rule_index(clean_name_rules([row]))
+        self.assertTrue(equivalent_name(index, "甲公司", "地市", "南昌市", "南昌"))
+        self.assertFalse(equivalent_name(index, "乙公司", "地市", "南昌", "南昌市"))
+        self.assertFalse(equivalent_name(index, "甲公司", "项目", "南昌", "南昌市"))
+        with self.assertRaises(ValueError):
+            clean_name_rules([row, {**row, "right": "其他地区"}])
+        with self.assertRaises(ValueError):
+            clean_name_rules([row, {**row, "left": "南昌市", "right": "南昌"}])
+
+    def test_unchecked_conflicting_candidates_can_still_complete(self):
+        self.write_summary([summary_row(地市="南昌"), summary_row(ID_B, 姓名="测试乙", 地市="南昌")],
+                           headers=[*SUMMARY_HEADERS, "地市"])
+        self.write_flow([join_row(所属市="南昌市"), join_row(ID_B, 姓名="测试乙", 所属市="其他市")],
+                        headers=[*JOIN_HEADERS, "所属市"])
+        with self.assertRaises(ValueError) as raised:
+            self.run_check(confirm_names=True)
+        pending = json.loads(str(raised.exception).split(NAME_CONFIRMATION_PREFIX, 1)[1])
+        self.assertEqual(len(pending), 2)
+        notices, _, _ = self.read_result(self.run_check(confirm_names=True, reviewed_names=pending))
+        self.assertEqual(sum(row[0] == "字段差异" and row[4] == "地市" for row in notices), 2)
 
     def test_pending_status_is_valid_and_only_named_exclusions_are_removed(self):
         self.write_summary([summary_row(), summary_row(ID_B, 姓名="测试乙"), summary_row(ID_C, 姓名="测试丙")])
