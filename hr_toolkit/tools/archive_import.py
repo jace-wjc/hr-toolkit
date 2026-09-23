@@ -21,7 +21,7 @@ from typing import Any, Callable
 from openpyxl import Workbook, load_workbook
 from hr_toolkit.common.template_mapping import (
     file_template_source, template_source,
-    template_tool, choose_sheet, map_sheet, active, request_sheet_selection,
+    template_tool, choose_sheet, map_sheet, map_value_sheet, active, request_sheet_selection,
     unused_sheet_notices, current_sheet_choices, assigned_role,
 )
 from openpyxl.comments import Comment
@@ -39,6 +39,7 @@ from hr_toolkit.common.excel_compat import (
     is_supported_excel_file,
 )
 from hr_toolkit.common.excel import (
+    SheetGrid,
     apply_row_snapshot,
     cached_style_id,
     cell_text as _cell_text,
@@ -526,12 +527,12 @@ def _iter_excel_input_files(input_path: Path, temp_dir: Path, warnings: list[str
 
 @file_template_source
 def _read_transfer_file(file_path: Path) -> tuple[list[ArchiveTransferRecord], list[str]]:
-    workbook = load_workbook(file_path, data_only=False)
+    workbook = load_workbook(file_path, data_only=False, read_only=True)
     warnings: list[str] = []
     try:
         ws = _find_transfer_sheet(workbook, file=file_path.name)
         unused_sheet_notices(workbook.worksheets, {ws.title}, file_path.name)
-        ws = map_sheet(ws, "transfer", file=file_path.name)
+        ws = map_value_sheet(ws, "transfer", file=file_path.name)
         header_row = getattr(ws, "header_row", None) or _find_header_row(ws, (HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD))
         headers = _read_headers(ws, header_row)
         required = [HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD]
@@ -583,7 +584,7 @@ def _find_transfer_sheet(workbook, *, file="") -> Worksheet:
                 return ws
             continue
         try:
-            _find_header_row(ws, (HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD))
+            _find_header_row(SheetGrid(ws, max_rows=20), (HEADER_COMPANY, HEADER_NAME, HEADER_ID_CARD))
             return ws
         except ValueError:
             continue

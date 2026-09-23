@@ -23,6 +23,26 @@ from hr_toolkit.tools.archive_import import (
 
 
 class ArchiveImportTest(unittest.TestCase):
+    def test_transfer_reader_does_not_read_unused_sheet(self) -> None:
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+        from hr_toolkit.tools.archive_import import _read_transfer_file
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "调动.xlsx"
+            _write_transfer_file(path)
+            expected = _read_transfer_file(path)
+            wb = load_workbook(path)
+            wb.create_sheet("sheet9")["A9000"] = "不需要读取的正文"
+            wb.save(path)
+            wb.close()
+            original = ReadOnlyWorksheet.iter_rows
+
+            def guarded(ws, *args, **kwargs):
+                self.assertNotEqual(ws.title, "sheet9")
+                return original(ws, *args, **kwargs)
+
+            with patch.object(ReadOnlyWorksheet, "iter_rows", guarded):
+                self.assertEqual(_read_transfer_file(path), expected)
+
     def test_region_overrides_replace_conflicts_and_restore_defaults(self) -> None:
         from hr_toolkit.region_codes import REGION_CODES, effective_region_codes
         from hr_toolkit.tools.archive_import import ArchiveTransferRecord, _detect_region_code, _target_values_for_record
