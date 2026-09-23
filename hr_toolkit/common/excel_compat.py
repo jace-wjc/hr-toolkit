@@ -228,7 +228,7 @@ def _convert_with_xlrd(source: Path, output_path: Path) -> None:
     import xlrd
     import openpyxl
 
-    rb = xlrd.open_workbook(str(source), formatting_info=False)
+    rb = xlrd.open_workbook(str(source), formatting_info=False, on_demand=True)
     wb = openpyxl.Workbook()
     try:
         # 移除默认新建的 Sheet
@@ -259,6 +259,10 @@ def _convert_with_xlrd(source: Path, output_path: Path) -> None:
                         val = None
                     row_vals.append(val)
                 ws.append(row_vals)
+            # Keep every sheet in the converted workbook, but release each
+            # source sheet as soon as it has been copied.
+            rb.unload_sheet(sheet_name)
+            del rs
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(str(output_path))
