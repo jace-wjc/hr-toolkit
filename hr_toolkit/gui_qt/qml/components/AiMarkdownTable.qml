@@ -4,13 +4,23 @@ import QtQuick.Controls 2.15
 Item {
     id: table
     property var tableData: ({headers: [], rows: [], widths: [], alignments: []})
+    property bool streaming: false
+    property int fontSize: Ui.chatFontSize(width)
+    property var stableWidths: []
+    function syncWidths() {
+        if (!streaming || stableWidths.length !== tableData.headers.length)
+            stableWidths = tableData.widths.slice(0)
+    }
+    onTableDataChanged: syncWidths()
+    onStreamingChanged: syncWidths()
+    Component.onCompleted: syncWidths()
     readonly property var columnSizes: {
         var count = tableData.headers.length
         var minimum = count > 4 ? 110 : 72
         var base = Math.max(width, count * minimum)
         var sizes = [], total = 0, flexible = 0
         for (var i = 0; i < count; ++i) {
-            var extra = Math.max(0, base * tableData.widths[i] / 100 - minimum)
+            var extra = Math.max(0, base * (stableWidths[i] || tableData.widths[i]) / 100 - minimum)
             sizes.push(extra); flexible += extra
         }
         for (var c = 0; c < count; ++c) {
@@ -29,7 +39,7 @@ Item {
         var value = tableData.alignments[column]
         return value === "right" ? TextEdit.AlignRight : value === "center" ? TextEdit.AlignHCenter : TextEdit.AlignLeft
     }
-    implicitHeight: header.implicitHeight + rows.height + (horizontal.contentWidth > horizontal.width + 1 ? 14 : 0) + 24
+    implicitHeight: header.implicitHeight + rows.height + (horizontal.contentWidth > horizontal.width + 1 ? 14 : 0)
     height: implicitHeight
 
     Rectangle {
@@ -58,7 +68,7 @@ Item {
         Rectangle {
             width: table.tableWidth
             height: header.implicitHeight
-            color: Ui.color("selection")
+            color: Ui.color("surface1")
         }
         Row {
             id: header
@@ -67,12 +77,12 @@ Item {
                 model: table.tableData.headers
                 delegate: Item {
                     width: table.columnSizes[index]
-                    height: Math.max(42, headerText.implicitHeight + 20)
+                    height: Math.max(42, headerText.implicitHeight + 24)
                     TextEdit {
                         id: headerText
-                        x: 12; y: 10; width: Math.max(20, parent.width - 24)
+                        x: Ui.chatCellPadding; y: 12; width: Math.max(20, parent.width - Ui.chatCellPadding * 2)
                         text: modelData
-                        font.pixelSize: 13; font.weight: Font.DemiBold
+                        font.pixelSize: table.fontSize; font.weight: Font.DemiBold
                         color: Ui.color("text")
                         horizontalAlignment: table.alignment(index)
                         wrapMode: TextEdit.Wrap
@@ -87,7 +97,8 @@ Item {
             objectName: "aiTableRows"
             y: header.implicitHeight
             width: table.tableWidth
-            height: Math.max(0, Math.min(360, contentHeight))
+            height: Math.max(0, Math.min(count <= 8 ? 720 : 360, contentHeight))
+            interactive: contentHeight > height + 1
             model: table.tableData.rows
             clip: true
             cacheBuffer: 80
@@ -131,12 +142,12 @@ Item {
                         model: modelData
                         delegate: Item {
                             width: table.columnSizes[index]
-                            height: cellText.implicitHeight + 20
+                            height: cellText.implicitHeight + 24
                             TextEdit {
                                 id: cellText
-                                x: 12; y: 10; width: Math.max(20, parent.width - 24)
+                                x: Ui.chatCellPadding; y: 12; width: Math.max(20, parent.width - Ui.chatCellPadding * 2)
                                 text: modelData
-                                font.pixelSize: 13
+                                font.pixelSize: table.fontSize
                                 color: Ui.color("text")
                                 horizontalAlignment: table.alignment(index)
                                 wrapMode: TextEdit.Wrap
@@ -149,11 +160,5 @@ Item {
                 Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Ui.color("divider") }
             }
         }
-    }
-    Text {
-        y: horizontal.height + 5
-        width: parent.width
-        text: Ui.text("表格：" + table.tableData.rows.length + " 行")
-        color: Ui.color("muted"); font.pixelSize: 10
     }
 }

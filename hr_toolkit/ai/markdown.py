@@ -40,18 +40,18 @@ _THEMES: Dict[str, Dict[str, str]] = {
     },
 }
 
-_BODY_SIZE = 13.0
-_CODE_SIZE = 12.0
+_BODY_SIZE = 14.0
+_CODE_SIZE = 13.0
 # Qt's table cell padding and collapsed borders are supported on Qt 5.15+.
 _CELL_PAD = 8
 # (font-size, margin-top, margin-bottom)
 _HEADING_SCALE = {
-    1: (16.0, 10, 5),
-    2: (15.0, 9, 4),
-    3: (14.0, 8, 4),
-    4: (13.5, 7, 3),
-    5: (13.0, 6, 3),
-    6: (12.5, 6, 3),
+    1: (20.0, 12, 8),
+    2: (18.0, 10, 6),
+    3: (16.0, 8, 6),
+    4: (15.0, 8, 5),
+    5: (14.0, 6, 4),
+    6: (14.0, 6, 4),
 }
 
 _FENCE_RE = re.compile(r"^(```+|~~~+)\s*([\w+#-]*)\s*$")
@@ -82,9 +82,9 @@ def render_markdown_html(text: str, *, dark: bool = False, font_family: str = ""
     return _Renderer(_THEMES["dark" if dark else "light"], font_family=font_family).render(str(text or "").replace("\x00", ""))
 
 
-def render_markdown_payload(text: str, *, dark: bool = False, font_family: str = "") -> dict:
+def render_markdown_payload(text: str, *, dark: bool = False, font_family: str = "", streaming: bool = False) -> dict:
     """One parse supplies legacy HTML and native table blocks for the chat view."""
-    renderer = _Renderer(_THEMES["dark" if dark else "light"], font_family=font_family)
+    renderer = _Renderer(_THEMES["dark" if dark else "light"], font_family=font_family, streaming=streaming)
     html = renderer.render(str(text or "").replace("\x00", ""))
     return {"html": html, "blocks": renderer.blocks}
 
@@ -106,17 +106,19 @@ def _escape(raw: str) -> str:
 
 
 class _Renderer:
-    def __init__(self, palette: Dict[str, str], font_family: str = "") -> None:
+    def __init__(self, palette: Dict[str, str], font_family: str = "", streaming: bool = False) -> None:
+        self.streaming = streaming
         self.palette = palette
         self.font_family = str(font_family or "").strip()
         self.blocks: List[dict] = []
         self._last_table: dict = {}
+        self._last_code: dict = {}
 
     # ------------------------------------------------------------------ 入口
     def render(self, text: str) -> str:
         lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
         blocks: List[str] = []
-        tables: Dict[int, dict] = {}
+        native_blocks: Dict[int, dict] = {}
         index = 0
         total = len(lines)
         while index < total:
@@ -129,6 +131,7 @@ class _Renderer:
             fence = _FENCE_RE.match(stripped)
             if fence:
                 block, index = self._read_fence(lines, index)
+                native_blocks[len(blocks)] = self._last_code
                 blocks.append(block)
                 continue
             if _RULE_RE.match(stripped):
@@ -149,7 +152,7 @@ class _Renderer:
                 continue
             if self._starts_table(lines, index):
                 block, index = self._read_table(lines, index)
-                tables[len(blocks)] = self._last_table
+                native_blocks[len(blocks)] = self._last_table
                 blocks.append(block)
                 continue
             if _LIST_RE.match(line):
@@ -158,17 +161,10 @@ class _Renderer:
                 continue
             block, index = self._read_paragraph(lines, index)
             blocks.append(block)
-        pending: List[str] = []
-        for position, block in enumerate(blocks):
-            if position in tables:
-                if pending:
-                    self.blocks.append({"kind": "text", "html": "".join(pending)})
-                    pending = []
-                self.blocks.append(tables[position])
-            else:
-                pending.append(block)
-        if pending:
-            self.blocks.append({"kind": "text", "html": "".join(pending)})
+        # Each completed block retains its own native delegate while the tail
+        # changes. Do not merge an entire answer into one relaid-out TextEdit.
+        self.blocks = [native_blocks[position] if position in native_blocks else {"kind": "text", "html": block}
+                       for position, block in enumerate(blocks)]
         return "".join(blocks)
 
     # ------------------------------------------------------------------ 块级
@@ -199,6 +195,7 @@ class _Renderer:
             else ""
         )
         code = "\n".join(body)
+        self._last_code = {"kind": "code", "language": language, "text": code}
         return (
             '%s<pre style="font-family:monospace; font-size:%gpx; background-color:%s; '
             'margin-top:4px; margin-bottom:6px">%s</pre>'
@@ -307,14 +304,18 @@ class _Renderer:
         for indent, ordered, text in items:
             while stack and indent < stack[-1][0]:
                 parts.append("</%s>" % stack.pop()[1])
+            # Qt's default list indent is 40px, excessive in a narrow chat.
+            # Explicit margins accumulate for nested bullets; retain room for
+            # multi-digit markers in numbered lists.
+            list_indent = "-qt-list-indent:1" if ordered else "-qt-list-indent:0; margin-left:20px"
             if not stack or indent > stack[-1][0]:
                 tag = "ol" if ordered else "ul"
-                parts.append('<%s style="-qt-list-indent:1; margin-top:2px; margin-bottom:2px">' % tag)
+                parts.append('<%s style="%s; margin-top:4px; margin-bottom:8px; line-height:145%%">' % (tag, list_indent))
                 stack.append((indent, tag))
             elif (stack[-1][1] == "ol") != ordered:
                 parts.append("</%s>" % stack.pop()[1])
                 tag = "ol" if ordered else "ul"
-                parts.append('<%s style="-qt-list-indent:1; margin-top:2px; margin-bottom:2px">' % tag)
+                parts.append('<%s style="%s; margin-top:4px; margin-bottom:8px; line-height:145%%">' % (tag, list_indent))
                 stack.append((indent, tag))
             parts.append("<li>%s</li>" % self._inline(text))
         while stack:
@@ -340,13 +341,15 @@ class _Renderer:
             body.append(self._inline(stripped))
             index += 1
         return (
-            '<p style="margin-top:0; margin-bottom:6px">%s</p>' % "<br>".join(body),
+            '<p style="margin-top:0; margin-bottom:8px; line-height:145%%">%s</p>' % "<br>".join(body),
             index,
         )
 
     # ------------------------------------------------------------------ 行内
     def _inline(self, raw: str, *, table_cell: bool = False) -> str:
         palette = self.palette
+        if self.streaming and raw.count("`") % 2:
+            raw = raw[:-1] if raw.endswith("`") else raw + "`"
         text = _escape(raw)
         codes: List[str] = []
 
@@ -356,6 +359,11 @@ class _Renderer:
 
         # 先抠出行内代码，免得里面的 * _ ~ 被当成强调标记
         text = _INLINE_CODE_RE.sub(stash, text)
+        if self.streaming:
+            # Complete temporary styling only outside protected code spans.
+            for marker in ("**", "__", "~~"):
+                if text.count(marker) % 2:
+                    text = text[:-len(marker)] if text.endswith(marker) else text + marker
         if table_cell:
             # Only an exact line-break tag is allowed. Other HTML stays escaped,
             # and tags inside inline code remain literal.

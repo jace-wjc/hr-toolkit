@@ -1,6 +1,12 @@
 """US English display catalog. Numbered placeholders preserve source data."""
 
 MESSAGES = {
+ '收起 Sage': 'Collapse Sage',
+ '回到最新消息': 'Jump to latest',
+ '更多选项': 'More options',
+ '数据发送说明': 'Data sharing details',
+ '消息与附件将发送至 AI 服务': 'Messages and attachments are sent to the AI service',
+
  '表格：{0} 行': 'Table: {0} rows',
  '最近使用': 'Recent',
  '打开文件': 'Open File',

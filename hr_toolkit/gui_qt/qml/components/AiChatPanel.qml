@@ -30,6 +30,7 @@ Item {
     // 有文件正拖在面板上方（用来决定要不要显示「松手即可附加」）
     property bool dropActive: false
     property string conversationId: ""
+    property bool ownsDraft: true
 
     readonly property color textMain: Ui.color("text")
     readonly property color textMuted: Ui.color("muted")
@@ -37,6 +38,8 @@ Item {
     readonly property color accent: Ui.color("accent")
     readonly property color cardBorder: Ui.color("border")
     readonly property color markColor: Ui.color("markRay")
+    readonly property int bodySize: Ui.chatFontSize(width)
+    readonly property int readingMargin: width >= 520 ? 28 : 20
 
     readonly property var statusPhrases: controller.aiStatusPhrases
     readonly property int statusIndex: 0
@@ -52,6 +55,27 @@ Item {
     function saveDraftNow() {
         draftTimer.stop()
         if (panel.editingRow < 0) controller.aiSaveDraft(inputArea.text)
+    }
+
+    function focusComposer() { inputArea.forceActiveFocus() }
+    function prepareToShow() {
+        ownsDraft = true
+        if (editingRow < 0) inputArea.text = controller.aiDraft
+    }
+    function prepareToHide() {
+        saveDraftNow()
+        ownsDraft = false
+        tailTimer.stop()
+        inputArea.focus = false
+        morePopup.close()
+        privacyPopup.close()
+        imagePreviewPopup.close()
+        historyPopup.close()
+        modelPopup.close()
+    }
+    onVisibleChanged: {
+        if (visible) aiChatView.scheduleTail()
+        else tailTimer.stop()
     }
 
     function submitInput() {
@@ -110,7 +134,7 @@ Item {
 
     Component.onDestruction: {
         draftTimer.stop()
-        if (controller && panel.editingRow < 0 && panel.conversationId === controller.aiConversationId)
+        if (controller && panel.ownsDraft && panel.editingRow < 0 && panel.conversationId === controller.aiConversationId)
             controller.aiSaveDraft(inputArea.text)
     }
 
@@ -126,7 +150,7 @@ Item {
                 inputArea.text = controller.aiDraft
                 return
             }
-            if (!inputArea.activeFocus || inputArea.text.length === 0)
+            if (panel.editingRow < 0 && (!inputArea.activeFocus || inputArea.text.length === 0))
                 inputArea.text = controller.aiDraft
         }
     }
@@ -138,29 +162,22 @@ Item {
         // ---------- 头部 ----------
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 52
+            Layout.preferredHeight: 40
             color: "transparent"
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 14
                 anchors.rightMargin: 6
                 spacing: 2
-                ColumnLayout {
+                Text {
                     Layout.fillWidth: true
-                    spacing: 1
-                    Text {
-                        text: "Sage"
-                        color: panel.textMain
-                        font.pixelSize: 15
-                        font.weight: Font.DemiBold
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: Ui.text(controller.aiActiveProviderLabel)
-                        color: panel.textFaint
-                        font.pixelSize: 10
-                        elide: Text.ElideRight
-                    }
+                    text: controller.aiConversationTitle || "Sage"
+                    color: panel.textMain
+                    font.pixelSize: 14
+                    font.weight: Font.Medium
+                    elide: Text.ElideRight
+                    AppToolTip { text: parent.text; visible: titleHover.hovered && parent.truncated }
+                    HoverHandler { id: titleHover }
                 }
                 IconAction {
                     id: historyButton
@@ -176,19 +193,15 @@ Item {
                     onClicked: { panel.saveDraftNow(); controller.aiNewConversation() }
                 }
                 IconAction {
+                    id: moreButton
+                    objectName: "aiMoreButton"
                     iconId: "gear"
-                    tip: "设置"
-                    onClicked: panel.settingsRequested()
-                }
-                IconAction {
-                    iconId: "expand"
-                    tip: "独立窗口打开"
-                    visible: panel.showDetachButton
-                    onClicked: panel.detachRequested()
+                    tip: "更多选项"
+                    onClicked: morePopup.opened ? morePopup.close() : morePopup.open()
                 }
                 IconAction {
                     iconId: "chevron_right"
-                    tip: "收起（只留一条窄轨）"
+                    tip: "收起 Sage"
                     visible: panel.showCollapseButton
                     onClicked: panel.collapseRequested()
                 }
@@ -247,11 +260,12 @@ Item {
         // 外面套一层 Item 是为了在视图上叠一个「回到底部」按钮：
         Text {
             Layout.fillWidth: true
-            Layout.leftMargin: 14
-            Layout.rightMargin: 14
-            text: Ui.text(controller.aiPreparing ? "正在准备附件，可点击停止取消。" : "发送后，问题、历史上下文和所附文件内容会传给所选 AI 服务。项目文件不会自动发送。")
+            Layout.leftMargin: panel.readingMargin
+            Layout.rightMargin: panel.readingMargin
+            visible: controller.aiPreparing
+            text: Ui.text("正在准备附件，可点击停止取消。")
             color: panel.textMuted
-            font.pixelSize: 11
+            font.pixelSize: 12
             wrapMode: Text.Wrap
         }
 
@@ -266,9 +280,11 @@ Item {
                 anchors.fill: parent
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
-                model: controller.aiChatModel
-                spacing: 12
-                topMargin: 14
+                model: controller.aiTimelineModel
+                spacing: 0
+                cacheBuffer: 240
+                reuseItems: true
+                topMargin: 24
                 // Keep breathing room inside the scrollable content so
                 // positionViewAtEnd includes it after streamed text/actions.
                 bottomMargin: 0
@@ -278,40 +294,58 @@ Item {
                 }
                 // 流式输出时跟着最新内容走；用户手动上滚就暂停跟随，回到底部再恢复。
                 property bool followTail: true
-                // Virtualized rows must retain their measured size when they
-                // leave the viewport. Recreating a long response at 60px can
-                // make ListView discard/recreate it repeatedly as it expands.
+                property int hoveredMessage: -1
+                // Recycle individual Markdown blocks, not entire replies.
+                // Retain measured sizes by block and width to limit scrollbar
+                // estimate changes when revisiting offscreen content.
                 property var measuredHeights: ({})
                 property int measurementEpoch: 0
                 Connections {
-                    target: controller.aiChatModel
+                    target: controller.aiTimelineModel
                     function onModelAboutToBeReset() {
                         aiChatView.measurementEpoch += 1
                         aiChatView.measuredHeights = ({})
+                        aiChatView.followTail = true
+                        aiChatView.hoveredMessage = -1
                     }
                 }
+                Connections {
+                    target: controller.aiChatModel
+                    // A submitted turn goes to the bottom; streamed paragraphs
+                    // never take the reader away from earlier messages.
+                    function onRowsInserted(parent, first, last) {
+                        aiChatView.followTail = true
+                        aiChatView.scheduleTail()
+                    }
+                }
+                onWidthChanged: measuredHeights = ({})
                 // A restored response may change height while Qt is creating
                 // its table/text delegates. Scrolling inside that layout pass
                 // can recreate delegates indefinitely (notably with CJK fonts).
                 // Coalesce requests onto the next event-loop turn instead.
-                function scheduleTail() { if (followTail) tailTimer.restart() }
+                function scheduleTail() { if (followTail && panel.visible) tailTimer.restart() }
                 Timer {
                     id: tailTimer
                     interval: 16
                     repeat: false
-                    onTriggered: if (aiChatView.followTail) aiChatView.positionViewAtEnd()
+                    onTriggered: if (panel.visible && aiChatView.followTail) aiChatView.positionViewAtEnd()
                 }
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                onCountChanged: {
-                    followTail = true
-                    scheduleTail()
+                ScrollBar.vertical: ScrollBar {
+                    id: conversationScrollBar
+                    objectName: "aiConversationScrollBar"
+                    policy: ScrollBar.AsNeeded
+                    onPressedChanged: {
+                        if (pressed) { aiChatView.followTail = false; tailTimer.stop() }
+                        else aiChatView.followTail = aiChatView.atYEnd
+                    }
                 }
+                onCountChanged: scheduleTail()
                 onContentHeightChanged: scheduleTail()
                 // The composer can grow or shrink without changing messages.
                 // Preserve the bottom gap only while following new replies.
                 onHeightChanged: scheduleTail()
                 onMovementStarted: { followTail = false; tailTimer.stop() }
-                onMovementEnded: followTail = atYEnd
+                onMovementEnded: if (!conversationScrollBar.pressed) followTail = atYEnd
                 Component.onCompleted: scheduleTail()
 
                 // 空状态：一句说明 + 几个建议问题。
@@ -327,7 +361,7 @@ Item {
                         Layout.fillWidth: true
                         text: Ui.text("可以直接提问，也可以把表格或截图粘贴／拖进来让我分析。")
                         color: panel.textMuted
-                        font.pixelSize: 13
+                        font.pixelSize: panel.bodySize
                         wrapMode: Text.Wrap
                         horizontalAlignment: Text.AlignHCenter
                     }
@@ -362,7 +396,11 @@ Item {
                 delegate: Item {
                     id: messageDelegate
 
-                readonly property bool isUser: model.role === "user"
+                readonly property bool isUser: model.part === "user"
+                readonly property bool isBlock: model.part === "block"
+                readonly property bool isFooter: model.part === "footer"
+                readonly property string heightKey: model.rowKey + ":" + Math.round(width) + ":" + panel.bodySize
+                property bool pooled: false
                 readonly property string body: model.content || ""
                 readonly property var files: model.attachments || []
                 readonly property bool isLast: index === aiChatView.count - 1
@@ -380,23 +418,36 @@ Item {
                     return out
                 }
                 readonly property bool showUserActions: isUser && body.length > 0
-                    readonly property real sideGap: 12
-                    readonly property real maxBubbleWidth: Math.max(120, width - sideGap * 2 - 20)
+                    readonly property real sideGap: panel.readingMargin
+                    readonly property real maxBubbleWidth: Math.max(120, (width - sideGap * 2) * 0.85)
 
                     width: aiChatView.width
+                    enabled: !pooled
                     // Rich text starts with a provisional width while nested
                     // components are created. Publish the final row height only
                     // after that layout pass, so ListView cannot repeatedly
                     // recreate a tall offscreen row as it shrinks into place.
-                    property real settledHeight: aiChatView.measuredHeights[index] || 60
+                    property real settledHeight: aiChatView.measuredHeights[heightKey] || 60
                     property int measurementEpoch: -1
                     height: settledHeight
                     clip: true
                     function rememberHeight() {
                         if (measurementEpoch === aiChatView.measurementEpoch && index >= 0 && implicitHeight > 0)
-                            aiChatView.measuredHeights[index] = implicitHeight
+                            aiChatView.measuredHeights[heightKey] = implicitHeight
                     }
-                    onImplicitHeightChanged: messageSizeTimer.restart()
+                    onImplicitHeightChanged: if (!pooled) messageSizeTimer.restart()
+                    onHeightKeyChanged: {
+                        settledHeight = aiChatView.measuredHeights[heightKey] || 60
+                        if (!pooled) messageSizeTimer.restart()
+                    }
+                    ListView.onPooled: { pooled = true; messageSizeTimer.stop(); userCopyReset.stop(); copyResetTimer.stop() }
+                    ListView.onReused: {
+                        pooled = false
+                        measurementEpoch = aiChatView.measurementEpoch
+                        userActions.copied = false
+                        assistantActions.copied = false
+                        messageSizeTimer.restart()
+                    }
                     Component.onCompleted: {
                         measurementEpoch = aiChatView.measurementEpoch
                         messageSizeTimer.restart()
@@ -407,15 +458,23 @@ Item {
                         interval: 16
                         repeat: false
                         onTriggered: {
+                            if (messageDelegate.pooled) return
                             messageDelegate.rememberHeight()
                             messageDelegate.settledHeight = messageDelegate.implicitHeight
                         }
                     }
                     implicitHeight: isUser
-                    ? userBubble.height + (showUserActions ? 20 : 0)
-                    : assistantBlock.height
+                    ? userBubble.height + (showUserActions ? 28 : 0) + (isLast ? 0 : 28)
+                    : assistantBlock.height + (isFooter ? (isLast ? 0 : 28) : (model.lastBlock ? 0 : 6))
 
-                    HoverHandler { id: messageHover }
+                    HoverHandler {
+                        id: messageHover
+                        enabled: !messageDelegate.pooled
+                        onHoveredChanged: {
+                            if (hovered) aiChatView.hoveredMessage = model.messageIndex
+                            else if (aiChatView.hoveredMessage === model.messageIndex) aiChatView.hoveredMessage = -1
+                        }
+                    }
 
                     // ---- 用户消息：靠右浅灰气泡（附件在气泡里） ----
                     Rectangle {
@@ -434,7 +493,7 @@ Item {
                         TextMetrics {
                             id: userMetrics
                             font: userBody.font
-                            text: messageDelegate.body.length > 0 ? messageDelegate.body : " "
+                            text: messageDelegate.isUser && messageDelegate.body.length > 0 ? messageDelegate.body : " "
                         }
 
                         Column {
@@ -531,9 +590,9 @@ Item {
                                 id: userBody
                                 width: parent.width
                                 visible: messageDelegate.body.length > 0
-                                text: messageDelegate.body
+                                text: messageDelegate.isUser ? messageDelegate.body : ""
                                 color: panel.textMain
-                                font.pixelSize: 13
+                                font.pixelSize: panel.bodySize
                                 wrapMode: TextEdit.Wrap
                                 textFormat: TextEdit.PlainText
                                 readOnly: true
@@ -546,20 +605,20 @@ Item {
                     // 用户消息的操作行：改完重发，不用重新打一遍。
                     Row {
                         id: userActions
+                        property bool copied: false
                         x: messageDelegate.width - messageDelegate.sideGap - width
                         y: userBubble.height + 4
-                        height: 16
+                        height: 20
                         spacing: 14
                         visible: messageDelegate.showUserActions
-                        opacity: (messageHover.hovered || messageDelegate.isLast) ? 1 : 0
-                        enabled: opacity > 0
+                        opacity: (messageHover.hovered || messageDelegate.isLast || children[0].activeFocus || children[1].activeFocus) ? 1 : 0
                         ActionLink {
                             label: "编辑并重发"
-                            onClicked: panel.beginEdit(index, messageDelegate.body)
+                            onClicked: panel.beginEdit(model.messageIndex, messageDelegate.body)
                         }
                         ActionLink {
+                            objectName: "aiUserCopy"
                             label: userActions.copied ? "已复制" : "复制"
-                            property bool copied: false
                             onClicked: {
                                 controller.aiCopyMessage(messageDelegate.body)
                                 userActions.copied = true
@@ -580,25 +639,28 @@ Item {
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.leftMargin: messageDelegate.sideGap
-                        anchors.rightMargin: messageDelegate.sideGap + 6
+                        anchors.rightMargin: messageDelegate.sideGap
                         anchors.top: parent.top
 
-                        readonly property bool waiting: model.streaming && messageDelegate.body.length === 0
+                        readonly property bool waiting: messageDelegate.isFooter && model.streaming && !model.hasContent
                         readonly property real bodyHeight: waiting
                             ? 18
-                            : Math.max(assistantMark.height, assistantViewport.height)
+                            : messageDelegate.isBlock ? assistantViewport.height
+                            : messageDelegate.isFooter && model.streaming ? 12 : 0
                         // 操作行的位置固定留出来，避免鼠标悬浮时消息高度跳变（列表会跟着抖）。
-                        readonly property bool showActions: !model.streaming && messageDelegate.body.length > 0
-                        height: bodyHeight + (showActions ? 24 : 0)
+                        readonly property bool stopped: messageDelegate.isFooter && model.status === "stopped"
+                        readonly property bool showActions: messageDelegate.isFooter && !model.streaming && (model.hasContent || stopped)
+                        height: bodyHeight + (stopped ? 24 : 0) + (showActions ? 28 : 0)
 
                         AiSpinner {
                             id: assistantMark
+                            visible: assistantBlock.waiting
                             anchors.left: parent.left
                             anchors.top: parent.top
                             anchors.topMargin: 2
                             width: 16
                             height: 16
-                            running: model.streaming
+                            running: panel.visible && assistantBlock.waiting && !messageDelegate.pooled
                             rayColor: panel.markColor
                         }
 
@@ -617,27 +679,39 @@ Item {
                         AiResponseBody {
                             id: assistantViewport
                             objectName: "aiResponseViewport"
-                            x: assistantMark.width + 10
-                            width: Math.max(40, assistantBlock.width - assistantMark.width - 10)
-                            visible: !assistantBlock.waiting
-                            blocks: model.blocks || []
-                            fallbackHtml: model.html || ""
+                            x: 0
+                            width: assistantBlock.width
+                            fontSize: panel.bodySize
+                            visible: messageDelegate.isBlock
+                            blocks: messageDelegate.isBlock ? (model.blocks || []) : []
                             streaming: model.streaming
+                            showActivity: false
                         }
 
+                        Rectangle {
+                            visible: messageDelegate.isFooter && model.streaming && model.hasContent
+                            y: 6; width: 6; height: 6; radius: 3; color: panel.accent
+                        }
+                        Text {
+                            y: assistantBlock.bodyHeight + 4
+                            visible: assistantBlock.stopped
+                            text: Ui.text("已停止生成")
+                            color: panel.textMuted
+                            font.pixelSize: 12
+                        }
                         Row {
                             id: assistantActions
                             property bool copied: false
-                            x: assistantMark.width + 10
-                            y: assistantBlock.bodyHeight + 4
-                            height: 16
+                            x: 0
+                            y: assistantBlock.bodyHeight + (assistantBlock.stopped ? 24 : 0) + 8
+                            height: 20
                             spacing: 14
                             visible: assistantBlock.showActions
                             // 悬浮才显形，最后一条常驻；高度已预留，不引起重排。
-                            opacity: (messageHover.hovered || messageDelegate.isLast) ? 1 : 0
-                            enabled: opacity > 0
+                            opacity: (aiChatView.hoveredMessage === model.messageIndex || messageDelegate.isLast || children[0].activeFocus || children[1].activeFocus) ? 1 : 0
 
                             ActionLink {
+                                visible: messageDelegate.body.length > 0
                                 label: assistantActions.copied ? "已复制" : "复制"
                                 onClicked: {
                                     controller.aiCopyMessage(messageDelegate.body)
@@ -664,15 +738,20 @@ Item {
             // 上滑看历史时出现；点一下回到最新一条。
             Rectangle {
                 id: scrollToBottom
+                activeFocusOnTab: visible
+                Accessible.role: Accessible.Button
+                Accessible.name: Ui.text("回到最新消息")
+                function jumpToLatest() { aiChatView.followTail = true; aiChatView.scheduleTail() }
+                Keys.onReturnPressed: jumpToLatest()
+                Keys.onSpacePressed: jumpToLatest()
                 objectName: "aiScrollToBottom"
-                anchors.right: parent.right
-                anchors.rightMargin: 14
+                anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 12
                 width: 30
                 height: 30
                 radius: 15
-                visible: aiChatView.count > 0 && !aiChatView.followTail
+                visible: aiChatView.count > 0 && !aiChatView.followTail && !aiChatView.atYEnd
                 color: Ui.color("surface")
                 border.width: 1
                 border.color: panel.cardBorder
@@ -690,14 +769,13 @@ Item {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        aiChatView.followTail = true
-                        aiChatView.positionViewAtEnd()
+                        scrollToBottom.jumpToLatest()
                     }
                 }
             }
         }
 
-        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Ui.color("divider") }
+
 
         // ---------- 待发附件 ----------
         // 图片给缩略图、表格给小胶囊：两类附件一眼能分清，也方便点开原图。
@@ -849,12 +927,12 @@ Item {
         Rectangle {
             id: composerCard
             Layout.fillWidth: true
-            Layout.leftMargin: 10
-            Layout.rightMargin: 10
-            Layout.topMargin: 6
-            Layout.bottomMargin: 2
-            Layout.preferredHeight: composerColumn.implicitHeight + 18
-            radius: 14
+            Layout.leftMargin: 14
+            Layout.rightMargin: 14
+            Layout.topMargin: 8
+            Layout.bottomMargin: 6
+            Layout.preferredHeight: composerColumn.implicitHeight + 28
+            radius: 18
             // 抽屉卡片本身就是 surface（白），输入卡片改用 input 的略暗调，
             // 亮色下是浅灰、暗色下更暗，都能和卡片区分开。
             color: Ui.color("input")
@@ -866,16 +944,16 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
-                anchors.margins: 9
-                spacing: 6
+                anchors.margins: 14
+                spacing: 12
 
                 ScrollView {
                     id: inputScroll
                     objectName: "aiInputScroll"
                     width: parent.width
-                    height: Math.min(inputArea.implicitHeight + 6, 108)
+                    height: Math.min(Math.max(40, inputArea.implicitHeight + 6), 144)
                     clip: true
-                    ScrollBar.vertical.policy: (inputArea.implicitHeight + 6 > 108) ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                    ScrollBar.vertical.policy: (inputArea.implicitHeight + 6 > 144) ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
                     // 输入框不要两端回弹。ScrollView 内部那个 Flickable 默认是
                     // DragAndOvershootBounds，滚到顶/底会橡皮筋一下；TextArea 自己不持有
                     // boundsBehavior，ScrollView 也没把它代理出来，所以只能拿 contentItem
@@ -889,7 +967,7 @@ Item {
                         placeholderText: Ui.text("今天帮你做些什么？")
                         placeholderTextColor: panel.textFaint
                         color: panel.textMain
-                        font.pixelSize: 13
+                        font.pixelSize: panel.bodySize
                         selectByMouse: true
                         leftPadding: 0
                         rightPadding: 0
@@ -924,11 +1002,12 @@ Item {
                             event.accepted = true
                             panel.submitInput()
                         }
-                        // Esc：编辑态先退出编辑，否则停止生成。
+                        // Esc：优先退出编辑或停止生成，空闲时收起助手。
                         Keys.onEscapePressed: function(event) {
                             event.accepted = true
                             if (panel.editingRow >= 0) panel.cancelEdit()
                             else if (controller.aiBusy) controller.aiStopGenerating()
+                            else panel.closeRequested()
                         }
                     }
                 }
@@ -941,12 +1020,17 @@ Item {
                     // 左：附加表格
                     Rectangle {
                         id: attachButton
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: Ui.text("附加表格或图片（也可以直接粘贴、拖入）")
+                        Keys.onReturnPressed: controller.aiChooseAttachments()
+                        Keys.onSpacePressed: controller.aiChooseAttachments()
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                         width: 34
                         height: 34
                         radius: 9
-                        color: attachMouse.containsMouse ? Ui.color("hover") : "transparent"
+                        color: attachMouse.containsMouse || activeFocus ? Ui.color("hover") : "transparent"
                         enabled: !controller.aiBusy
                         opacity: enabled ? 1.0 : 0.45
                         ToolIcon {
@@ -967,56 +1051,33 @@ Item {
                         AppToolTip { text: Ui.text("附加表格或图片（也可以直接粘贴、拖入）"); visible: attachMouse.containsMouse }
                     }
 
-                    // 左：新对话
-                    Rectangle {
-                        id: newChatButton
-                        anchors.left: attachButton.right
-                        anchors.leftMargin: 4
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 34
-                        height: 34
-                        radius: 9
-                        color: newChatMouse.containsMouse ? Ui.color("hover") : "transparent"
-                        enabled: !controller.aiBusy
-                        opacity: enabled ? 1.0 : 0.45
-                        ToolIcon {
-                            anchors.centerIn: parent
-                            width: 16
-                            height: 16
-                            iconId: "new_chat"
-                            strokeColor: newChatMouse.containsMouse ? panel.accent : panel.textMuted
-                            lineWidth: 1.3
-                        }
-                        MouseArea {
-                            id: newChatMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: { panel.saveDraftNow(); controller.aiNewConversation() }
-                        }
-                        AppToolTip { text: Ui.text("开始新对话（当前对话会存入历史）"); visible: newChatMouse.containsMouse }
-                    }
-
                     // 中：当前模型，点开切换
                     Item {
                         id: modelChip
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: controller.aiActiveModel
+                        Keys.onReturnPressed: modelPopup.open()
+                        Keys.onSpacePressed: modelPopup.open()
                         objectName: "aiModelChip"
-                        anchors.left: newChatButton.right
+                        anchors.left: attachButton.right
                         anchors.leftMargin: 6
                         anchors.right: sendButton.left
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
                         height: 24
                         clip: true
+                        Rectangle { anchors.fill: parent; color: "transparent"; border.width: parent.activeFocus ? 1 : 0; border.color: panel.accent; radius: 4 }
                         Row {
+                            anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            spacing: 3
+                            spacing: 6
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: Math.min(implicitWidth, modelChip.width - 10)
+                                width: Math.max(0, Math.min(implicitWidth, modelChip.width - 16))
                                 text: Ui.text(controller.aiReady ? controller.aiActiveModel : "未配置")
-                                color: modelChipMouse.containsMouse ? panel.accent : panel.textFaint
-                                font.pixelSize: 10
+                                color: modelChipMouse.containsMouse ? panel.accent : panel.textMuted
+                                font.pixelSize: 12
                                 elide: Text.ElideMiddle
                             }
                             ToolIcon {
@@ -1040,16 +1101,23 @@ Item {
                     // 右：发送 / 停止
                     Rectangle {
                         id: sendButton
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: Ui.text(controller.aiBusy ? "停止" : "发送")
+                        function activate() {
+                            if (controller.aiBusy) controller.aiStopGenerating()
+                            else panel.submitInput()
+                        }
+                        Keys.onReturnPressed: activate()
+                        Keys.onSpacePressed: activate()
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         width: 34
                         height: 34
                         radius: 9
                         readonly property bool ready: inputArea.text.trim().length > 0 || aiAttachmentRepeater.count > 0
-                        color: controller.aiBusy
-                               ? panel.accent
-                               : (sendMouse.containsMouse && ready ? Ui.color("hover") : "transparent")
-                        border.width: 1
+                        color: controller.aiBusy || (ready && controller.aiReady) ? panel.accent : Ui.color("surface1")
+                        border.width: activeFocus ? 2 : 1
                         border.color: controller.aiBusy
                                       ? panel.accent
                                       : (ready ? panel.accent : panel.cardBorder)
@@ -1059,7 +1127,7 @@ Item {
                             height: 16
                             visible: !controller.aiBusy
                             iconId: "arrow_up"
-                            strokeColor: sendButton.ready ? panel.accent : panel.textFaint
+                            strokeColor: sendButton.ready && controller.aiReady ? Ui.color("onAccent") : panel.textFaint
                             lineWidth: 1.5
                         }
                         Rectangle {
@@ -1075,10 +1143,7 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: (sendButton.ready || controller.aiBusy) ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: {
-                                if (controller.aiBusy) controller.aiStopGenerating()
-                                else panel.submitInput()
-                            }
+                            onClicked: sendButton.activate()
                         }
                     }
                 }
@@ -1090,11 +1155,49 @@ Item {
             Layout.leftMargin: 12
             Layout.rightMargin: 12
             Layout.bottomMargin: 8
-            text: Ui.text("Enter 发送 · Shift+Enter 换行 · Ctrl+K 开关助手")
+            text: Ui.text("消息与附件将发送至 AI 服务")
+            AppToolTip {
+                text: Ui.text("发送后，问题、历史上下文和所附文件内容会传给所选 AI 服务。项目文件不会自动发送。") + "\n" + Ui.text("Enter 发送 · Shift+Enter 换行 · Ctrl+K 开关助手")
+                visible: privacyHover.hovered
+            }
+            HoverHandler { id: privacyHover }
             color: panel.textFaint
-            font.pixelSize: 9
+            font.pixelSize: 11
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
+        }
+    }
+
+    Popup {
+        id: morePopup
+        objectName: "aiMorePopup"
+        focus: true
+        x: Math.max(8, panel.width - width - 8)
+        y: 48
+        width: 220
+        padding: 8
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: Ui.color("surface"); border.color: panel.cardBorder; radius: 10 }
+        contentItem: Column {
+            spacing: 4
+            AppButton { width: morePopup.availableWidth; text: "设置"; variant: "link"; onClicked: { morePopup.close(); panel.settingsRequested() } }
+            AppButton { width: morePopup.availableWidth; text: "独立窗口打开"; variant: "link"; visible: panel.showDetachButton; onClicked: { morePopup.close(); panel.detachRequested() } }
+            AppButton { objectName: "aiPrivacyButton"; width: morePopup.availableWidth; text: "数据发送说明"; variant: "link"; onClicked: { morePopup.close(); privacyPopup.open() } }
+        }
+    }
+    Popup {
+        id: privacyPopup
+        objectName: "aiPrivacyPopup"
+        focus: true
+        x: 14; y: Math.max(8, panel.height - height - 130)
+        width: Math.min(360, panel.width - 28)
+        padding: 16
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: Ui.color("surface"); border.color: panel.cardBorder; radius: 10 }
+        contentItem: Column {
+            spacing: 12
+            Text { width: privacyPopup.availableWidth; text: Ui.text("发送后，问题、历史上下文和所附文件内容会传给所选 AI 服务。项目文件不会自动发送。"); color: panel.textMain; font.pixelSize: 14; wrapMode: Text.Wrap }
+            AppButton { text: "关闭"; onClicked: privacyPopup.close() }
         }
     }
 
@@ -1703,10 +1806,16 @@ Item {
         property string iconId: ""
         property string tip: ""
         signal clicked()
-        width: 26
-        height: 26
+        width: 30
+        height: 30
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Button
+        Accessible.name: Ui.text(tip)
+        Keys.onReturnPressed: clicked()
+        Keys.onSpacePressed: clicked()
         Layout.alignment: Qt.AlignVCenter
         opacity: enabled ? 1.0 : 0.4
+        Rectangle { anchors.fill: parent; radius: 5; color: "transparent"; border.width: iconAction.activeFocus ? 1 : 0; border.color: panel.accent }
         ToolIcon {
             anchors.centerIn: parent
             width: 15
@@ -1730,12 +1839,17 @@ Item {
         property string label: ""
         signal clicked()
         width: actionLabel.implicitWidth
-        height: 16
+        height: 20
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Button
+        Accessible.name: Ui.text(label)
+        Keys.onReturnPressed: clicked()
+        Keys.onSpacePressed: clicked()
         Text {
             id: actionLabel
             anchors.centerIn: parent
             text: Ui.text(actionLink.label)
-            color: actionMouse.containsMouse ? panel.accent : panel.textFaint
+            color: actionMouse.containsMouse || actionLink.activeFocus ? panel.accent : panel.textMuted
             font.pixelSize: 11
         }
         MouseArea {

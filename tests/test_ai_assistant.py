@@ -973,9 +973,30 @@ class AiAssistantSessionTests(unittest.TestCase):
 class MarkdownRenderTests(unittest.TestCase):
     """模型返回的 Markdown 必须变成 Qt 富文本，而不是原样丢到界面。"""
 
+    def test_streaming_keeps_completed_blocks_unchanged(self):
+        prefix = "## Heading\n\nCompleted paragraph.\n\n"
+        before = render_markdown_payload(prefix, streaming=True)["blocks"]
+        after = render_markdown_payload(prefix + "Growing paragraph", streaming=True)["blocks"]
+        self.assertEqual(len(before), 2)
+        self.assertEqual(after[:2], before)
+        self.assertEqual(len(after), 3)
+
+    def test_streaming_balances_inline_styles_without_changing_final_source(self):
+        for source, expected in (("**Important", "<b>Important</b>"), ("`employee_id", "monospace")):
+            with self.subTest(source=source):
+                partial = render_markdown_payload(source, streaming=True)
+                self.assertIn(expected, partial["html"])
+                self.assertEqual(render_markdown_payload(source)["html"], render_markdown_html(source))
+        protected = render_markdown_payload("`**literal`", streaming=True)["html"]
+        self.assertIn("**literal</span>", protected)
+        self.assertNotIn("<b>", protected)
+        unsafe = render_markdown_payload("**<img src=x>", streaming=True)["html"]
+        self.assertIn("&lt;img src=x&gt;", unsafe)
+        self.assertNotIn("<img", unsafe)
+
     def test_headings_carry_size_and_are_escaped(self):
         html = render_markdown_html("## 结论\n\n正文")
-        self.assertIn('<h2 style="font-size:15px', html)
+        self.assertIn('<h2 style="font-size:18px', html)
         self.assertIn("结论", html)
         self.assertIn("正文", html)
         self.assertNotIn("##", html)

@@ -6,6 +6,8 @@ QtObject {
     readonly property string theme: backend ? backend.theme : "light"
     readonly property string language: backend ? backend.language : "zh_CN"
     readonly property bool dark: theme === "dark"
+    function chatFontSize(width) { return width >= 520 ? 15 : 14 }
+    readonly property int chatCellPadding: 12
     function color(token) { return (Palettes.themes[theme] || Palettes.themes.light)[token] }
     function text(value) {
         var currentLanguage = language

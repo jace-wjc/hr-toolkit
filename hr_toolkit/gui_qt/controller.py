@@ -4714,11 +4714,11 @@ class AppController(QObject):
     def _ai_render(self, text: str) -> str:
         return self._ai_rendered(text)["html"]
 
-    def _ai_rendered(self, text: str) -> dict:
+    def _ai_rendered(self, text: str, *, streaming: bool = False) -> dict:
         from hr_toolkit.ai.markdown import render_markdown_payload
 
         return render_markdown_payload(
-            text, dark=self._ai_dark_theme(), font_family=self._ai_ui_font_family()
+            text, dark=self._ai_dark_theme(), font_family=self._ai_ui_font_family(), streaming=streaming
         )
 
     @staticmethod
@@ -4778,8 +4778,12 @@ class AppController(QObject):
         rows = []
         for item in record.messages:
             content = str(item.get("content") or "")
-            if item.get("role") == "assistant" and item.get("status") == "stopped" and not content:
-                content = self._presentation.translate("上次回复被中断，请重试。", self._presentation.language)
+            if item.get("role") == "assistant" and item.get("status") == "stopped":
+                for notice in ("已停止生成", "Response stopped"):
+                    if content == notice:
+                        content = ""
+                    elif content.endswith("\n\n" + notice):
+                        content = content[:-len("\n\n" + notice)]
             rows.append(
                 {
                     **item,
@@ -4832,12 +4836,16 @@ class AppController(QObject):
             item = self._ai_chat_model.item_at(row)
             if item is None or item.get("role") != "assistant":
                 continue
-            item.update(self._ai_rendered(item.get("content") or ""))
+            item.update(self._ai_rendered(item.get("content") or "", streaming=bool(item.get("streaming"))))
             self._ai_chat_model.update_at(row, item)
 
     @constant_property(QObject)
     def aiChatModel(self):
         return self._ai_chat_model
+
+    @constant_property(QObject)
+    def aiTimelineModel(self):
+        return self._ai_chat_model.timeline
 
     @constant_property(QObject)
     def aiAttachmentModel(self):
@@ -4921,6 +4929,7 @@ class AppController(QObject):
         if ok and self._ai_conversation is not None:
             if self._ai_conversation.conversation_id == str(conversation_id):
                 self._ai_conversation.title = str(title).strip()
+                self.aiChanged.emit()
         self._ai_refresh_history()
         self.aiHistoryChanged.emit()
         return ok
@@ -4950,6 +4959,10 @@ class AppController(QObject):
     @Property(str, notify=aiChanged)
     def aiConversationId(self) -> str:
         return self._ai_conversation.conversation_id if self._ai_conversation else ""
+
+    @Property(str, notify=aiChanged)
+    def aiConversationTitle(self) -> str:
+        return self._ai_conversation.title if self._ai_conversation else ""
 
     @Slot(int, str)
     def aiEditMessage(self, row: int, text: str) -> None:
@@ -5656,7 +5669,7 @@ class AppController(QObject):
             count = len(pending) if immediate or stopped else max(2, (len(pending) + frames - 1) // frames)
             self._ai_pending_text = pending[count:]
             item["content"] = (item.get("content") or "") + pending[:count]
-            item.update(self._ai_rendered(item["content"]))
+            item.update(self._ai_rendered(item["content"], streaming=True))
             self._ai_chat_model.update_at(row, item)
             if self._ai_pending_finish:
                 self._ai_finish_frames = max(1, self._ai_finish_frames - 1)
@@ -5689,15 +5702,13 @@ class AppController(QObject):
         if item is not None and item.get("role") == "assistant":
             stopped = self._ai_session is not None and self._ai_session.stopped
             item["status"] = "stopped" if stopped else ("complete" if ok else "error")
-            if stopped:
-                item["content"] = (item.get("content") or "") + "\n\n" + self._presentation.translate("已停止生成", self._presentation.language)
-            elif not ok:
+            if not ok and not stopped:
                 existing = item.get("content") or ""
                 item["content"] = (
                     existing + "\n\n" if existing else ""
                 ) + "⚠ " + self._presentation.translate(str(error or "请求失败"), self._presentation.language)
             item["streaming"] = False
-            item.update(self._ai_rendered(item.get("content") or ""))
+            item.update(self._ai_rendered(item.get("content") or "", streaming=bool(item.get("streaming"))))
             self._ai_chat_model.update_at(row, item)
         # 用户行记下真正发给模型的正文（含表格），历史恢复与重新生成都要用它。
         question_row = row - 1

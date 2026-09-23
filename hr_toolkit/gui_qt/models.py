@@ -286,9 +286,105 @@ class AiChatModel(ObjectListModel):
 
     def __init__(self, parent=None) -> None:
         super().__init__(
-            ("role", "content", "html", "blocks", "streaming", "time", "attachments", "apiContent"),
+            ("role", "content", "html", "blocks", "streaming", "time", "attachments", "apiContent", "status"),
             parent,
         )
+        self.timeline = AiTimelineModel(self)
+
+
+class AiTimelineModel(ObjectListModel):
+    """Viewport-sized presentation rows; canonical messages remain untouched.
+
+    Virtualizing whole messages still lays out thousands of offscreen paragraphs
+    inside one long reply. Project Markdown blocks into independent list rows,
+    with a separate footer for message actions. Payloads are shared, not copied.
+    """
+
+    def __init__(self, messages: AiChatModel) -> None:
+        super().__init__(
+            ("role", "content", "blocks", "streaming", "attachments", "status",
+             "part", "messageIndex", "rowKey", "lastBlock", "hasContent"),
+            messages,
+        )
+        self._messages = messages
+        self._counts: list[int] = []
+        messages.modelReset.connect(self._reset)
+        messages.rowsInserted.connect(self._inserted)
+        messages.rowsRemoved.connect(self._removed)
+        messages.dataChanged.connect(self._changed)
+
+    def _rows(self, index: int) -> list[dict[str, Any]]:
+        message = self._messages.item_at(index) or {}
+        base = {"role": message.get("role"), "messageIndex": index,
+                "streaming": bool(message.get("streaming")),
+                "hasContent": bool(message.get("content")), "status": message.get("status")}
+        if message.get("role") == "user":
+            rows = [{**base, "part": "user", "rowKey": "%d:user" % index,
+                     "content": message.get("content"), "attachments": message.get("attachments")}]
+        else:
+            blocks = message.get("blocks") or []
+            if not blocks and message.get("html"):
+                blocks = [{"kind": "text", "html": message["html"]}]
+            rows = [{**base, "part": "block", "rowKey": "%d:block:%d" % (index, position),
+                     "blocks": [block], "lastBlock": position == len(blocks) - 1}
+                    for position, block in enumerate(blocks)]
+            rows.append({**base, "part": "footer", "rowKey": "%d:footer" % index,
+                         "content": message.get("content")})
+        return [{role: row.get(role) for role in self._roles} for row in rows]
+
+    def _reset(self) -> None:
+        rows = []
+        self._counts = []
+        for index in range(len(self._messages)):
+            projected = self._rows(index)
+            self._counts.append(len(projected))
+            rows.extend(projected)
+        self.set_items(rows)
+
+    def _inserted(self, parent, first: int, last: int) -> None:
+        if first != len(self._counts):
+            self._reset()
+            return
+        rows = []
+        for index in range(first, last + 1):
+            projected = self._rows(index)
+            self._counts.append(len(projected))
+            rows.extend(projected)
+        self.append_batch(rows)
+
+    def _removed(self, parent, first: int, last: int) -> None:
+        if last != len(self._counts) - 1:
+            self._reset()
+            return
+        start = sum(self._counts[:first])
+        self.splice(start, len(self) - start)
+        del self._counts[first:]
+
+    def _changed(self, first, last, roles=None) -> None:
+        for index in range(first.row(), last.row() + 1):
+            start = sum(self._counts[:index])
+            count = self._counts[index]
+            previous = self._items[start:start + count]
+            projected = self._rows(index)
+            # Keep completed blocks and the footer alive during streaming.
+            prefix = 0
+            while prefix < min(count, len(projected)) and previous[prefix] == projected[prefix]:
+                prefix += 1
+            suffix = 0
+            while (suffix < min(count, len(projected)) - prefix
+                   and previous[count - suffix - 1]["rowKey"] == projected[len(projected) - suffix - 1]["rowKey"]):
+                suffix += 1
+            old_end, new_end = count - suffix, len(projected) - suffix
+            # Match by stable key so a new paragraph never replaces the footer.
+            while prefix < min(old_end, new_end) and previous[prefix]["rowKey"] == projected[prefix]["rowKey"]:
+                if previous[prefix] != projected[prefix]:
+                    self.update_at(start + prefix, projected[prefix])
+                prefix += 1
+            self.splice(start + prefix, old_end - prefix, projected[prefix:new_end])
+            for offset in range(suffix):
+                if previous[old_end + offset] != projected[new_end + offset]:
+                    self.update_at(start + new_end + offset, projected[new_end + offset])
+            self._counts[index] = len(projected)
 
 
 class AiAttachmentModel(ObjectListModel):

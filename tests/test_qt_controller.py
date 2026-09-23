@@ -61,6 +61,45 @@ class QtControllerTests(unittest.TestCase):
         self.addCleanup(lambda controller=value: controller.presentation.setLanguage("en_US"))
         return value
 
+    def test_ai_timeline_keeps_canonical_messages_and_updates_only_changed_blocks(self):
+        from hr_toolkit.gui_qt.models import AiChatModel
+        from hr_toolkit.ai.markdown import render_markdown_payload
+        messages = AiChatModel()
+        timeline = messages.timeline
+        text = "## Heading\n\nFirst paragraph.\n\nSecond paragraph."
+        user = {"role": "user", "content": "Question", "attachments": [{"name": "roster.xlsx"}]}
+        answer = {"role": "assistant", "content": text, "streaming": True, **render_markdown_payload(text)}
+        messages.set_items([user, answer])
+        canonical = messages.items()
+        self.assertEqual([row["part"] for row in timeline.items()], ["user", "block", "block", "block", "footer"])
+        self.assertEqual(timeline.item_at(0)["attachments"], user["attachments"])
+        self.assertTrue(all(not row["content"] for row in timeline.items() if row["part"] == "block"))
+        self.assertEqual(timeline.item_at(4)["content"], text)
+        self.assertEqual(messages.items(), canonical)
+        changes, removals, resets = [], [], []
+        timeline.dataChanged.connect(lambda first, last, roles: changes.append((first.row(), last.row())))
+        timeline.rowsRemoved.connect(lambda parent, first, last: removals.append((first, last)))
+        timeline.modelReset.connect(lambda: resets.append(True))
+        text += "\n\nNew paragraph."
+        messages.update_at(1, {**answer, "content": text, **render_markdown_payload(text)})
+        self.assertEqual(changes, [(3, 3), (5, 5)])
+        self.assertFalse(removals or resets)
+        self.assertEqual(timeline.item_at(5)["rowKey"], "1:footer")
+        self.assertEqual(timeline.item_at(5)["content"], text)
+        messages.append({"role": "user", "content": "Next"})
+        self.assertEqual(timeline.item_at(6)["messageIndex"], 2)
+        messages.remove_at(2)
+        self.assertEqual(len(timeline), 6)
+        # Editing removes later messages; stopping, theme refresh, and restoring
+        # legacy HTML must all continue to use the canonical message indices.
+        messages.remove_at(0)
+        self.assertTrue(all(row["messageIndex"] == 0 for row in timeline.items()))
+        messages.set_items([{"role": "assistant", "html": "<p>Legacy</p>", "content": "Legacy", "status": "stopped"}])
+        self.assertEqual(timeline.item_at(0)["blocks"], [{"kind": "text", "html": "<p>Legacy</p>"}])
+        self.assertEqual(timeline.item_at(1)["status"], "stopped")
+        messages.clear()
+        self.assertEqual(len(timeline), 0)
+
     def test_reconcile_variant_and_result_paths_are_available(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)
@@ -541,7 +580,8 @@ class QtControllerTests(unittest.TestCase):
         controller._apply_ai_finished(True, "")
         controller.aiStopGenerating()
         final = controller._ai_chat_model.item_at(1)
-        self.assertTrue(final["content"].startswith(text + "\n\n"))
+        self.assertEqual(final["content"], text)
+        self.assertEqual(final["status"], "stopped")
         self.assertFalse(final["streaming"])
         self.assertFalse(controller.aiBusy)
         self.assertEqual(controller._ai_pending_text, "")
@@ -601,6 +641,22 @@ class QtControllerTests(unittest.TestCase):
             controller.aiEditMessage(0, "new")
         self.assertEqual(controller._ai_conversation.conversation_id, "same-chat")
         self.assertEqual(begin.call_args.kwargs["context_body"], "saved rows\n用户的问题：new")
+
+    def test_ai_restores_legacy_stop_notice_as_separate_status(self):
+        from hr_toolkit.ai.history import ConversationRecord, ConversationStore
+        with tempfile.TemporaryDirectory() as folder:
+            controller = self._isolated_controller(folder)
+            controller._ai_conversation_store = ConversationStore(Path(folder) / "history.json")
+            for suffix in ("已停止生成", "Response stopped"):
+                record = ConversationRecord("stopped", title="Saved title", messages=[
+                    {"role": "user", "content": "question"},
+                    {"role": "assistant", "content": "Partial reply\n\n" + suffix, "status": "stopped"},
+                ])
+                controller._ai_restore_record(record)
+                item = controller.aiChatModel.item_at(1)
+                self.assertEqual(item["content"], "Partial reply")
+                self.assertEqual(item["status"], "stopped")
+                self.assertEqual(controller.aiConversationTitle, "Saved title")
 
     def test_ai_attachment_preparation_does_not_block_gui_and_cancel_discards_result(self):
         controller = self.controller()
