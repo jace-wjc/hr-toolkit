@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
@@ -12,6 +13,30 @@ from hr_toolkit.tools.insurance_ledger import generate_insurance_ledger
 
 
 class InsuranceLedgerTest(unittest.TestCase):
+    def test_policy_reader_skips_unrelated_sheet_body(self) -> None:
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+        from hr_toolkit.tools.insurance_ledger import _read_policy_file
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "PZDX202536010000000011.xlsx"
+            _write_pzdx_policy(path)
+            expected = _read_policy_file(path, [])
+            wb = load_workbook(path)
+            extra = wb.create_sheet("sheet9")
+            extra["A1"] = "无关说明"
+            extra["A9000"] = "不需要读取的正文"
+            wb.save(path)
+            wb.close()
+            original = ReadOnlyWorksheet.iter_rows
+
+            def guarded(ws, *args, **kwargs):
+                for index, row in enumerate(original(ws, *args, **kwargs), 1):
+                    if ws.title == "sheet9":
+                        self.assertLessEqual(index, 30)
+                    yield row
+
+            with patch.object(ReadOnlyWorksheet, "iter_rows", guarded):
+                self.assertEqual(_read_policy_file(path, []), expected)
+
     def test_generate_insurance_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

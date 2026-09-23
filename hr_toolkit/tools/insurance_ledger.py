@@ -295,6 +295,7 @@ def _read_roster(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> OrderedDict[str, RosterPerson]:
+    # Row fill colours participate in the existing leave-status decision.
     workbook = load_workbook(workbook_path, data_only=True, read_only=False)
     people: OrderedDict[str, RosterPerson] = OrderedDict()
     try:
@@ -434,8 +435,8 @@ def _read_policy_file(
         found_sheet = False
         used_sheets = set()
         for worksheet in candidates:
-            # read_only 工作表随机访问是 O(行数²)，先单遍读入内存再处理
-            ws = SheetGrid(worksheet)
+            # 先读取识别范围；确认用途后顺序读取正文，避免只读表随机访问。
+            ws = SheetGrid(worksheet, max_rows=30)
             if active():
                 ws = map_sheet(ws, "policy", required=selected is not None or len(candidates) == 1, file=file_path.name)
                 if ws is None:
@@ -445,6 +446,7 @@ def _read_policy_file(
                 continue
             found_sheet = True
             used_sheets.add(ws.title)
+            ws.materialize()
             policy_no = _find_policy_no(ws, file_path)
             headers = _read_headers_first(ws, header_row)
             name_col = _first_header_col(headers, ("雇员姓名", "姓名", "被保险人姓名"))
