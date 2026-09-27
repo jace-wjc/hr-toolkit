@@ -1213,6 +1213,7 @@ def _cohort_difference_candidates(
 ) -> set[SocialPaymentLine]:
     """无明确性质时，仅在同一调整模式呈群体特征时推断为补差。"""
     candidates: dict[tuple[Any, ...], list[SocialPaymentLine]] = {}
+    matching_profiles: dict[tuple[Any, ...], list[SocialPaymentLine]] = {}
     for person_key, group_lines in history_groups.items():
         _id_card, account, category, side = person_key
         history = [line for line in group_lines if line.nature_hint is None]
@@ -1226,11 +1227,15 @@ def _cohort_difference_candidates(
             account,
             category,
             side,
-            periods,
             _contribution_profile_key(history[0]),
             tuple(sorted({_contribution_profile_key(line) for line in current})),
         )
-        candidates.setdefault(signature, []).extend(history)
+        # 保留原先月份完全一致的分组，额外尝试同模式、不同参保起始月的分组。
+        # 不能让另一批不重叠的记录影响原来已能确认的补差。
+        candidates.setdefault((*signature, periods), []).extend(history)
+        matching_profiles.setdefault(signature, []).extend(history)
+
+    candidates.update(matching_profiles)
 
     accepted: set[SocialPaymentLine] = set()
     for signature, lines in candidates.items():
@@ -1239,6 +1244,14 @@ def _cohort_difference_candidates(
         current_people = {line.id_card for line in current_by_account.get((account, category, side), [])}
         # 单个人的历史费率/基数变化也可能是历史政策差异，不能仅凭金额自动当成补差。
         if len(affected_people) < 2:
+            continue
+        # 同批调整人员的参保起始月可能不同，不能要求月份集合完全一致。
+        # 仍须至少两个共同历史月份，避免把不同批次的零散低额记录凑成补差。
+        periods_by_person: dict[str, set[str]] = {}
+        for line in lines:
+            periods_by_person.setdefault(line.id_card, set()).add(line.fee_period)
+        common_periods = set.intersection(*periods_by_person.values())
+        if len(common_periods) < 2:
             continue
         # 补差应呈现同账户同险种的群体调整特征；零散记录保留为待确认，避免误伤补缴。
         if current_people and len(affected_people) * 2 < len(current_people):

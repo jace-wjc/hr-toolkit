@@ -25,6 +25,67 @@ from hr_toolkit.tools.social_security import (
 
 
 class SocialSecurityTest(unittest.TestCase):
+    def test_adjustment_cohort_allows_different_history_start_months(self) -> None:
+        """同批补差人员参保月份不同，不应把 77 元补差基数当作正常基数。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roster = root / "花名册.xlsx"
+            _write_roster(roster)
+            roster_book = load_workbook(roster)
+            roster_book.active["E2"] = roster_book.active["E3"].value
+            roster_book.save(roster)
+            roster_book.close()
+            people = [("张三", "360111199001010011"), ("李四", "360111199002020022")]
+            sources = []
+            for month in (3, 7, 8, 9, 10):
+                path = root / f"2025-{month:02d}——养老保险（单位缴纳部分）职工明细.xlsx"
+                base, amount = (4588, 734.08) if month == 10 else (77, 12.32)
+                selected = people[:1] if month == 3 else people
+                _write_single_kind_rows(path, [(*person, base, 0.16, amount) for person in selected])
+                sources.append(path)
+            result = generate_social_security_reports(sources, roster, root / "output", template_rules={})
+            self.assertEqual(result.source_record_count, 9)
+            self.assertEqual(result.detail_record_count, 2)
+            self.assertFalse(any("待确认历史缴费" in item for item in result.warnings))
+            book = load_workbook(result.detail_output_file)
+            self.addCleanup(book.close)
+            ws = book["社保明细表"]
+            for row, periods in ((4, 4), (5, 3)):
+                self.assertEqual(ws.cell(row, 9).value, 4588)
+                self.assertEqual(ws.cell(row, 13).value, f"=ROUND(I{row}*L{row},2)")
+                self.assertEqual(ws.cell(row, 44).value, 77)
+                self.assertAlmostEqual(ws.cell(row, 48).value, periods * 12.32)
+
+    def test_adjustment_cohort_preserves_overlap_and_existing_groups(self) -> None:
+        from hr_toolkit.tools.social_security import (
+            SocialPaymentLine, _classify_payment_natures, PAYMENT_UNKNOWN, PAYMENT_NORMAL, PAYMENT_DIFFERENCE,
+        )
+        cases = [
+            (((1, 2), (3, 4)), set()),
+            (((1, 2), (2, 3)), set()),
+            (((1, 2), (1, 2), (3, 4)), {"0", "1"}),
+            (((1, 2, 3), (2, 3)), {"0", "1"}),
+        ]
+        for periods, confirmed in cases:
+            with self.subTest(periods=periods):
+                lines = []
+                for person, months in enumerate(periods):
+                    for month in (*months, 10):
+                        lines.append(SocialPaymentLine(
+                            source_file="test.xlsx", source_row=person + 2,
+                            fee_period_end="", billing_period_hint="", period_split_file=True,
+                            account_hint="", company_hint="", wage=None,
+                            name=f"测试{person}", id_card=str(person), category="养老", side="单位",
+                            amount=734.08 if month == 10 else 12.32,
+                            base=4588 if month == 10 else 77, rate=0.16,
+                            fee_period=f"2025{month:02d}",
+                        ))
+                actual = _classify_payment_natures(lines, {line: "账户" for line in lines}, {"账户": "202510"})
+                for line in lines:
+                    expected = (PAYMENT_NORMAL if line.fee_period == "202510" else
+                                PAYMENT_DIFFERENCE if line.id_card in confirmed else PAYMENT_UNKNOWN)
+                    self.assertEqual(actual[line], expected)
+
     def test_difference_headers_use_only_each_category_periods(self) -> None:
         from hr_toolkit.tools.social_security import DIFFERENCE_COLUMNS, _write_difference_headers
         workbook = Workbook()
