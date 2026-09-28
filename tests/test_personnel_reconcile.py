@@ -276,6 +276,149 @@ class PersonnelReconcileTests(unittest.TestCase):
         self.assertTrue(any(row[0] == "日期差异" for row in notices))
         self.assertFalse(any(row[0] == "异动表有、流程无" for row in notices))
 
+    def test_unique_admission_date_difference_fills_blanks_and_keeps_actual_date(self):
+        for highlight in (True, False):
+            with self.subTest(highlight=highlight):
+                actual, reported = date(2026, 7, 13), date(2026, 7, 10)
+                self.write_summary([summary_row(入职日期=actual, 岗位="原岗位", 联系方式="=1+1")])
+                self.write_flow([join_row(入职日期=reported)])
+                originals = self.summary.read_bytes(), self.flow.read_bytes()
+                result = self.run_check(highlight=highlight, template_rules={})
+                notices, filled, report = self.read_result(result)
+                ws = filled["增员"]
+                self.assertEqual(result.matched_count, 1)
+                self.assertEqual(result.filled_count, 4)
+                self.assertEqual([ws[cell].value for cell in ("G3", "H3", "I3")],
+                                 ["本科", "测试大学", "测试专业"])
+                self.assertEqual(ws["E3"].value.date(), actual)
+                self.assertEqual(ws["J3"].value, "原岗位")
+                self.assertEqual(ws["L3"].value, "=1+1")
+                self.assertEqual(filled["调动"]["A1"].value, "原有内容")
+                differences = [row for row in notices if row[0] == "日期差异"]
+                self.assertEqual(len(differences), 1)
+                self.assertEqual(differences[0][5].date(), actual)
+                self.assertEqual(differences[0][6].date(), reported)
+                self.assertIn("保留异动表", differences[0][9])
+                self.assertFalse(any(row[0] == "字段差异" and row[4] == "入职日期" for row in notices))
+                self.assertEqual(ws["E3"].fill.fgColor.rgb if highlight else ws["E3"].fill.patternType,
+                                 "00FFF2CC" if highlight else None)
+                self.assertNotIn("入职日期", [row[3] for row in list(report["补入记录"].values)[1:]])
+                self.assertEqual(originals, (self.summary.read_bytes(), self.flow.read_bytes()))
+
+    def test_unique_advance_admission_can_cross_month_without_changing_scope(self):
+        self.write_summary([summary_row(入职日期=date(2026, 7, 2)),
+                            summary_row(ID_B, 姓名="测试乙", 入职日期=date(2026, 6, 20))])
+        self.write_flow([join_row(入职日期=date(2026, 6, 30)),
+                         join_row(ID_B, 姓名="测试乙", 入职日期=date(2026, 6, 19))])
+        result = self.run_check()
+        notices, filled, report = self.read_result(result)
+        self.assertEqual(result.matched_count, 1)
+        self.assertEqual(filled["增员"]["G3"].value, "本科")
+        self.assertIsNone(filled["增员"]["G4"].value)
+        self.assertFalse(any(row[0] in {"流程有、异动表无", "异动表有、流程无"} for row in notices))
+        info = dict(list(report["核对说明"].values)[1:])
+        self.assertEqual(info["入职核对月份"], "2026-07")
+        self.assertEqual(info["入职跨月关联流程数"], 1)
+
+    def test_date_fallback_does_not_choose_between_reporting_and_registration_flows(self):
+        self.write_summary([summary_row(入职日期=date(2026, 7, 3))])
+        for days in ((date(2026, 6, 29), date(2026, 7, 2)),
+                     (date(2026, 7, 1), date(2026, 7, 2))):
+            with self.subTest(days=days):
+                self.write_flow([join_row(入职日期=day) for day in days])
+                result = self.run_check()
+                notices, filled, _ = self.read_result(result)
+                self.assertEqual(result.filled_count, 0)
+                self.assertIsNone(filled["增员"]["G3"].value)
+                self.assertTrue(any(row[0] in {"日期差异", "重复记录待确认"} for row in notices))
+
+    def test_date_fallback_cannot_reuse_one_flow_for_multiple_summary_events(self):
+        for other_day in (date(2026, 7, 4), date(2026, 6, 30)):
+            with self.subTest(other_day=other_day):
+                self.write_summary([summary_row(入职日期=date(2026, 7, 3)),
+                                    summary_row(入职日期=other_day)])
+                self.write_flow([join_row(入职日期=date(2026, 7, 2))])
+                result = self.run_check()
+                notices, filled, _ = self.read_result(result)
+                self.assertEqual(result.filled_count, 0)
+                self.assertIsNone(filled["增员"]["G3"].value)
+                self.assertIsNone(filled["增员"]["G4"].value)
+                self.assertTrue(any(row[0] == "重复记录待确认" for row in notices))
+
+    def test_date_fallback_does_not_hide_unknown_employee_number_candidate(self):
+        self.write_summary([summary_row(工号="001", 入职日期=date(2026, 7, 3))])
+        self.write_flow([join_row(工号="001", 入职日期=date(2026, 6, 29)),
+                         join_row(工号="", 入职日期=date(2026, 6, 30))])
+        result = self.run_check()
+        self.assertEqual(result.filled_count, 0)
+
+    def test_date_fallback_does_not_steal_flow_from_an_exact_summary_match(self):
+        for days in ((1, 3), (3, 1)):
+            with self.subTest(days=days):
+                self.write_summary([summary_row(入职日期=date(2026, 7, day)) for day in days])
+                self.write_flow([join_row()])
+                result = self.run_check()
+                _, filled, _ = self.read_result(result)
+                self.assertEqual(result.matched_count, 1)
+                for row, day in enumerate(days, 3):
+                    self.assertEqual(filled['增员'].cell(row, 7).value, '本科' if day == 1 else None)
+
+    def test_date_difference_tutorial_is_translated(self):
+        from hr_toolkit.tutorial_content import tutorial_lines
+        from hr_toolkit.gui_qt.translations_en import MESSAGES
+        lines = [line for line, _ in tutorial_lines('personnel_change_merge', 'reconcile')
+                 if line.startswith('报备日期')]
+        self.assertEqual(len(lines), 1)
+        self.assertIn('登记流程', lines[0])
+        self.assertIn('实际入职日期保持不变', lines[0])
+        self.assertIn(lines[0], MESSAGES)
+
+    def test_date_fallback_keeps_identity_company_and_status_guards(self):
+        cases = [
+            ({}, {"姓名": "另一人"}, False, "姓名不一致"),
+            ({"工号": "001"}, {"工号": "002"}, False, "工号不一致"),
+            ({}, {"入职公司": "另一公司"}, False, "公司差异"),
+            ({}, {"流程状态": ""}, True, "对应流程待确认"),
+            ({}, {"流程状态": "未发起"}, True, "异动表有、流程无"),
+            ({}, {"流程状态": "退回"}, True, "异动表有、流程无"),
+            ({}, {"入职日期": None}, False, "对应流程待确认"),
+        ]
+        for summary_changes, flow_changes, status, expected in cases:
+            with self.subTest(expected=expected):
+                self.write_summary([summary_row(**{"入职日期": date(2026, 7, 3), **summary_changes})])
+                self.write_flow([join_row(**{"入职日期": date(2026, 7, 1), **flow_changes})], status=status)
+                result = self.run_check()
+                notices, _, _ = self.read_result(result)
+                self.assertEqual(result.filled_count, 0)
+                self.assertTrue(any(row[0] == expected for row in notices))
+        for identity in ("脱敏编号00000000000001", 110101199001010000):
+            with self.subTest(identity=identity):
+                self.write_summary([summary_row(identity, 入职日期=date(2026, 7, 3))])
+                self.write_flow([join_row(identity)])
+                result = self.run_check()
+                notices, _, _ = self.read_result(result)
+                self.assertEqual(result.filled_count, 0)
+                self.assertTrue(any(row[0] == "身份证待确认" for row in notices))
+
+    def test_date_fallback_still_excludes_invalid_status_duplicate_flows(self):
+        self.write_summary([summary_row(入职日期=date(2026, 7, 3))])
+        self.write_flow([join_row(流程状态="审批中"),
+                         join_row(流程状态="退回", 入职日期=date(2026, 7, 2)),
+                         join_row(流程状态="未发起", 入职日期=date(2026, 7, 3))], status=True)
+        result = self.run_check()
+        self.assertEqual(result.matched_count, 1)
+        self.assertGreater(result.filled_count, 0)
+
+    def test_departure_date_difference_still_does_not_allow_fill(self):
+        self.write_summary(leaves=[summary_row(离职日期=date(2026, 7, 31))])
+        self.write_flow([join_row(离职日期=date(2026, 7, 30))], leave=True)
+        result = self.run_check()
+        notices, filled, _ = self.read_result(result)
+        self.assertEqual(result.matched_count, 0)
+        self.assertEqual(result.filled_count, 0)
+        self.assertIsNone(filled["减员"]["J3"].value)
+        self.assertTrue(any(row[0] == "日期差异" for row in notices))
+
     def test_other_company_workflow_is_not_swallowed_by_date_difference(self):
         self.write_summary([summary_row()])
         self.write_flow([join_row(入职日期=date(2026, 7, 2)),

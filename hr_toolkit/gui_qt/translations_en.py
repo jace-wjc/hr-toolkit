@@ -124,6 +124,7 @@ MESSAGES = {
  '核对设置有误': 'Invalid Check Settings',
  '适用：核对工具生成的异动汇总表与同一事业部的系统入职、离职流程。': 'Compare the generated change summary with onboarding and departure workflows from the same division.',
  '步骤：上方选择入职、离职流程文件，下方选择一份异动汇总表，点击“开始核对”。': 'Select workflow files above and one change summary below, then click Run Check.',
+ '报备日期可能与实际到岗日期不同，登记流程可修正日期。人员、公司和流程唯一对应时，日期差异会提醒，但不阻止补齐空白资料；异动表实际入职日期保持不变，多条候选流程不自动选取。': 'Pre-onboarding dates may differ from actual start dates and can be corrected during registration. When the person, company and workflow match uniquely, date differences are reported without blocking blank-field filling. The summary retains its actual start date; multiple candidate workflows require review.',
  '月份留空时，增员按汇总表入职日期、减员按离职日期分别确定月份，不按文件名推断。某类无日期记录时请填写核对月份。': 'If the month is blank, onboarding and departures use their respective summary row dates, not the file name. Enter a month if a category has no dated records.',
  '有流程状态列时自动排除未发起、退回；无状态列时按导入记录继续核对，并在运行日志提示未进行状态筛选；办结时间不作为状态依据。': 'When workflow status is available, Not Initiated and Returned are excluded automatically. Otherwise, imported records are checked as provided and the run log notes that status filtering was unavailable. Completion time is not a status.',
  '离职默认读取实际离职日期；若只有预计离职日期，先确认业务口径再切换日期列，工具不会自动替代。': 'Actual departure date is the default. If only an expected date is available, confirm the business rule before switching columns; substitution is never automatic.',

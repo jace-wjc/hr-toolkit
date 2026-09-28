@@ -138,7 +138,7 @@ NOTICE_DESCRIPTIONS = {
     "工号不一致": "两边填写的工号不同，不自动补齐。",
     "身份证待确认": "身份证脱敏、格式异常或以数字存储，仅核对，不自动补齐。",
     "字段差异": "两边已有字段值不同，保留异动表原值。",
-    "日期差异": "存在同一人员、公司的候选流程，但事件日期不一致。",
+    "日期差异": "同一人员、公司的事件日期不一致。入职仅有唯一对应流程和异动记录时，保留异动表实际日期，其余空白字段仍可按规则补齐；离职仍需日期一致。",
     "公司差异": "存在同一身份证的候选流程，但公司未能对应。",
     "异动表有、流程无": "在本次核对范围及适用筛选条件内，未找到对应流程。",
     "流程有、异动表无": "在本次核对范围内，未找到对应异动记录。",
@@ -574,6 +574,7 @@ def _reconcile(book, source, flows, month, leave_date_field,
         ("流程筛选规则", "有流程状态列时排除未发起、退回；无状态列的记录按导入内容核对和补齐，不按办结时间或人员状态推测。"),
         ("离职流程日期列", leave_date_field),
         ("补齐规则", "仅明确匹配且身份证未脱敏时补空白；最高学历、岗位、户籍地址；已有值和公式不覆盖。"),
+        ("入职日期规则", "报备流程可能早于实际到岗，登记流程可修正日期。人员、公司和流程唯一对应时，日期差异只提醒，不阻止补齐；保留异动表实际入职日期，不自动选取多条候选流程。"),
         ("空白保留规则", "流程未提供的字段保留空白。人员分类、用工状态等字段只读取同名列或用户在模板适配中明确指定的列，不推测含义。"),
         ("重复流程", "不自动选第一条或最新一条；逐条列出，由人工核实。"),
     ])
@@ -629,6 +630,13 @@ def _reconcile(book, source, flows, month, leave_date_field,
         for row in valid_flows:
             by_id[row.identity].append(row)
         target_counts = Counter((r.identity, mapping.get(company_text(r.values.get("公司")), company_text(r.values.get("公司"))), r.day) for r in target)
+        # 日期不一致时还需反向唯一，不能将一条报备流程用于多次入职。
+        # 包括非本月记录，避免一条流程已有明确对应记录却又补入另一条。
+        admission_counts = Counter(
+            (r.identity, mapping.get(company_text(r.values.get("公司")), company_text(r.values.get("公司"))))
+            for r in summary_all
+        ) if kind == "入职" else Counter()
+        cross_month_admissions = set()
         used = set()
         # Potential duplicate admissions in this scope are not auto-selected,
         # even when submission/event dates differ. Other months stay separate.
@@ -647,6 +655,7 @@ def _reconcile(book, source, flows, month, leave_date_field,
             canonical = mapping.get(company, company)
             candidates = by_id.get(row.identity, [])
             same_company = [p for p in candidates if company_text(p.values.get("公司")) == canonical]
+            company_candidate_count = len(same_company)
             employee = norm(row.values.get("工号"))
             if employee:
                 same_employee = [p for p in same_company if norm(p.values.get("工号")) == employee]
@@ -678,8 +687,16 @@ def _reconcile(book, source, flows, month, leave_date_field,
                 used.update(id(p) for p in exact)
                 notices.append(_notice("重复记录待确认", summary=row, detail="同一事件不是一对一关系，不自动补齐。"))
                 continue
-            if len(exact) == 1:
-                flow = exact[0]
+            # 报备中的预计日期可能与实际到岗日期不同；只对唯一入职流程放宽。
+            # 使用未按工号缩小的候选数，工号空白的另一流程也不能被忽略。
+            date_fallback = kind == "入职" and not exact and company_candidate_count == 1
+            if date_fallback and admission_counts[(row.identity, canonical)] != 1:
+                used.update(id(p) for p in same_company)
+                notices.append(_notice("重复记录待确认", summary=row, flow=same_company[0],
+                                       detail="同一人员、公司在异动表中有多条入职记录，日期不一致时无法确定流程属于哪次入职，不自动补齐。"))
+                continue
+            if len(exact) == 1 or date_fallback:
+                flow = same_company[0] if date_fallback else exact[0]
                 used.add(id(flow))
                 if norm(row.values.get("姓名")) != norm(flow.values.get("姓名")):
                     notices.append(_notice("姓名不一致", row, flow, "姓名", "身份证相同但姓名不同，不自动补齐。"))
@@ -688,10 +705,21 @@ def _reconcile(book, source, flows, month, leave_date_field,
                     notices.append(_notice("工号不一致", row, flow, "工号", "不自动补齐。"))
                     continue
                 result.matched_count += 1
+                if date_fallback:
+                    notice = _notice("日期差异", row, flow, "入职日期",
+                                     "报备日期可能与实际到岗日期不同；人员、公司和流程唯一对应，保留异动表实际入职日期，其余空白字段按补齐规则处理。")
+                    notice[5], notice[6] = row.day, flow.day
+                    notices.append(notice)
+                    if highlight:
+                        book[row.sheet].cell(row.row, row.columns["入职日期"]).fill = WARNING
+                    if flow.day.strftime("%Y-%m") not in periods:
+                        cross_month_admissions.add(id(flow))
                 identity_safe = isinstance(row.values.get("身份证号码"), str) and isinstance(flow.values.get("身份证号码"), str) and bool(re.fullmatch(r"(?:\d{17}[0-9X]|\d{15})", row.identity))
                 if not identity_safe:
                     notices.append(_notice("身份证待确认", row, flow, "身份证号码", "身份证脱敏、格式异常或以数字存储；仅列出核对结果，不自动补齐。"))
                 for name in (*FILL_FIELDS, "项目"):
+                    if date_fallback and name == "入职日期":
+                        continue  # 已单独提示日期差异，不能覆盖实际日期或重复报字段差异。
                     if name not in row.columns or name not in flow.columns:
                         continue
                     value, original = flow.values.get(name), row.values.get(name)
@@ -746,6 +774,8 @@ def _reconcile(book, source, flows, month, leave_date_field,
                 notices.append(_notice("待确认" if uncertain else "流程有、异动表无", flow=flow,
                                        detail="汇总表存在身份/日期缺失或其他日期的同一人员，请人工确认事件。" if uncertain else "本次汇总表及日期范围内未找到对应人员，请核实是否漏登记。"))
         info.append((kind + "核对状态", "存在待确认数据，详见预警明细" if uncertain_by_id or incomplete else "已完成范围内比对，异常见预警明细"))
+        if cross_month_admissions:
+            info.append(("入职跨月关联流程数", len(cross_month_admissions)))
     info.extend(("本次使用的名称对应", f"{company} / {name}：{left} = {right}")
                 for company, name, left, right in sorted(applied_names))
     info.extend([("明确关联记录数", result.matched_count), ("补入字段数", len(fills)), ("预警明细数", len(notices))])
