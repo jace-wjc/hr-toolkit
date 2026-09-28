@@ -98,11 +98,9 @@ class SalarySplitTest(unittest.TestCase):
                 wb.save(destination)
                 wb.close()
 
-            with (
-                patch("hr_toolkit.common.excel_compat.sys.platform", "linux"),
-                patch("hr_toolkit.common.excel_compat._convert_with_libreoffice", side_effect=formatted_converter),
-                patch("hr_toolkit.common.excel_compat._convert_with_xlrd") as values_only,
-            ):
+            with patch("hr_toolkit.common.excel_compat.sys.platform", "linux"), \
+                    patch("hr_toolkit.common.excel_compat._convert_with_libreoffice", side_effect=formatted_converter), \
+                    patch("hr_toolkit.common.excel_compat._convert_with_xlrd") as values_only:
                 result = split_salary_by_company(source, root / "out")
                 values_only.assert_not_called()
             for item in result.outputs:
@@ -111,11 +109,9 @@ class SalarySplitTest(unittest.TestCase):
                     self.assertEqual(wb["明细表"].cell(6 + item.employee_count, 1).fill.fgColor.rgb, "00FFF2CC")
                 finally:
                     wb.close()
-            with (
-                patch("hr_toolkit.common.excel_compat.sys.platform", "linux"),
-                patch("hr_toolkit.common.excel_compat._convert_with_libreoffice", side_effect=RuntimeError("不可用")),
-                patch("hr_toolkit.common.excel_compat._convert_with_xlrd") as values_only,
-            ):
+            with patch("hr_toolkit.common.excel_compat.sys.platform", "linux"), \
+                    patch("hr_toolkit.common.excel_compat._convert_with_libreoffice", side_effect=RuntimeError("不可用")), \
+                    patch("hr_toolkit.common.excel_compat._convert_with_xlrd") as values_only:
                 with self.assertRaisesRegex(RuntimeError, "无法保留.*原始格式"):
                     split_salary_by_company(source, root / "failed")
                 values_only.assert_not_called()
