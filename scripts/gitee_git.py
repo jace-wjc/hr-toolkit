@@ -18,7 +18,7 @@ from typing import Sequence
 RETRY_DELAYS = (15, 30, 60)
 TRANSIENT_ERROR = re.compile(
     r"(?:HTTP(?:/[\d.]+)?\s+|returned error:\s*)(?:408|429|500|502|503|504)\b"
-    r"|connection (?:reset|timed out)|operation timed out|could not resolve host"
+    r"|connection (?:reset|timed out|timeout)|operation timed out|could not resolve host"
     r"|couldn't connect to server|failed to connect|remote end hung up unexpectedly"
     r"|early EOF|SSL_ERROR_SYSCALL|TLS connection was non-properly terminated",
     re.IGNORECASE,

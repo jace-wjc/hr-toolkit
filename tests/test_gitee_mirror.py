@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import ssl
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.parse
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
@@ -102,6 +107,197 @@ class FakeGiteeClient:
 
     def get_public_bytes(self, _url: str):
         return (self.assets_dir / "SHA256SUMS.txt").read_bytes()
+
+
+class GiteeClientTransportTests(unittest.TestCase):
+    """Offline regressions for the v0.9.24 API/WAF failure and safe retries."""
+
+    WAF_BODY = b'<!DOCTYPE html><html><title>403</title><div id="baidu_waf_intercept_page"></div></html>'
+    RELEASE = {"id": 7, "tag_name": "v0.9.24"}
+
+    def setUp(self) -> None:
+        self.client = gitee_publish.GiteeClient("test-private-token", upload_transport="urllib")
+        self.output = io.StringIO()
+        urlopen_patch = mock.patch.object(gitee_publish.urllib.request, "urlopen")
+        sleep_patch = mock.patch.object(gitee_publish.time, "sleep")
+        self.urlopen = urlopen_patch.start()
+        self.addCleanup(urlopen_patch.stop)
+        self.sleep = sleep_patch.start()
+        self.addCleanup(sleep_patch.stop)
+        self.stderr = redirect_stderr(self.output)
+        self.stderr.__enter__()
+        self.addCleanup(self.stderr.__exit__, None, None, None)
+
+    def response(self, payload):
+        result = mock.MagicMock()
+        result.__enter__.return_value.read.return_value = (
+            payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        )
+        return result
+
+    def error(self, code, body=b'{"message":"request failed"}'):
+        return urllib.error.HTTPError("https://gitee.com/api/v5/example", code, "failure", {}, io.BytesIO(body))
+
+    def get_release(self):
+        return self.client.get_release_by_tag("company/hr", "v0.9.24")
+
+    def create_release(self):
+        return self.client.create_release(
+            "company/hr", tag="v0.9.24", target_commitish="a" * 40, name="Release", body="Notes",
+        )
+
+    def methods(self):
+        return [call.args[0].get_method() for call in self.urlopen.call_args_list]
+
+    def test_actual_ci_waf_403_retries_then_succeeds(self) -> None:
+        self.urlopen.side_effect = [self.error(403, self.WAF_BODY), self.response(self.RELEASE)]
+        self.assertEqual(self.get_release(), self.RELEASE)
+        self.assertEqual(self.methods(), ["GET", "GET"])
+        self.sleep.assert_called_once_with(15)
+        self.assertIn("网页防护", self.output.getvalue())
+        self.assertNotIn("<html>", self.output.getvalue())
+        self.assertNotIn("test-private-token", self.output.getvalue())
+
+    def test_persistent_waf_is_still_an_error_after_bounded_attempts(self) -> None:
+        self.urlopen.side_effect = [self.error(403, self.WAF_BODY) for _ in range(4)]
+        with self.assertRaisesRegex(gitee_publish.GiteeRequestError, "HTTP 403.*发布节点"):
+            self.get_release()
+        self.assertEqual(self.urlopen.call_count, 4)
+        self.assertEqual(self.sleep.call_args_list, [mock.call(15), mock.call(30), mock.call(60)])
+
+    def test_permission_and_certificate_errors_are_not_retried(self) -> None:
+        for error in (
+            self.error(401), self.error(403), self.error(400),
+            urllib.error.URLError(ssl.SSLCertVerificationError("certificate invalid")),
+        ):
+            with self.subTest(error=error):
+                self.urlopen.reset_mock()
+                self.sleep.reset_mock()
+                self.urlopen.side_effect = [error]
+                with self.assertRaises(gitee_publish.GiteeRequestError) as caught:
+                    self.get_release()
+                self.assertFalse(caught.exception.retryable)
+                self.assertEqual(self.urlopen.call_count, 1)
+                self.sleep.assert_not_called()
+
+    def test_transient_api_failures_retry(self) -> None:
+        for error in (
+            self.error(408), self.error(429), self.error(500), self.error(502), self.error(503), self.error(504),
+            TimeoutError("timed out"), urllib.error.URLError(TimeoutError("SSL connection timeout")),
+            ConnectionResetError("connection reset"),
+            gitee_publish.http.client.IncompleteRead(b"partial"),
+        ):
+            with self.subTest(error=error):
+                self.urlopen.side_effect = [error, self.response(self.RELEASE)]
+                self.assertEqual(self.get_release(), self.RELEASE)
+
+    def test_not_found_is_not_retried(self) -> None:
+        self.urlopen.side_effect = [self.error(404)]
+        self.assertIsNone(self.get_release())
+        self.assertEqual(self.urlopen.call_count, 1)
+        self.sleep.assert_not_called()
+
+    def test_truncated_json_retries_for_reads(self) -> None:
+        self.urlopen.side_effect = [self.response(b'{"id":'), self.response(self.RELEASE)]
+        self.assertEqual(self.get_release(), self.RELEASE)
+        self.assertEqual(self.methods(), ["GET", "GET"])
+
+    def test_empty_create_response_is_reconciled_before_retry(self) -> None:
+        self.urlopen.side_effect = [self.response(b""), self.response(self.RELEASE)]
+        self.assertEqual(self.create_release(), self.RELEASE)
+        self.assertEqual(self.methods(), ["POST", "GET"])
+
+    def test_lost_create_response_checks_tag_instead_of_duplicating_release(self) -> None:
+        self.urlopen.side_effect = [TimeoutError("response lost"), self.response(self.RELEASE)]
+        self.assertEqual(self.create_release(), self.RELEASE)
+        self.assertEqual(self.methods(), ["POST", "GET"])
+
+    def test_create_retries_only_after_confirmed_not_found(self) -> None:
+        self.urlopen.side_effect = [self.error(403, self.WAF_BODY), self.error(404), self.response(self.RELEASE)]
+        self.assertEqual(self.create_release(), self.RELEASE)
+        self.assertEqual(self.methods(), ["POST", "GET", "POST"])
+        posts = [call.args[0].data for call in self.urlopen.call_args_list if call.args[0].get_method() == "POST"]
+        self.assertEqual(posts[0], posts[1])
+
+    def test_create_conflict_reuses_existing_tag_without_reposting(self) -> None:
+        for status in (409, 422):
+            with self.subTest(status=status):
+                self.urlopen.reset_mock()
+                self.urlopen.side_effect = [self.error(status), self.response(self.RELEASE)]
+                self.assertEqual(self.create_release(), self.RELEASE)
+                self.assertEqual(self.methods(), ["POST", "GET"])
+
+    def test_create_permission_error_is_not_retried(self) -> None:
+        self.urlopen.side_effect = [self.error(403)]
+        with self.assertRaises(gitee_publish.GiteeRequestError):
+            self.create_release()
+        self.assertEqual(self.methods(), ["POST"])
+        self.sleep.assert_not_called()
+
+    def test_failed_lookup_never_authorizes_another_create(self) -> None:
+        self.urlopen.side_effect = [TimeoutError("response lost")] + [self.error(503) for _ in range(4)]
+        with self.assertRaises(gitee_publish.GiteeRequestError):
+            self.create_release()
+        self.assertEqual(self.methods(), ["POST", "GET", "GET", "GET", "GET"])
+
+    def test_persistent_create_failure_stops_after_four_posts(self) -> None:
+        self.urlopen.side_effect = [item for _ in range(4) for item in (self.error(403, self.WAF_BODY), self.error(404))]
+        with self.assertRaises(gitee_publish.GiteeRequestError):
+            self.create_release()
+        self.assertEqual(self.methods(), ["POST", "GET"] * 4)
+
+    def test_update_retries_the_same_payload(self) -> None:
+        self.urlopen.side_effect = [self.error(503), self.response(self.RELEASE)]
+        self.client.update_release("company/hr", "7", tag="v0.9.24", name="Release", body="Notes")
+        self.assertEqual(self.methods(), ["PATCH", "PATCH"])
+        self.assertEqual(self.urlopen.call_args_list[0].args[0].data, self.urlopen.call_args_list[1].args[0].data)
+
+    def test_lost_delete_response_accepts_confirmed_absence(self) -> None:
+        self.urlopen.side_effect = [TimeoutError("response lost"), self.error(404)]
+        self.client.delete_attachment("company/hr", "7", "10")
+        self.assertEqual(self.methods(), ["DELETE", "DELETE"])
+
+    def test_attachment_post_is_not_blindly_replayed_by_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            file_path = Path(temporary) / "SHA256SUMS.txt"
+            file_path.write_bytes(b"fixture")
+            self.urlopen.side_effect = [TimeoutError("response lost")]
+            with self.assertRaises(gitee_publish.GiteeRequestError):
+                self.client.upload_attachment("company/hr", "7", file_path)
+        self.assertEqual(self.methods(), ["POST"])
+        self.sleep.assert_not_called()
+
+    def test_public_checksum_read_retries_without_credentials(self) -> None:
+        self.urlopen.side_effect = [self.error(503), self.response(b"checksum")]
+        self.assertEqual(self.client.get_public_bytes("https://gitee.com/checksum"), b"checksum")
+        for call in self.urlopen.call_args_list:
+            self.assertNotIn("access_token", call.args[0].full_url)
+            self.assertNotIn("Authorization", call.args[0].headers)
+
+    def test_public_verification_does_not_multiply_exhausted_transport_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            assets_dir = Path(temporary)
+            (assets_dir / "SHA256SUMS.txt").write_bytes(b"fixture")
+            for verify in (gitee_publish.verify_public_source_release, gitee_publish.verify_public_release):
+                with self.subTest(verify=verify.__name__):
+                    self.urlopen.reset_mock()
+                    self.sleep.reset_mock()
+                    self.urlopen.side_effect = [self.error(403, self.WAF_BODY) for _ in range(4)]
+                    extra = {"names": ()} if verify is gitee_publish.verify_public_release else {}
+                    with self.assertRaisesRegex(gitee_publish.GiteeReleaseError, "HTTP 403"):
+                        verify(self.client, assets_dir=assets_dir, repository="company/hr", tag="v0.9.24", **extra)
+                    self.assertEqual(self.urlopen.call_count, 4)
+                    self.assertEqual(self.sleep.call_args_list, [mock.call(15), mock.call(30), mock.call(60)])
+
+    def test_error_redacts_url_encoded_tokens(self) -> None:
+        secret = "secret+value/="
+        self.client = gitee_publish.GiteeClient(secret)
+        encoded = urllib.parse.quote_plus(secret)
+        self.urlopen.side_effect = [self.error(403, json.dumps({"message": encoded}).encode())]
+        with self.assertRaises(gitee_publish.GiteeRequestError) as caught:
+            self.get_release()
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertNotIn(encoded, str(caught.exception))
 
 
 class GiteeMirrorTests(unittest.TestCase):

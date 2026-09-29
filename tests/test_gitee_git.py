@@ -80,7 +80,10 @@ class GiteeGitTests(unittest.TestCase):
                 sleep.assert_not_called()
 
     def test_transient_server_and_connection_errors_retry(self) -> None:
-        for detail in ("HTTP 503", "returned error: 502", "Connection reset by peer", "Operation timed out"):
+        for detail in (
+            "HTTP 503", "returned error: 502", "Connection reset by peer", "Operation timed out",
+            "fatal: unable to access 'https://gitee.com/company/hr.git/': SSL connection timeout",
+        ):
             with self.subTest(detail=detail):
                 results = [
                     subprocess.CompletedProcess([], 128, "", detail),

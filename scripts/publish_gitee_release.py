@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import mimetypes
 import os
 import shutil
 import ssl
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -34,6 +36,8 @@ DEFAULT_GITHUB_REPOSITORY = "xhzwjc/hr-toolkit"
 DEFAULT_TIMEOUT = 600
 DEFAULT_UPLOAD_ATTEMPTS = 3
 DEFAULT_RETRY_DELAY = 5.0
+API_RETRY_DELAYS = (15, 30, 60)
+RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504}
 UPLOAD_TRANSPORTS = ("urllib", "curl")
 METADATA_NAMES = ("latest.json", "SHA256SUMS.txt")
 SOURCE_RELEASE_ASSET_NAMES = ("SHA256SUMS.txt",)
@@ -43,6 +47,15 @@ URLLIB_MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 class GiteeReleaseError(RuntimeError):
     """Raised when a mirrored release cannot be created or verified."""
+
+
+class GiteeRequestError(GiteeReleaseError):
+    """Keep transport failures separate from permanent API/validation errors."""
+
+    def __init__(self, message: str, *, retryable: bool, status: int | None = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.status = status
 
 
 class GiteeClient:
@@ -82,18 +95,34 @@ class GiteeClient:
         name: str,
         body: str,
     ) -> dict[str, Any]:
-        result = self._request_json(
-            "POST",
-            f"/repos/{_quoted_repository(repository)}/releases",
-            fields={
-                "tag_name": tag,
-                "target_commitish": target_commitish,
-                "name": name,
-                "body": body,
-                "prerelease": "false",
-            },
-        )
-        return _require_object(result, "创建 Release")
+        for attempt in range(len(API_RETRY_DELAYS) + 1):
+            try:
+                result = self._request_json(
+                    "POST",
+                    f"/repos/{_quoted_repository(repository)}/releases",
+                    fields={
+                        "tag_name": tag,
+                        "target_commitish": target_commitish,
+                        "name": name,
+                        "body": body,
+                        "prerelease": "false",
+                    },
+                )
+                return _require_object(result, "创建 Release")
+            except GiteeRequestError as exc:
+                if not exc.retryable and exc.status not in {409, 422}:
+                    raise
+                # Never blindly replay POST: it may already have created the
+                # release before the connection failed. A failed lookup also
+                # stops here; only a confirmed 404 permits another creation.
+                if exc.retryable and attempt < len(API_RETRY_DELAYS):
+                    _wait_before_retry("创建 Release 后核对 Tag", attempt)
+                existing = self.get_release_by_tag(repository, tag)
+                if existing is not None:
+                    return existing
+                if not exc.retryable or attempt == len(API_RETRY_DELAYS):
+                    raise
+        raise GiteeReleaseError("未能确认 Gitee Release 创建结果。")
 
     def update_release(
         self,
@@ -134,6 +163,7 @@ class GiteeClient:
             f"/repos/{_quoted_repository(repository)}/releases/{urllib.parse.quote(release_id, safe='')}"
             f"/attach_files/{urllib.parse.quote(attachment_id, safe='')}",
             expect_json=False,
+            allow_not_found=True,
         )
 
     def upload_attachment(
@@ -239,15 +269,70 @@ class GiteeClient:
 
     def get_public_bytes(self, url: str) -> bytes:
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(
-                request,
-                timeout=self.timeout,
-                context=self._ssl_context,
-            ) as response:
-                return response.read()
-        except Exception as exc:
-            raise GiteeReleaseError(f"无法读取公开附件：{_safe_exception(exc, self._token)}") from None
+        return self._request_bytes(request, "读取公开附件")
+
+    def _request_bytes(
+        self,
+        request: urllib.request.Request,
+        operation: str,
+        *,
+        allow_not_found: bool = False,
+        require_json: bool = False,
+    ) -> bytes | None:
+        # POST has its own reconcile-before-retry logic at release/asset level.
+        retries = API_RETRY_DELAYS if request.get_method() in {"GET", "PATCH", "DELETE"} else ()
+        for attempt in range(len(retries) + 1):
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self.timeout, context=self._ssl_context,
+                ) as response:
+                    payload = response.read()
+                if require_json:
+                    try:
+                        json.loads(payload.decode("utf-8-sig"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        raise GiteeRequestError(
+                            f"{operation} 返回无效或不完整的 JSON。", retryable=True,
+                        ) from None
+                return payload
+            except GiteeRequestError as exc:
+                error = exc
+            except urllib.error.HTTPError as exc:
+                if allow_not_found and exc.code == 404:
+                    exc.close()
+                    return None
+                try:
+                    body = exc.read(4096).decode("utf-8-sig", errors="replace")
+                except (OSError, http.client.HTTPException):
+                    body = "无法完整读取错误响应。"
+                finally:
+                    exc.close()
+                # The actual CI 403 is a Baidu WAF HTML page, not the JSON
+                # permission response. Retry it with backoff, never every 403.
+                html = body.lstrip().lower().startswith(("<!doctype html", "<html"))
+                blocked = exc.code == 403 and html
+                detail = (
+                    "Gitee 网页防护拦截了请求；若持续出现，请检查发布节点到 Gitee 的访问或联系 Gitee 支持。"
+                    if blocked else _redact(body[:1000], self._token)
+                )
+                error = GiteeRequestError(
+                    f"{operation} 返回 HTTP {exc.code}：{detail}",
+                    retryable=blocked or exc.code in RETRYABLE_HTTP_CODES,
+                    status=exc.code,
+                )
+            except Exception as exc:
+                reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+                retryable = isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException))
+                if isinstance(reason, ssl.SSLCertVerificationError):
+                    retryable = False
+                error = GiteeRequestError(
+                    f"{operation} 请求失败：{_safe_exception(exc, self._token)}",
+                    retryable=retryable,
+                )
+            if not error.retryable or attempt == len(retries):
+                raise error from None
+            _wait_before_retry(str(error), attempt)
+        raise GiteeReleaseError(f"{operation} 未能确认结果。")
 
     def _request_json(
         self,
@@ -285,32 +370,26 @@ class GiteeClient:
         if query_values:
             url += "?" + urllib.parse.urlencode(query_values)
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(
-                request,
-                timeout=self.timeout,
-                context=self._ssl_context,
-            ) as response:
-                payload = response.read()
-        except urllib.error.HTTPError as exc:
-            if allow_not_found and exc.code == 404:
-                return None
-            body = exc.read().decode("utf-8", errors="replace")[:1000]
-            detail = _redact(body, self._token)
-            raise GiteeReleaseError(
-                f"Gitee API {method} {path} 返回 HTTP {exc.code}：{detail}"
-            ) from None
-        except Exception as exc:
-            raise GiteeReleaseError(
-                f"Gitee API {method} {path} 请求失败：{_safe_exception(exc, self._token)}"
-            ) from None
-
-        if not expect_json or not payload.strip():
+        payload = self._request_bytes(
+            request, f"Gitee API {method} {path}", allow_not_found=allow_not_found, require_json=expect_json,
+        )
+        if payload is None or not expect_json or not payload.strip():
             return None
         try:
             return json.loads(payload.decode("utf-8-sig"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise GiteeReleaseError(f"Gitee API {method} {path} 返回无效 JSON：{exc}") from None
+            raise GiteeRequestError(
+                f"Gitee API {method} {path} 返回无效 JSON：{exc}", retryable=True,
+            ) from None
+
+
+def _wait_before_retry(operation: str, attempt: int) -> None:
+    delay = API_RETRY_DELAYS[attempt]
+    print(
+        f"{operation}；{delay} 秒后重试/核对（{attempt + 2}/{len(API_RETRY_DELAYS) + 1}）。",
+        file=sys.stderr, flush=True,
+    )
+    time.sleep(delay)
 
 
 def expected_asset_names(assets_dir: Path, version: str) -> tuple[str, ...]:
@@ -700,6 +779,8 @@ def _upload_attachment_with_retries(
             client.upload_attachment(repository, release_id, file_path)
             return
         except Exception as exc:
+            if isinstance(exc, GiteeRequestError) and not exc.retryable:
+                raise
             last_error = exc
             print(
                 f"上传 {file_path.name} 第 {attempt}/{attempts} 次未确认成功，正在核对 Gitee 附件。",
@@ -798,6 +879,10 @@ def verify_public_release(
             return
         except Exception as exc:
             last_error = exc
+            # Transport retries are already exhausted (or permission/TLS
+            # validation failed). Do not multiply them by this visibility poll.
+            if isinstance(exc, GiteeRequestError):
+                break
             if attempt + 1 < attempts:
                 time.sleep(retry_delay)
     raise GiteeReleaseError(f"Gitee 公开 Release 验证失败：{last_error}")
@@ -842,6 +927,8 @@ def verify_public_source_release(
             return
         except Exception as exc:
             last_error = exc
+            if isinstance(exc, GiteeRequestError):
+                break
             if attempt + 1 < attempts:
                 time.sleep(retry_delay)
     raise GiteeReleaseError(f"Gitee 公开源码 Release 验证失败：{last_error}")
@@ -1100,7 +1187,10 @@ def _verify_checksum_file(assets_dir: Path, names: Sequence[str]) -> None:
 
 
 def _redact(value: str, secret: str) -> str:
-    return value.replace(secret, "***") if secret else value
+    if secret:
+        for form in (secret, urllib.parse.quote(secret, safe=""), urllib.parse.quote_plus(secret)):
+            value = value.replace(form, "***")
+    return value
 
 
 def _safe_exception(exc: Exception, secret: str) -> str:
