@@ -292,6 +292,25 @@ class QtControllerTests(unittest.TestCase):
             controller._execute_reviewed_rename(sample_plan())
         start.assert_not_called()
 
+    def test_update_diagnostic_trigger_tracks_manual_and_automatic_checks(self) -> None:
+        from hr_toolkit import update_diagnostics
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        for manual in (True, False):
+            with self.subTest(manual=manual), \
+                    patch("hr_toolkit.gui_qt.controller.threading.Thread") as thread, \
+                    patch("hr_toolkit.gui_qt.controller.check_for_update", return_value=None) as check, \
+                    patch.object(update_diagnostics, "environment"), \
+                    patch("hr_toolkit.runlog.log_line") as log:
+                controller._start_update_check(manual)
+                thread.call_args.kwargs["target"]()
+                check.assert_called_once()
+                events = [json.loads(call.args[0].split("[更新诊断] ", 1)[1])
+                          for call in log.call_args_list if call.args[0].startswith("[更新诊断] ")]
+                self.assertEqual(events[0]["trigger"], "manual" if manual else "automatic")
+                self.assertEqual(events[-1]["outcome"], "completed")
+                self.assertFalse(controller._update_busy)
+
     def test_copy_download_link_ignores_installed_version_and_update_cache(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

@@ -18,6 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from hr_toolkit import __version__, runlog
+from hr_toolkit import update_diagnostics
 from hr_toolkit.common.paths import absolute_path_hint, path_text_error, user_app_data_dir, user_home_dir
 from hr_toolkit.common.inputs import ARCHIVE_FILE_DIALOG_PATTERN
 from hr_toolkit.app_update import (
@@ -3527,7 +3528,8 @@ class AppController(QObject):
 
         def worker() -> None:
             try:
-                result = latest_installer_download(platform)
+                with update_diagnostics.session("copy_link", trigger="manual"):
+                    result = latest_installer_download(platform)
             except Exception as exc:
                 self._downloadLinkResult.emit(platform, None, str(exc))
             else:
@@ -3587,7 +3589,8 @@ class AppController(QObject):
 
         def worker() -> None:
             try:
-                update = check_for_update(__version__)
+                with update_diagnostics.session("check", trigger="manual" if manual else "automatic"):
+                    update = check_for_update(__version__)
             except Exception as exc:
                 self._updateResult.emit("check-error", str(exc))
             else:

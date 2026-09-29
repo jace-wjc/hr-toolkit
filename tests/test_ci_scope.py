@@ -16,6 +16,15 @@ SPEC.loader.exec_module(ci_scope)
 
 
 class CIScopeTests(unittest.TestCase):
+    def test_update_diagnostics_routes_cover_existing_update_callers(self):
+        for path in ("hr_toolkit/update_diagnostics.py", "hr_toolkit/app_update.py"):
+            with self.subTest(path=path):
+                scope = ci_scope.select_scope([path])
+                self.assertTrue({"tests.test_update_diagnostics", "tests.test_app_update",
+                                 "tests.test_qt_controller"}.issubset(scope["targets"]))
+                self.assertIn("tests.test_update_diagnostics", scope["win7_targets"])
+                self.assertFalse(scope["full"])
+
     def test_ai_changes_cover_backend_gui_and_win7(self):
         paths = [path.relative_to(ci_scope.ROOT).as_posix()
                  for path in sorted((ci_scope.ROOT / "hr_toolkit/ai").glob("*.py"))]

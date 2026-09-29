@@ -23,6 +23,7 @@ from typing import Any, Callable, Iterable
 
 from hr_toolkit.common.paths import current_executable_path, user_app_data_dir
 from hr_toolkit import runlog
+from hr_toolkit import update_diagnostics as diagnostics
 
 
 GITEE_REPOSITORY = "optimistic-little-sunspot/hr-toolkit"
@@ -143,15 +144,21 @@ def create_https_context() -> ssl.SSLContext:
         import certifi
 
         context = ssl.create_default_context(cafile=certifi.where())
+        ca_source = "certifi"
     except ImportError:
         try:
             context = ssl.create_default_context()
+            ca_source = "system_default"
         except (OSError, ssl.SSLError) as exc:
+            diagnostics.event("tls_context_failed", reason="ca_store_load", **diagnostics.exception_fields(exc))
             raise UpdateError(f"无法加载 HTTPS 根证书：{exc}") from exc
     except (OSError, ssl.SSLError) as exc:
+        diagnostics.event("tls_context_failed", reason="ca_store_load", **diagnostics.exception_fields(exc))
         raise UpdateError(f"无法加载 HTTPS 根证书：{exc}") from exc
     if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
         raise UpdateError("HTTPS 证书校验未正确启用。")
+    diagnostics.event("tls_context", ca_source=ca_source, verify_peer=True, check_hostname=True,
+                      minimum_version=getattr(getattr(context, "minimum_version", None), "name", "unknown"))
     return context
 
 
@@ -186,31 +193,46 @@ def update_manifest_urls() -> tuple[str, ...]:
         if not _is_github_url(url)
     )
     if env_urls:
+        diagnostics.event("configuration", source="environment", count=len(env_urls))
         return env_urls
     config_urls = tuple(
         url for url in _read_update_url_files() if not _is_github_url(url)
     )
     if config_urls:
+        diagnostics.event("configuration", source="update_url_file", count=len(config_urls))
         return config_urls
+    diagnostics.event("configuration", source="default", count=len(DEFAULT_UPDATE_MANIFEST_URLS))
     return DEFAULT_UPDATE_MANIFEST_URLS
 
 
+@diagnostics.operation("check")
 def check_for_update(current_version: str, manifest_url: str | None = None, platform: str | None = None) -> UpdateInfo | None:
+    diagnostics.event("stage", stage="configuration")
+    if manifest_url:
+        diagnostics.event("configuration", source="explicit_argument", count=1)
     manifest_urls = (manifest_url,) if manifest_url else update_manifest_urls()
     selected_platform = platform or platform_key()
+    diagnostics.event("check_parameters", current_version=diagnostics.version_label(current_version),
+                      platform=selected_platform)
     errors: list[str] = []
-    for candidate_url in manifest_urls:
+    for source_number, candidate_url in enumerate(manifest_urls, 1):
+        diagnostics.event("source", number=source_number, endpoint=diagnostics.endpoint(candidate_url))
         try:
             manifest, resolved_manifest_url = load_update_manifest(candidate_url)
+            diagnostics.event("stage", stage="version_comparison")
             try:
                 remote_version = manifest_version(manifest, platform=selected_platform)
             except _PlatformUnavailableError:
                 # macOS 暂停发包时按没有新版本处理；Windows 通道缺失仍报错。
                 if selected_platform == "macos":
+                    diagnostics.event("result", outcome="platform_not_published", platform=selected_platform)
                     return None
                 raise
             if not is_newer_version(remote_version, current_version):
+                diagnostics.event("result", outcome="no_new_version",
+                                  remote_version=diagnostics.version_label(remote_version))
                 return None
+            diagnostics.event("stage", stage="package_metadata")
             update = parse_update_manifest(
                 manifest,
                 manifest_url=resolved_manifest_url,
@@ -218,8 +240,11 @@ def check_for_update(current_version: str, manifest_url: str | None = None, plat
             )
             if not update.download_urls:
                 raise UpdateError("此平台尚无可用的 Gitee 安装包，请联系发布者补充后重试。")
+            diagnostics.event("result", outcome="update_available",
+                              remote_version=diagnostics.version_label(update.version))
             return update
         except Exception as exc:
+            diagnostics.event("source_failed", number=source_number, **diagnostics.exception_fields(exc))
             errors.append(f"{_update_source_name(candidate_url)}：{exc}")
     raise UpdateError("所有更新源均不可用，已按顺序尝试：" + "；".join(errors))
 
@@ -229,17 +254,22 @@ def fetch_update_manifest(manifest_url: str, timeout: int = 10) -> dict[str, Any
     return manifest
 
 
+@diagnostics.operation("manifest")
 def load_update_manifest(manifest_url: str, timeout: int = 10) -> tuple[dict[str, Any], str]:
+    diagnostics.event("stage", stage="release_discovery" if _is_release_discovery_url(manifest_url) else "manifest_fetch")
     data = _fetch_json_object(manifest_url, timeout=timeout)
     if _is_release_discovery_url(manifest_url):
+        diagnostics.event("stage", stage="manifest_asset_lookup")
         asset_url = _find_manifest_asset_url(data)
         if not asset_url:
             raise UpdateError("最新 Release 缺少 latest.json 附件。")
         is_gitee = urllib.parse.urlparse(manifest_url).hostname == "gitee.com"
         if is_gitee and _is_github_url(asset_url):
             raise UpdateError("Gitee 更新配置不能指向 GitHub。")
+        diagnostics.event("stage", stage="manifest_fetch")
         manifest = _fetch_json_object(asset_url, timeout=timeout)
         if is_gitee:
+            diagnostics.event("stage", stage="release_asset_validation")
             manifest = _bind_gitee_release_assets(manifest, data, manifest_url)
         return manifest, asset_url
     return data, manifest_url
@@ -311,12 +341,17 @@ def _bind_gitee_release_assets(
     return result
 
 
+@diagnostics.operation("copy_link")
 def latest_installer_download(platform: str) -> tuple[str, str]:
     """Find a published installer afresh, independently of the installed version."""
     suffixes = {"win7": "win7_x64-setup.exe", "windows": "x64-setup.exe"}
     if platform not in suffixes:
         raise UpdateError("请选择 Windows 7 或 Windows 10 / 11。")
+    diagnostics.event("configuration", source="default_release_api", count=1)
+    diagnostics.event("copy_parameters", platform=platform)
+    diagnostics.event("stage", stage="release_discovery")
     release = _fetch_json_object(GITEE_LATEST_RELEASE_API_URL, timeout=10, no_cache=True)
+    diagnostics.event("stage", stage="installer_asset_lookup")
     tag = str(release.get("tag_name") or "")
     if release.get("draft") or release.get("prerelease") or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         raise UpdateError("暂时无法确认最新正式版本，请稍后重试。")
@@ -330,6 +365,8 @@ def latest_installer_download(platform: str) -> tuple[str, str]:
                 continue
             url = asset.get("browser_download_url") or asset.get("url")
             if asset.get("name") == filename and url == expected_url:
+                diagnostics.event("result", outcome="download_link_found",
+                                  remote_version=diagnostics.version_label(version))
                 return version, url
     raise UpdateError(f"最新版本 {version} 的所选安装包尚未上传，请稍后重试。")
 
@@ -338,6 +375,7 @@ def _fetch_json_object(url: str, *, timeout: int, no_cache: bool = False) -> dic
     # Both update checks and link sharing use this path. Never substitute a
     # cached old release or an unverified installer URL when discovery fails.
     for attempt in range(2):
+        diagnostics.event("attempt", attempt=attempt + 1, endpoint=diagnostics.endpoint(url))
         try:
             payload = _fetch_json_value(url, timeout=timeout, no_cache=no_cache or attempt > 0)
             break
@@ -345,12 +383,15 @@ def _fetch_json_object(url: str, *, timeout: int, no_cache: bool = False) -> dic
             if attempt or not exc.retryable:
                 raise
             if url == GITEE_LATEST_RELEASE_API_URL:
+                diagnostics.event("fallback", target="gitee_release_list", delay_ms=0)
                 try:
                     return _fetch_gitee_release_list(timeout=timeout)
                 except UpdateError as fallback:
                     raise UpdateError(f"{exc}；Gitee 备用查询：{fallback}") from fallback
+            diagnostics.event("retry", next_attempt=attempt + 2, delay_ms=500)
             time.sleep(0.5)
     if not isinstance(payload, dict):
+        diagnostics.event("validation_failed", reason="expected_object")
         raise UpdateError("更新配置格式不正确。")
     return payload
 
@@ -358,7 +399,9 @@ def _fetch_json_object(url: str, *, timeout: int, no_cache: bool = False) -> dic
 def _fetch_gitee_release_list(*, timeout: int) -> dict[str, Any]:
     """Gitee's list is not newest-first; never mistake its first row for latest."""
     candidates = []
+    diagnostics.event("stage", stage="release_list_fallback")
     for page in range(1, 4):
+        diagnostics.event("release_list_page", page=page)
         url = GITEE_LATEST_RELEASE_API_URL.rsplit("/", 1)[0] + f"?page={page}&per_page=100"
         rows = _fetch_json_value(url, timeout=timeout, no_cache=True)
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
@@ -369,6 +412,7 @@ def _fetch_gitee_release_list(*, timeout: int) -> dict[str, Any]:
             if not candidates:
                 raise UpdateError("暂时无法确认最新正式版本，请稍后重试。")
             release = max(candidates, key=lambda row: tuple(int(part) for part in row["tag_name"][1:].split(".")))
+            diagnostics.event("fallback_recovered", remote_version=diagnostics.version_label(release["tag_name"]))
             runlog.log_line(f"更新查询已通过 Gitee 版本列表恢复：{release['tag_name']}")
             return release
     # Do not silently claim a partial list contains the latest release.
@@ -382,8 +426,13 @@ def _fetch_json_value(url: str, *, timeout: int, no_cache: bool = False) -> Any:
     if no_cache:
         headers.update({"Cache-Control": "no-cache", "Pragma": "no-cache"})
     request = urllib.request.Request(url, headers=headers)
+    request_number = diagnostics.next_request()
+    started = time.monotonic()
+    diagnostics.event("request_start", request=request_number, endpoint=diagnostics.endpoint(url),
+                      timeout_seconds=timeout, user_agent=USER_AGENT, no_cache=no_cache)
     try:
         with _open_url(request, timeout=timeout) as response:
+            diagnostics.response_info(response, request_number, url)
             content_length = _response_content_length(response)
             if content_length > UPDATE_MANIFEST_MAX_BYTES:
                 raise UpdateError("更新配置文件过大，已拒绝读取。")
@@ -393,32 +442,46 @@ def _fetch_json_value(url: str, *, timeout: int, no_cache: bool = False) -> Any:
             payload = raw_payload.decode("utf-8-sig")
     except urllib.error.HTTPError as exc:
         # Do not store response bodies, cookies, signed query strings or proxy
-        # credentials. Record only the endpoint, status and request ID.
-        endpoint = urllib.parse.urlsplit(url)
+        # credentials. Diagnostics only classify one bounded error-body sample.
+        endpoint = diagnostics.endpoint(url)
+        diagnostics.response_info(exc, request_number, url)
+        diagnostics.error_sample(exc, request_number)
         request_id = re.sub(r"[^\w.-]", "", str((exc.headers or {}).get("X-Request-Id", "")))[:120]
         status = exc.code
         exc.close()
-        runlog.log_line(f"更新请求被拒绝：{endpoint.hostname}{endpoint.path}；HTTP {status}；request_id={request_id}")
+        diagnostics.event("request_end", request=request_number, outcome="http_error", status=status,
+                          elapsed_ms=int((time.monotonic() - started) * 1000))
+        runlog.log_line(f"更新请求被拒绝：{endpoint}；HTTP {status}；request_id={request_id}")
         raise _MetadataRequestError(
-            f"无法读取更新配置：HTTP {status}；接口 {endpoint.hostname}{endpoint.path}",
+            f"无法读取更新配置：HTTP {status}；接口 {endpoint}",
             retryable=status in (403, 408, 429, 500, 502, 503, 504),
         ) from exc
-    except UpdateError:
+    except UpdateError as exc:
+        diagnostics.event("request_end", request=request_number, outcome="validation_error",
+                          elapsed_ms=int((time.monotonic() - started) * 1000), **diagnostics.exception_fields(exc))
         raise
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
-        endpoint = urllib.parse.urlsplit(url)
-        runlog.log_line(f"更新请求连接异常：{endpoint.hostname}{endpoint.path}；{type(reason).__name__}")
+        endpoint = diagnostics.endpoint(url)
+        diagnostics.event("request_end", request=request_number, outcome="connection_error",
+                          elapsed_ms=int((time.monotonic() - started) * 1000), **diagnostics.exception_fields(exc))
+        runlog.log_line(f"更新请求连接异常：{endpoint}；{type(reason).__name__}")
         raise _MetadataRequestError(
             f"无法读取更新配置：{type(reason).__name__}",
             retryable=not isinstance(reason, ssl.SSLError),
         ) from exc
     except Exception as exc:
-        raise UpdateError(f"无法读取更新配置：{exc}") from exc
+        diagnostics.event("request_end", request=request_number, outcome="unexpected_error",
+                          elapsed_ms=int((time.monotonic() - started) * 1000), **diagnostics.exception_fields(exc))
+        raise UpdateError(f"无法读取更新配置：{type(exc).__name__}") from exc
+    diagnostics.event("request_end", request=request_number, outcome="received",
+                      elapsed_ms=int((time.monotonic() - started) * 1000), bytes_read=len(raw_payload))
     try:
         data = json.loads(payload)
     except json.JSONDecodeError as exc:
+        diagnostics.event("json_invalid", request=request_number)
         raise UpdateError("更新配置不是有效的 JSON。") from exc
+    diagnostics.event("json_decoded", request=request_number, value_type=type(data).__name__)
     return data
 
 
@@ -968,6 +1031,7 @@ def _read_update_url_files() -> tuple[str, ...]:
             continue
         urls = _normalize_url_lines(path.read_text(encoding="utf-8-sig"))
         if urls:
+            diagnostics.event("configuration_file", location="application_directory", count=len(urls))
             return urls
     return ()
 
@@ -1130,7 +1194,7 @@ def _update_source_name(url: str) -> str:
         return "Gitee 国内源"
     if host == "github.com" or host.endswith(".github.com") or host.endswith("githubusercontent.com"):
         return "GitHub 备用源"
-    return url
+    return diagnostics.endpoint(url)
 
 
 def _manifest_version_from_payload(platform_payload: dict[str, Any], manifest: dict[str, Any]) -> str:
