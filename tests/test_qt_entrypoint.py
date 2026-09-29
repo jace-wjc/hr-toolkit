@@ -100,6 +100,19 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertIn("AI probe OK", completed.stdout)
         self.assertNotIn("binding loop", completed.stdout.lower() + completed.stderr.lower())
 
+    def test_ai_history_restore_reveals_only_settled_content(self) -> None:
+        self._qt_compat_or_skip()
+        probe = Path(__file__).with_name("qt_ai_assistant_probe.py")
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", str(probe), "--history-transition-only"],
+            cwd=str(probe.resolve().parents[1]),
+            env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "HR_TOOLKIT_SKIP_UPDATE": "1"},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", timeout=45, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("History transition OK", completed.stdout)
+
     def test_qml_dialog_signals_have_named_parameters_on_both_qt_versions(self) -> None:
         self._qt_compat_or_skip()
         from hr_toolkit.gui_qt.controller import AppController

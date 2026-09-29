@@ -3177,6 +3177,7 @@ MESSAGES = {
  'Sage': 'Sage',
  'Sage 设置': 'Sage Settings',
  '历史对话': 'Chat History',
+ '正在加载对话…': 'Loading conversation…',
  '新对话': 'New Chat',
  '开始新对话（当前对话会存入历史）': 'Start a new chat (the current one is saved to history)',
  '删除': 'Delete',

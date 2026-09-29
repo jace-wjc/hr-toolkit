@@ -31,6 +31,9 @@ Item {
     property bool dropActive: false
     property string conversationId: ""
     property bool ownsDraft: true
+    property bool historyLoading: false
+    property string pendingHistoryId: ""
+    readonly property bool historyTransitionActive: historyLoading || historyFade.running
 
     readonly property color textMain: Ui.color("text")
     readonly property color textMuted: Ui.color("muted")
@@ -58,11 +61,80 @@ Item {
     }
 
     function focusComposer() { inputArea.forceActiveFocus() }
+    function cancelHistoryTransition() {
+        historyLoadTimer.stop()
+        historyRevealTimer.stop()
+        historyFade.stop()
+        pendingHistoryId = ""
+        historyLoading = false
+        aiChatView.opacity = 1
+    }
+    function openHistoryConversation(id) {
+        if (controller.aiBusy || controller.aiPreparing) return
+        historyPopup.close()
+        if (String(id) === controller.aiConversationId) {
+            // Do not expose unsettled rows when the same history is clicked
+            // again after restore but before its reveal has completed.
+            if (pendingHistoryId !== "") cancelHistoryTransition()
+            return
+        }
+        cancelHistoryTransition()
+        saveDraftNow()
+        pendingHistoryId = String(id)
+        historyLoading = true
+        aiChatView.cancelFlick()
+        tailTimer.stop()
+        aiChatView.opacity = 0
+        // Let the loading state paint before the synchronous local restore.
+        historyLoadTimer.restart()
+    }
+    function scheduleHistoryReveal() {
+        if (historyLoading && pendingHistoryId === "" && panel.visible)
+            historyRevealTimer.restart()
+    }
+    Timer {
+        id: historyLoadTimer
+        interval: 32
+        onTriggered: {
+            var id = panel.pendingHistoryId
+            panel.pendingHistoryId = ""
+            controller.aiOpenConversation(id)
+            aiChatView.forceLayout()
+            aiChatView.scheduleTail()
+            panel.scheduleHistoryReveal()
+        }
+    }
+    Timer {
+        id: historyRevealTimer
+        interval: 80
+        onTriggered: {
+            if (!panel.historyLoading || !panel.visible) return
+            // Width-dependent text/table delegates and end-positioning must
+            // settle behind the loading state, not during the fade itself.
+            aiChatView.forceLayout()
+            if (tailTimer.running || historyRevealTimer.running) {
+                historyRevealTimer.restart()
+                return
+            }
+            panel.historyLoading = false
+            historyFade.restart()
+        }
+    }
+    NumberAnimation {
+        id: historyFade
+        target: aiChatView
+        property: "opacity"
+        from: 0
+        to: 1
+        duration: 120
+        easing.type: Easing.OutCubic
+    }
     function prepareToShow() {
         ownsDraft = true
         if (editingRow < 0) inputArea.text = controller.aiDraft
     }
     function prepareToHide() {
+        cancelHistoryTransition()
         saveDraftNow()
         ownsDraft = false
         tailTimer.stop()
@@ -75,10 +147,11 @@ Item {
     }
     onVisibleChanged: {
         if (visible) aiChatView.scheduleTail()
-        else tailTimer.stop()
+        else { cancelHistoryTransition(); tailTimer.stop() }
     }
 
     function submitInput() {
+        if (historyTransitionActive) return
         if (!controller.aiReady)
             return
         if (controller.aiBusy) return
@@ -190,7 +263,7 @@ Item {
                     iconId: "new_chat"
                     tip: "新对话"
                     enabled: !controller.aiBusy
-                    onClicked: { panel.saveDraftNow(); controller.aiNewConversation() }
+                    onClicked: { panel.cancelHistoryTransition(); panel.saveDraftNow(); controller.aiNewConversation() }
                 }
                 IconAction {
                     id: moreButton
@@ -281,6 +354,7 @@ Item {
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 model: controller.aiTimelineModel
+                enabled: !panel.historyTransitionActive
                 spacing: 0
                 cacheBuffer: 240
                 reuseItems: true
@@ -340,10 +414,11 @@ Item {
                     }
                 }
                 onCountChanged: scheduleTail()
-                onContentHeightChanged: scheduleTail()
+                onContentHeightChanged: { scheduleTail(); panel.scheduleHistoryReveal() }
+                onContentYChanged: panel.scheduleHistoryReveal()
                 // The composer can grow or shrink without changing messages.
                 // Preserve the bottom gap only while following new replies.
-                onHeightChanged: scheduleTail()
+                onHeightChanged: { scheduleTail(); panel.scheduleHistoryReveal() }
                 onMovementStarted: { followTail = false; tailTimer.stop() }
                 onMovementEnded: if (!conversationScrollBar.pressed) followTail = atYEnd
                 Component.onCompleted: scheduleTail()
@@ -735,6 +810,24 @@ Item {
                 }
             }
 
+            Column {
+                anchors.centerIn: parent
+                spacing: 8
+                visible: panel.historyLoading
+                BusyIndicator {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 24
+                    height: 24
+                    running: panel.historyLoading && panel.visible
+                }
+                Text {
+                    objectName: "aiHistoryLoadingLabel"
+                    text: Ui.text("正在加载对话…")
+                    font.pixelSize: 12
+                    color: panel.textMuted
+                }
+            }
+
             // 上滑看历史时出现；点一下回到最新一条。
             Rectangle {
                 id: scrollToBottom
@@ -751,7 +844,7 @@ Item {
                 width: 30
                 height: 30
                 radius: 15
-                visible: aiChatView.count > 0 && !aiChatView.followTail && !aiChatView.atYEnd
+                visible: !panel.historyTransitionActive && aiChatView.count > 0 && !aiChatView.followTail && !aiChatView.atYEnd
                 color: Ui.color("surface")
                 border.width: 1
                 border.color: panel.cardBorder
@@ -783,6 +876,7 @@ Item {
         // 代理直接写在 Repeater 下才一定拿得到 model.xxx 这些角色。
         Flow {
             objectName: "aiPendingAttachments"
+            enabled: !panel.historyTransitionActive
             Layout.fillWidth: true
             Layout.margins: 10
             Layout.bottomMargin: 0
@@ -926,6 +1020,7 @@ Item {
         // ---------- 底部输入卡片 ----------
         Rectangle {
             id: composerCard
+            enabled: !panel.historyTransitionActive
             Layout.fillWidth: true
             Layout.leftMargin: 14
             Layout.rightMargin: 14
@@ -963,6 +1058,7 @@ Item {
                     TextArea {
                         id: inputArea
                         objectName: "aiInputArea"
+                        readOnly: panel.historyTransitionActive
                         wrapMode: TextEdit.Wrap
                         placeholderText: Ui.text("今天帮你做些什么？")
                         placeholderTextColor: panel.textFaint
@@ -1101,6 +1197,7 @@ Item {
                     // 右：发送 / 停止
                     Rectangle {
                         id: sendButton
+                        enabled: !panel.historyTransitionActive
                         activeFocusOnTab: true
                         Accessible.role: Accessible.Button
                         Accessible.name: Ui.text(controller.aiBusy ? "停止" : "发送")
@@ -1207,6 +1304,7 @@ Item {
     DropArea {
         id: aiDropArea
         objectName: "aiDropArea"
+        enabled: !panel.historyTransitionActive
         anchors.fill: parent
         z: 3
         onEntered: function(drag) {
@@ -1375,6 +1473,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     label: "新对话"
                     onClicked: {
+                        panel.cancelHistoryTransition()
                         panel.saveDraftNow()
                         controller.aiNewConversation()
                         historyPopup.close()
@@ -1426,15 +1525,14 @@ Item {
                     }
                     MouseArea {
                         id: historyMouse
+                        objectName: "aiHistorySelect_" + model.id
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         // 改名时让点击落在输入框上，别顺手把对话切走。
                         enabled: !historyRow.renaming
                         onClicked: {
-                            panel.saveDraftNow()
-                            controller.aiOpenConversation(model.id)
-                            historyPopup.close()
+                            panel.openHistoryConversation(model.id)
                         }
                     }
                     Column {

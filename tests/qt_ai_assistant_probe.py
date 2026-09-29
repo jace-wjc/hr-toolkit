@@ -320,6 +320,170 @@ def sage_open_probe() -> int:
     return 0
 
 
+def history_transition_probe() -> int:
+    """Only local fixtures: mask restore geometry and reveal a stable history."""
+    import json
+    from hr_toolkit.gui_qt.compat import delete_qobject
+    application = QApplication.instance() or QApplication([])
+    controller = Controller()
+    controller._save_workspace_preferences = lambda: True
+    controller._ai_settings = ai_config.AiSettings()
+    controller._ai_settings.provider_config().api_key = "offline-ui-fixture"
+    store = ai_history.ConversationStore(_PROBE_DIR / "transition-history.json")
+    records = []
+    for count in (1, 18, 4):
+        record = store.create("History %d" % count)
+        record.draft = "Draft %d" % count
+        for i in range(count):
+            record.messages.extend([
+                {"role": "user", "content": "请核对资料 %d" % i},
+                {"role": "assistant", "content": "## 资料说明\n\n" + "需要确认的内容。" * (70 if i % 2 else 4)
+                 + "\n\n| 项目 | 说明 |\n| --- | --- |\n| 示例 | 换行<br>内容 |\n\n结束说明。"},
+            ])
+        store.upsert(record)
+        records.append(record)
+    controller._ai_conversation_store = store
+    controller._ai_restore_record(records[0])
+    controller._ai_refresh_history()
+    original_messages = [[(row["role"], row["content"]) for row in record.messages] for record in records]
+    engine = QQmlApplicationEngine()
+    errors = []
+    engine.warnings.connect(lambda messages: errors.extend(e.toString() for e in messages))
+    engine.rootContext().setContextProperty("controller", controller)
+    engine.rootContext().setContextProperty("appearance", controller.presentation)
+    source = '''import QtQuick 2.15
+import QtQuick.Window 2.15
+import "."
+Window {
+    width: 480; height: 860; visible: true; color: Ui.color("window")
+    Component.onCompleted: Ui.backend = appearance
+    AiChatPanel { anchors.fill: parent }
+}'''
+    base = Path(__file__).resolve().parents[1] / "hr_toolkit/gui_qt/qml/components/HistoryTransitionProbe.qml"
+    engine.loadData(source.encode(), QUrl.fromLocalFile(str(base)))
+    assert engine.rootObjects(), errors
+    root = engine.rootObjects()[0]
+    panel = root.findChild(QObject, "aiChatPanel")
+    view = root.findChild(QObject, "aiChatView")
+    composer = root.findChild(QObject, "aiInputArea")
+
+    def evaluate(obj, expression):
+        query = QQmlExpression(engine.rootContext(), obj, expression)
+        value = query.evaluate()
+        assert not query.hasError(), query.error().toString()
+        return value[0] if isinstance(value, tuple) else value
+
+    def open_record(record):
+        evaluate(panel, "openHistoryConversation(%s)" % json.dumps(record.conversation_id))
+
+    def wait_for_reveal():
+        snapshots = []
+        fade_seen = False
+        for _ in range(100):
+            wait_for_events(16)
+            loading = panel.property("historyLoading")
+            opacity = float(view.property("opacity"))
+            if loading:
+                assert opacity == 0, "Provisional history was visible"
+                assert not composer.property("enabled")
+            elif opacity > 0:
+                fade_seen = fade_seen or opacity < 1
+                snapshots.append((float(view.property("contentY")), float(view.property("contentHeight"))))
+            if not panel.property("historyTransitionActive"):
+                break
+        assert not panel.property("historyTransitionActive"), "History reveal never settled"
+        assert fade_seen, "History appeared without a fade"
+        wait_for_events(160)
+        snapshots.append((float(view.property("contentY")), float(view.property("contentHeight"))))
+        assert all(abs(y - snapshots[-1][0]) < 1 and abs(h - snapshots[-1][1]) < 1 for y, h in snapshots), snapshots
+        assert view.property("atYEnd") and float(view.property("opacity")) == 1
+        assert composer.property("enabled")
+
+    wait_for_events(200)
+    for width, record in ((400, records[1]), (620, records[2]), (400, records[0])):
+        root.setProperty("width", width)
+        wait_for_events(120)
+        # Exercise the actual history row click, not just the helper method.
+        QMetaObject.invokeMethod(root.findChild(QObject, "aiHistoryButton"), "clicked")
+        wait_for_events(50)
+        popup = root.findChild(QObject, "aiHistoryPopup")
+        # Popup delegates belong to its visual tree, not necessarily the
+        # window's QObject tree (this differs between Qt 5 and Qt 6).
+        spot = evaluate(popup, """(function(){
+            function find(item) {
+                if (item.objectName === %s) return item;
+                var children = item.children || [];
+                for (var i=0; i<children.length; ++i) {
+                    var found = find(children[i]); if (found) return found;
+                }
+                return null;
+            }
+            var row = find(contentItem);
+            if (!row) return "";
+            var p = row.mapToItem(null, row.width/2, row.height/2);
+            return JSON.stringify([p.x, p.y]);
+        })()""" % json.dumps("aiHistorySelect_" + record.conversation_id))
+        assert spot, "History row was not created"
+        x, y = json.loads(spot)
+        QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(x), int(y)))
+        assert panel.property("historyLoading") and float(view.property("opacity")) == 0
+        assert controller.aiConversationId != record.conversation_id, "Restore did not yield for loading"
+        # A second click after the synchronous restore must not remove the mask.
+        for _ in range(10):
+            if controller.aiConversationId == record.conversation_id:
+                break
+            wait_for_events(16)
+        assert panel.property("historyLoading")
+        open_record(record)
+        assert panel.property("historyLoading") and float(view.property("opacity")) == 0
+        wait_for_reveal()
+        assert controller.aiConversationId == record.conversation_id
+        assert composer.property("text") == record.draft
+    # Two selections within the deferred frame must restore only the last one.
+    open_record(records[1])
+    open_record(records[2])
+    wait_for_reveal()
+    assert controller.aiConversationId == records[2].conversation_id
+    # A new selection also supersedes a reveal animation already in progress.
+    open_record(records[0])
+    for _ in range(80):
+        wait_for_events(16)
+        if 0 < float(view.property("opacity")) < 1:
+            break
+    assert panel.property("historyTransitionActive") and not panel.property("historyLoading")
+    open_record(records[1])
+    wait_for_reveal()
+    assert controller.aiConversationId == records[1].conversation_id
+    open_record(records[2])
+    wait_for_reveal()
+    # Selecting the already open conversation preserves the reading position.
+    evaluate(view, "followTail=false; positionViewAtBeginning()")
+    wait_for_events(100)
+    position = float(view.property("contentY"))
+    open_record(records[2])
+    wait_for_events(150)
+    assert not panel.property("historyTransitionActive")
+    assert abs(float(view.property("contentY")) - position) < 1
+    # Hiding cancels queued work; reopening never leaves an invisible timeline.
+    open_record(records[1])
+    evaluate(panel, "prepareToHide()")
+    wait_for_events(160)
+    assert controller.aiConversationId == records[2].conversation_id
+    evaluate(panel, "prepareToShow()")
+    assert float(view.property("opacity")) == 1
+    assert not panel.property("historyTransitionActive")
+    for record, messages in zip(records, original_messages):
+        saved = store.get(record.conversation_id)
+        assert [(row["role"], row["content"]) for row in saved.messages] == messages
+        assert saved.draft == record.draft
+    assert not errors, errors
+    delete_qobject(root)
+    delete_qobject(engine)
+    controller.close()
+    print("History transition OK: loading, stable fade, rapid selection, drafts, retained reading position and hide cancellation")
+    return 0
+
+
 def design_probe() -> int:
     """Compare both reading widths/themes/languages using synthetic local data."""
     from hr_toolkit.gui_qt.compat import delete_qobject
@@ -1337,4 +1501,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(interaction_probe() if "--interaction-only" in sys.argv else long_scroll_probe() if "--long-scroll-only" in sys.argv else design_probe() if "--design-only" in sys.argv else sage_open_probe() if "--sage-open-only" in sys.argv else markdown_probe() if "--markdown-only" in sys.argv else main())
+    sys.exit(history_transition_probe() if "--history-transition-only" in sys.argv else interaction_probe() if "--interaction-only" in sys.argv else long_scroll_probe() if "--long-scroll-only" in sys.argv else design_probe() if "--design-only" in sys.argv else sage_open_probe() if "--sage-open-only" in sys.argv else markdown_probe() if "--markdown-only" in sys.argv else main())
