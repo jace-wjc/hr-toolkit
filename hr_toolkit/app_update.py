@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from hr_toolkit.common.paths import current_executable_path, user_app_data_dir
+from hr_toolkit import runlog
 
 
 GITEE_REPOSITORY = "optimistic-little-sunspot/hr-toolkit"
@@ -96,6 +98,12 @@ WIN7_UPDATER_APP_LOCAL_RUNTIME_FILES = (
 
 class UpdateError(RuntimeError):
     """Raised when update metadata, download, or launch fails."""
+
+
+class _MetadataRequestError(UpdateError):
+    def __init__(self, message: str, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class _PlatformUnavailableError(UpdateError):
@@ -327,7 +335,50 @@ def latest_installer_download(platform: str) -> tuple[str, str]:
 
 
 def _fetch_json_object(url: str, *, timeout: int, no_cache: bool = False) -> dict[str, Any]:
-    headers = {"User-Agent": USER_AGENT}
+    # Both update checks and link sharing use this path. Never substitute a
+    # cached old release or an unverified installer URL when discovery fails.
+    for attempt in range(2):
+        try:
+            payload = _fetch_json_value(url, timeout=timeout, no_cache=no_cache or attempt > 0)
+            break
+        except _MetadataRequestError as exc:
+            if attempt or not exc.retryable:
+                raise
+            if url == GITEE_LATEST_RELEASE_API_URL:
+                try:
+                    return _fetch_gitee_release_list(timeout=timeout)
+                except UpdateError as fallback:
+                    raise UpdateError(f"{exc}；Gitee 备用查询：{fallback}") from fallback
+            time.sleep(0.5)
+    if not isinstance(payload, dict):
+        raise UpdateError("更新配置格式不正确。")
+    return payload
+
+
+def _fetch_gitee_release_list(*, timeout: int) -> dict[str, Any]:
+    """Gitee's list is not newest-first; never mistake its first row for latest."""
+    candidates = []
+    for page in range(1, 4):
+        url = GITEE_LATEST_RELEASE_API_URL.rsplit("/", 1)[0] + f"?page={page}&per_page=100"
+        rows = _fetch_json_value(url, timeout=timeout, no_cache=True)
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise UpdateError("更新版本列表格式不正确。")
+        candidates.extend(row for row in rows if not row.get("draft") and not row.get("prerelease")
+                          and re.fullmatch(r"v\d+\.\d+\.\d+", str(row.get("tag_name") or "")))
+        if len(rows) < 100:
+            if not candidates:
+                raise UpdateError("暂时无法确认最新正式版本，请稍后重试。")
+            release = max(candidates, key=lambda row: tuple(int(part) for part in row["tag_name"][1:].split(".")))
+            runlog.log_line(f"更新查询已通过 Gitee 版本列表恢复：{release['tag_name']}")
+            return release
+    # Do not silently claim a partial list contains the latest release.
+    raise UpdateError("更新版本列表未读取完整，暂时无法确认最新版本。")
+
+
+def _fetch_json_value(url: str, *, timeout: int, no_cache: bool = False) -> Any:
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    if url == GITEE_LATEST_RELEASE_API_URL:
+        no_cache = True
     if no_cache:
         headers.update({"Cache-Control": "no-cache", "Pragma": "no-cache"})
     request = urllib.request.Request(url, headers=headers)
@@ -340,16 +391,34 @@ def _fetch_json_object(url: str, *, timeout: int, no_cache: bool = False) -> dic
             if len(raw_payload) > UPDATE_MANIFEST_MAX_BYTES:
                 raise UpdateError("更新配置文件过大，已拒绝读取。")
             payload = raw_payload.decode("utf-8-sig")
+    except urllib.error.HTTPError as exc:
+        # Do not store response bodies, cookies, signed query strings or proxy
+        # credentials. Record only the endpoint, status and request ID.
+        endpoint = urllib.parse.urlsplit(url)
+        request_id = re.sub(r"[^\w.-]", "", str((exc.headers or {}).get("X-Request-Id", "")))[:120]
+        status = exc.code
+        exc.close()
+        runlog.log_line(f"更新请求被拒绝：{endpoint.hostname}{endpoint.path}；HTTP {status}；request_id={request_id}")
+        raise _MetadataRequestError(
+            f"无法读取更新配置：HTTP {status}；接口 {endpoint.hostname}{endpoint.path}",
+            retryable=status in (403, 408, 429, 500, 502, 503, 504),
+        ) from exc
     except UpdateError:
         raise
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        endpoint = urllib.parse.urlsplit(url)
+        runlog.log_line(f"更新请求连接异常：{endpoint.hostname}{endpoint.path}；{type(reason).__name__}")
+        raise _MetadataRequestError(
+            f"无法读取更新配置：{type(reason).__name__}",
+            retryable=not isinstance(reason, ssl.SSLError),
+        ) from exc
     except Exception as exc:
         raise UpdateError(f"无法读取更新配置：{exc}") from exc
     try:
         data = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise UpdateError("更新配置不是有效的 JSON。") from exc
-    if not isinstance(data, dict):
-        raise UpdateError("更新配置格式不正确。")
     return data
 
 

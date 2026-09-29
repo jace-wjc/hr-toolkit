@@ -230,6 +230,8 @@ MESSAGES = {
  '暂时无法检查资料，请稍后重试。': 'Files cannot be checked right now. Try again later.',
  '更换': 'Change',
  '更新下载失败': 'Update Download Failed',
+ '更新下载暂未完成': 'Update Download Not Completed',
+ '当前版本仍可继续使用，已有资料和处理结果不受影响。\n\n请稍后点击“检查更新”重新下载；如持续出现，请联系维护人员协助处理。': 'You can continue using this version. Your files and results are unaffected.\n\nTry Check for Updates again later to download the update. If the issue persists, contact your support team.',
  '更新下载已取消': 'Update Download Canceled',
  '更新内容，可上下滚动': 'Release notes; scroll to read',
  '更新前可以查看本次新增和修复的内容。': 'Review new features and fixes before updating.',
@@ -371,6 +373,13 @@ MESSAGES = {
  '档案表生成': 'Generate Company Archives',
  '检查更新': 'Check for Updates',
  '检查更新失败': 'Update Check Failed',
+ '暂时无法检查更新': 'Update check temporarily unavailable',
+ '暂时无法获取更新信息': 'Update Information Temporarily Unavailable',
+ '当前版本仍可正常使用，已有资料和处理结果不受影响。\n\n请稍后再试；如持续出现，请联系维护人员协助更新。': 'You can continue using this version. Your files and results are unaffected.\n\nTry again later. If the issue persists, contact your support team for help updating.',
+ '暂时无法获取下载地址': 'Download Link Temporarily Unavailable',
+ '本次未复制新的下载地址，剪贴板原有内容未改动。\n\n请稍后再试；如需立即下载安装包，请联系维护人员获取对应系统的下载地址。': 'No new download link was copied. Your clipboard contents are unchanged.\n\nTry again later. If you need the installer now, contact your support team for a link matching your operating system.',
+ '暂时无法复制': 'Copy Temporarily Unavailable',
+ '系统剪贴板暂时不可用，请稍后再试。': 'The system clipboard is temporarily unavailable. Try again later.',
  '模板 ': 'Template ',
  '模板列名确认窗口新增“已记住的选择”，可查看、修改或删除已记住的列名选择；直接确认时默认仅本次文件生效。': 'Added Saved Mappings to column review, with '
                                                          'editing and deletion. Unsaved choices apply to the '

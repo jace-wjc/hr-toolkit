@@ -3,11 +3,13 @@ from __future__ import annotations
 import threading
 
 import io
+import json
 import copy
 import ssl
 import tempfile
 import unittest
 import urllib.request
+import urllib.error
 import zipfile
 import os
 import stat
@@ -44,6 +46,107 @@ from hr_toolkit.update_runner import main as update_runner_main
 
 
 class AppUpdateTests(unittest.TestCase):
+    @staticmethod
+    def _json_response(payload):
+        return io.BytesIO(json.dumps(payload).encode("utf-8"))
+
+    @staticmethod
+    def _metadata_http_error(url=GITEE_LATEST_RELEASE_API_URL, code=403):
+        return urllib.error.HTTPError(url, code, "Forbidden", {"X-Request-Id": "request-123"},
+                                      io.BytesIO(b"private response body"))
+
+    def test_latest_403_recovers_update_and_share_link_using_gitee_list(self) -> None:
+        manifest, release = self._gitee_uploaded_release()
+        older = {**release, "tag_name": "v0.7.8"}
+        prerelease = {**release, "tag_name": "v99.0.0", "prerelease": True}
+        draft = {**release, "tag_name": "v98.0.0", "draft": True}
+        for action in ("check", "share"):
+            responses = [self._metadata_http_error(), self._json_response([older, release, prerelease, draft])]
+            if action == "check":
+                responses.append(self._json_response(manifest))
+            with self.subTest(action=action), \
+                    patch("hr_toolkit.app_update._open_url", side_effect=responses) as network, \
+                    patch("hr_toolkit.app_update.runlog.log_line"):
+                if action == "check":
+                    update = check_for_update("0.7.8", GITEE_LATEST_RELEASE_API_URL, "windows-x64-win7")
+                    self.assertEqual(update.version, "0.7.9")
+                    self.assertEqual(update.sha256, manifest["platforms"]["windows-x64-win7"]["sha256"])
+                    url = update.file_url
+                else:
+                    version, url = latest_installer_download("win7")
+                    self.assertEqual(version, "0.7.9")
+                self.assertTrue(url.endswith("HRToolkit_0.7.9_win7_x64-setup.exe"))
+                requests = [call.args[0] for call in network.call_args_list]
+                self.assertTrue(all(request.full_url.startswith("https://gitee.com/") for request in requests))
+                self.assertIn("/releases?page=1&per_page=100", requests[1].full_url)
+                self.assertEqual(requests[0].get_header("Accept"), "application/json")
+                self.assertEqual(requests[0].get_header("Cache-control"), "no-cache")
+
+    def test_metadata_failure_is_bounded_and_logs_no_signed_urls_or_response_body(self) -> None:
+        url = "https://gitee.com/example/latest.json?token=private-token"
+        for selected_url in (url, GITEE_LATEST_RELEASE_API_URL):
+            with self.subTest(url=selected_url), \
+                    patch("hr_toolkit.app_update._open_url", side_effect=[self._metadata_http_error(selected_url), self._metadata_http_error(selected_url)]) as network, \
+                    patch("hr_toolkit.app_update.time.sleep"), \
+                    patch("hr_toolkit.app_update.runlog.log_line") as log:
+                with self.assertRaises(UpdateError) as failure:
+                    fetch_update_manifest(selected_url)
+                self.assertEqual(network.call_count, 2)
+                details = str(failure.exception) + str(log.call_args_list)
+                self.assertIn("HTTP 403", details)
+                self.assertIn("request-123", details)
+                self.assertNotIn("private-token", details)
+                self.assertNotIn("private response body", details)
+
+    def test_manifest_retry_recovers_but_invalid_json_and_tls_do_not_retry(self) -> None:
+        url = "https://gitee.com/example/latest.json"
+        with patch("hr_toolkit.app_update._open_url", side_effect=[self._metadata_http_error(url), self._json_response({"version": "1.0.0"})]) as network, \
+                patch("hr_toolkit.app_update.time.sleep"), patch("hr_toolkit.app_update.runlog.log_line"):
+            self.assertEqual(fetch_update_manifest(url)["version"], "1.0.0")
+            self.assertEqual(network.call_count, 2)
+            self.assertEqual(network.call_args.args[0].get_header("Cache-control"), "no-cache")
+        for response in (io.BytesIO(b"not json"), urllib.error.URLError(ssl.SSLCertVerificationError("invalid certificate"))):
+            with self.subTest(response=response), \
+                    patch("hr_toolkit.app_update._open_url", side_effect=[response]) as network, \
+                    patch("hr_toolkit.app_update.runlog.log_line"):
+                with self.assertRaises(UpdateError):
+                    fetch_update_manifest(url)
+                self.assertEqual(network.call_count, 1)
+
+    def test_release_list_recovers_timeout_and_selects_numeric_version(self) -> None:
+        releases = [{"tag_name": tag} for tag in ("v0.9.9", "v0.9.23", "v0.9.14")]
+        with patch("hr_toolkit.app_update._open_url", side_effect=[TimeoutError(), self._json_response(releases)]) as network, \
+                patch("hr_toolkit.app_update.runlog.log_line"):
+            from hr_toolkit.app_update import _fetch_json_object
+            self.assertEqual(_fetch_json_object(GITEE_LATEST_RELEASE_API_URL, timeout=10)["tag_name"], "v0.9.23")
+            self.assertEqual(network.call_count, 2)
+
+    def test_release_list_never_substitutes_older_installer_or_partial_history(self) -> None:
+        _manifest, release = self._gitee_uploaded_release()
+        newest = {**release, "tag_name": "v0.8.0", "assets": []}
+        cases = ([release, newest], [], {"error": "denied"}, [{"tag_name": "v99.0.0", "prerelease": True}])
+        for rows in cases:
+            with self.subTest(rows=rows), \
+                    patch("hr_toolkit.app_update._open_url", side_effect=[self._metadata_http_error(), self._json_response(rows)]) as network, \
+                    patch("hr_toolkit.app_update.runlog.log_line"):
+                with self.assertRaises(UpdateError):
+                    latest_installer_download("win7")
+                self.assertEqual(network.call_count, 2)
+        with patch("hr_toolkit.app_update._open_url", side_effect=[self._metadata_http_error()] + [self._json_response([release] * 100) for _ in range(3)]) as network, \
+                patch("hr_toolkit.app_update.runlog.log_line"):
+            with self.assertRaisesRegex(UpdateError, "未读取完整"):
+                latest_installer_download("windows")
+            self.assertEqual(network.call_count, 4)
+
+    def test_release_list_reads_next_page_before_selecting_latest(self) -> None:
+        from hr_toolkit.app_update import _fetch_json_object
+        responses = [self._metadata_http_error(), self._json_response([{"tag_name": "v0.9.9"}] * 100),
+                     self._json_response([{"tag_name": "v0.9.23"}])]
+        with patch("hr_toolkit.app_update._open_url", side_effect=responses) as network, \
+                patch("hr_toolkit.app_update.runlog.log_line"):
+            self.assertEqual(_fetch_json_object(GITEE_LATEST_RELEASE_API_URL, timeout=10)["tag_name"], "v0.9.23")
+            self.assertIn("page=2", network.call_args.args[0].full_url)
+
     def test_share_link_fetches_latest_again_and_selects_recipient_platform(self) -> None:
         def release(version):
             prefix = f"https://gitee.com/optimistic-little-sunspot/hr-toolkit/releases/download/v{version}/"

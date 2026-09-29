@@ -334,6 +334,64 @@ class QtControllerTests(unittest.TestCase):
             controller._apply_download_link("windows", ("0.9.11", "https://latest.example/setup.exe"), "")
             gui.clipboard.assert_not_called()
 
+    def test_update_network_notices_are_actionable_and_keep_details_in_log(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        notices = []
+        controller.notificationRequested.connect(lambda *args: notices.append(args))
+        detail = "所有更新源均不可用：HTTP Error 403: Forbidden"
+        with patch("hr_toolkit.gui_qt.controller.runlog.log_line") as log, \
+                patch("hr_toolkit.gui_qt.controller.QGuiApplication") as gui:
+            controller._update_manual = True
+            controller._update_busy = True
+            controller._update_phase = "checking"
+            controller._apply_update_result("check-error", detail)
+            title, body, level = notices[-1]
+            self.assertEqual(title, "暂时无法获取更新信息")
+            self.assertEqual(level, "warning")
+            self.assertIn("当前版本仍可正常使用", body)
+            self.assertIn("联系维护人员", body)
+            self.assertNotIn("403", body)
+            self.assertNotIn("请联网", body)
+            self.assertFalse(controller.updateBusy)
+            self.assertFalse(controller.updateBlocksTools)
+            self.assertIn(detail, str(log.call_args))
+            controller._download_link_busy = True
+            controller._apply_download_link("win7", None, detail)
+            title, body, level = notices[-1]
+            self.assertEqual(title, "暂时无法获取下载地址")
+            self.assertIn("剪贴板原有内容未改动", body)
+            self.assertIn("对应系统", body)
+            self.assertNotIn("HTTP", body)
+            self.assertFalse(controller.downloadLinkBusy)
+            gui.clipboard.assert_not_called()
+            self.assertIn(detail, str(log.call_args))
+            controller._update_busy = True
+            controller._update_phase = "downloading"
+            controller._apply_update_result("download-error", detail)
+            title, body, level = notices[-1]
+            self.assertEqual(title, "更新下载暂未完成")
+            self.assertIn("重新下载", body)
+            self.assertNotIn("HTTP", body)
+            self.assertFalse(controller.updateBlocksTools)
+            controller._update_manual = False
+            count = len(notices)
+            controller._apply_update_result("check-error", detail)
+            self.assertEqual(len(notices), count)
+
+    def test_copy_download_clipboard_error_does_not_expose_exception(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        notices = []
+        controller.notificationRequested.connect(lambda *args: notices.append(args))
+        with patch("hr_toolkit.gui_qt.controller.QGuiApplication") as gui, \
+                patch("hr_toolkit.gui_qt.controller.runlog.log_line") as log:
+            gui.clipboard.side_effect = RuntimeError("private native clipboard error")
+            controller._apply_download_link("windows", ("0.9.23", "https://gitee.com/setup.exe"), "")
+            self.assertEqual(notices[-1][0], "暂时无法复制")
+            self.assertNotIn("private", notices[-1][1])
+            self.assertIn("private native clipboard error", str(log.call_args))
+
     def test_sheet_choices_persist_names_but_not_this_file_absences(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

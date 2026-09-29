@@ -3542,7 +3542,13 @@ class AppController(QObject):
         self._download_link_busy = False
         self.downloadLinkChanged.emit()
         if error:
-            self.notificationRequested.emit("未能复制下载地址", f"{error}\n请联网后重试，本次未复制任何地址。", "warning")
+            runlog.log_line(f"获取下载地址失败（{platform}）：{error}")
+            self.notificationRequested.emit(
+                "暂时无法获取下载地址",
+                "本次未复制新的下载地址，剪贴板原有内容未改动。\n\n"
+                "请稍后再试；如需立即下载安装包，请联系维护人员获取对应系统的下载地址。",
+                "warning",
+            )
             return
         version, url = result
         try:
@@ -3551,7 +3557,8 @@ class AppController(QObject):
                 raise RuntimeError("系统剪贴板暂不可用")
             clipboard.setText(url)
         except Exception as exc:
-            self.notificationRequested.emit("复制失败", str(exc), "error")
+            runlog.log_line(f"复制下载地址时剪贴板不可用：{exc}")
+            self.notificationRequested.emit("暂时无法复制", "系统剪贴板暂时不可用，请稍后再试。", "warning")
             return
         label = "Windows 7" if platform == "win7" else "Windows 10 / 11"
         self.notificationRequested.emit(
@@ -3617,10 +3624,16 @@ class AppController(QObject):
             return
         if kind == "check-error":
             self._update_busy = False
-            self._update_status = "检查更新失败"
+            self._update_status = "暂时无法检查更新"
             self.updateChanged.emit()
+            runlog.log_line(f"检查更新失败（v{__version__} / {sys.platform}）：{payload}")
             if getattr(self, "_update_manual", False):
-                self.notificationRequested.emit("检查更新失败", str(payload), "error")
+                self.notificationRequested.emit(
+                    "暂时无法获取更新信息",
+                    "当前版本仍可正常使用，已有资料和处理结果不受影响。\n\n"
+                    "请稍后再试；如持续出现，请联系维护人员协助更新。",
+                    "warning",
+                )
             return
         if kind == "none":
             self._update_busy = False
@@ -3654,13 +3667,17 @@ class AppController(QObject):
             return
         if kind == "download-error":
             self._update_busy = False
-            self._update_status = "更新下载失败"
+            self._update_status = "更新下载暂未完成"
             self._update_progress = -1.0
             self.updateChanged.emit()
+            runlog.log_line(f"更新下载失败，稍后重试：{payload}")
             if self._update_manual:
-                self.notificationRequested.emit("更新失败", str(payload), "error")
-            else:
-                runlog.log_line(f"后台更新下载失败，稍后重试：{payload}")
+                self.notificationRequested.emit(
+                    "更新下载暂未完成",
+                    "当前版本仍可继续使用，已有资料和处理结果不受影响。\n\n"
+                    "请稍后点击“检查更新”重新下载；如持续出现，请联系维护人员协助处理。",
+                    "warning",
+                )
             return
         if kind == "download-cancelled":
             self._update_busy = False
