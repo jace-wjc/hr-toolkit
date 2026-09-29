@@ -109,6 +109,143 @@ class FakeGiteeClient:
         return (self.assets_dir / "SHA256SUMS.txt").read_bytes()
 
 
+class GiteeCurlAPITransportTests(unittest.TestCase):
+    """No network/subprocess execution: simulate curl's files and status."""
+
+    def setUp(self):
+        self.client = gitee_publish.GiteeClient("private/token+value", api_transport="curl",
+                                               upload_transport="urllib", curl_executable="/usr/bin/curl", timeout=60)
+        self.calls = []
+        self.output = io.StringIO()
+        self.responses = []
+        runner = mock.patch.object(gitee_publish.subprocess, "run", side_effect=self.run_curl)
+        self.runner = runner.start()
+        self.addCleanup(runner.stop)
+        sleeper = mock.patch.object(gitee_publish.time, "sleep")
+        self.sleep = sleeper.start()
+        self.addCleanup(sleeper.stop)
+        stderr = redirect_stderr(self.output)
+        stderr.__enter__()
+        self.addCleanup(stderr.__exit__, None, None, None)
+
+    def run_curl(self, command, **kwargs):
+        response_path = Path(command[command.index("--output") + 1])
+        body_path = response_path.parent / "body"
+        self.calls.append((command, kwargs, body_path.read_bytes() if body_path.exists() else None))
+        if gitee_publish.os.name == "posix":
+            self.assertEqual(response_path.parent.stat().st_mode & 0o077, 0)
+            self.assertEqual(response_path.stat().st_mode & 0o077, 0)
+            if body_path.exists():
+                self.assertEqual(body_path.stat().st_mode & 0o077, 0)
+        item = self.responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        status, body, code = item
+        response_path.write_bytes(body)
+        return mock.Mock(returncode=code, stdout=str(status), stderr="private/token+value")
+
+    def get_release(self):
+        return self.client.get_release_by_tag("company/hr", "v0.9.25")
+
+    def create_release(self):
+        return self.client.create_release("company/hr", tag="v0.9.25", target_commitish="a" * 40,
+                                          name="Release", body="Notes")
+
+    def methods(self):
+        return [command[command.index("--request") + 1] for command, _kwargs, _body in self.calls]
+
+    def test_success_security_flags_token_privacy_and_cleanup(self):
+        self.responses = [(200, b'{"id":7}', 0)]
+        self.assertEqual(self.get_release(), {"id": 7})
+        command, kwargs, body = self.calls[0]
+        self.assertEqual(command[1], "--disable")
+        for flag in ("--http1.1", "--tlsv1.2", "--max-time", "--max-filesize"):
+            self.assertIn(flag, command)
+        for flag in ("--insecure", "--location", "--retry", "--verbose"):
+            self.assertNotIn(flag, command)
+        self.assertNotIn("private", str(command))
+        self.assertIn("access_token=private%2Ftoken%2Bvalue", kwargs["input"])
+        self.assertEqual(kwargs["timeout"], 65)
+        self.assertIsNone(body)
+        self.assertFalse(Path(command[command.index("--output") + 1]).parent.exists())
+
+    def test_waf_retry_recovers_and_persistent_block_stops(self):
+        waf = b'<html id="baidu_waf_intercept_page">private/token+value</html>'
+        self.responses = [(403, waf, 0), (200, b'{"id":7}', 0)]
+        self.assertEqual(self.get_release(), {"id": 7})
+        self.sleep.assert_called_once_with(15)
+        self.calls.clear()
+        self.sleep.reset_mock()
+        self.responses = [(403, waf, 0)] * 4
+        with self.assertRaisesRegex(gitee_publish.GiteeRequestError, "HTTP 403"):
+            self.get_release()
+        self.assertEqual(self.methods(), ["GET"] * 4)
+        self.assertEqual(self.sleep.call_args_list, [mock.call(15), mock.call(30), mock.call(60)])
+        self.assertNotIn("private", self.output.getvalue())
+        self.assertNotIn("<html", self.output.getvalue())
+
+    def test_certificate_redirect_permission_and_size_errors_are_final(self):
+        for item in (("000", b"", 60), ("000", b"", 77), ("000", b"", 63),
+                     (302, b"", 0), (403, b'{"message":"permission"}', 0)):
+            self.calls.clear()
+            self.responses = [item]
+            with self.subTest(item=item), self.assertRaises(gitee_publish.GiteeRequestError) as error:
+                self.get_release()
+            self.assertFalse(error.exception.retryable)
+            self.assertEqual(len(self.calls), 1)
+            self.assertNotIn("private", str(error.exception))
+
+    def test_timeout_then_read_recovers(self):
+        for failure in (("000", b"", 28), gitee_publish.subprocess.TimeoutExpired("curl", 65)):
+            self.responses = [failure, (200, b'{"id":7}', 0)]
+            self.assertEqual(self.get_release(), {"id": 7})
+
+    def test_lost_post_is_reconciled_not_blindly_replayed(self):
+        self.responses = [("000", b"", 28), (200, b'{"id":7}', 0)]
+        self.assertEqual(self.create_release(), {"id": 7})
+        self.assertEqual(self.methods(), ["POST", "GET"])
+        self.assertIn(b"access_token=private%2Ftoken%2Bvalue", self.calls[0][2])
+        self.assertNotIn("private", str(self.calls[0][0]))
+
+    def test_create_retries_only_after_confirmed_absence(self):
+        self.responses = [(403, b"<html>blocked</html>", 0), (404, b"{}", 0), (200, b'{"id":7}', 0)]
+        self.assertEqual(self.create_release(), {"id": 7})
+        self.assertEqual(self.methods(), ["POST", "GET", "POST"])
+        self.assertEqual(self.calls[0][2], self.calls[2][2])
+
+    def test_public_download_follows_only_https_without_token(self):
+        self.responses = [(200, b"checksum", 0)]
+        self.assertEqual(self.client.get_public_bytes("https://gitee.com/checksum"), b"checksum")
+        command, kwargs, body = self.calls[0]
+        self.assertIn("--location", command)
+        self.assertEqual(command[command.index("--proto-redir") + 1], "=https")
+        self.assertNotIn("access_token", kwargs["input"])
+        self.assertIsNone(body)
+
+    def test_oversized_response_and_invalid_status_are_rejected(self):
+        for response in ((200, b"x" * 33, 0), ("unexpected-output", b"{}", 0)):
+            self.responses = [response]
+            with mock.patch.object(gitee_publish, "API_RESPONSE_MAX_BYTES", 32), \
+                    self.assertRaises(gitee_publish.GiteeRequestError) as error:
+                self.get_release()
+            self.assertFalse(error.exception.retryable)
+
+    def test_missing_curl_does_not_fall_back_to_another_write_transport(self):
+        self.client._curl_executable = None
+        with mock.patch.object(gitee_publish.shutil, "which", return_value=None), \
+                self.assertRaises(gitee_publish.GiteeRequestError):
+            self.create_release()
+        self.runner.assert_not_called()
+
+    def test_urllib_context_advertises_http11_with_verification(self):
+        with mock.patch.object(gitee_publish.ssl.SSLContext, "set_alpn_protocols", autospec=True) as alpn, \
+                mock.patch.object(gitee_publish.ssl, "HAS_ALPN", True):
+            client = gitee_publish.GiteeClient("test")
+        self.assertEqual(alpn.call_args.args[-1], ["http/1.1"])
+        self.assertTrue(client._ssl_context.check_hostname)
+        self.assertEqual(client._ssl_context.verify_mode, ssl.CERT_REQUIRED)
+
+
 class GiteeClientTransportTests(unittest.TestCase):
     """Offline regressions for the v0.9.24 API/WAF failure and safe retries."""
 

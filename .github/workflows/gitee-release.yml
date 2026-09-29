@@ -142,4 +142,5 @@ jobs:
             --assets-dir gitee-release-metadata \
             --source-metadata-only \
             --upload-transport urllib \
+            --api-transport curl \
             --timeout 60

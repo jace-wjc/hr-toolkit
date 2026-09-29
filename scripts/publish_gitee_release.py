@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import http.client
+import io
 import json
 import mimetypes
 import os
@@ -9,6 +10,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -43,6 +45,7 @@ METADATA_NAMES = ("latest.json", "SHA256SUMS.txt")
 SOURCE_RELEASE_ASSET_NAMES = ("SHA256SUMS.txt",)
 USER_AGENT = "HRToolkit-Gitee-Publisher/1.0"
 URLLIB_MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+API_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 
 
 class GiteeReleaseError(RuntimeError):
@@ -66,6 +69,7 @@ class GiteeClient:
         api_base: str = DEFAULT_API_BASE,
         timeout: int = DEFAULT_TIMEOUT,
         upload_transport: str = "curl",
+        api_transport: str = "urllib",
         curl_executable: str | None = None,
     ) -> None:
         if not token.strip():
@@ -76,8 +80,90 @@ class GiteeClient:
         if upload_transport not in UPLOAD_TRANSPORTS:
             raise GiteeReleaseError(f"不支持的附件上传方式：{upload_transport}")
         self.upload_transport = upload_transport
+        if api_transport not in UPLOAD_TRANSPORTS:
+            raise GiteeReleaseError(f"不支持的 API 请求方式：{api_transport}")
+        self.api_transport = api_transport
         self._curl_executable = curl_executable
         self._ssl_context = ssl.create_default_context()
+        if getattr(ssl, "HAS_ALPN", False):
+            try:
+                self._ssl_context.set_alpn_protocols(["http/1.1"])
+            except NotImplementedError:
+                pass
+
+    def _curl_api_request(self, request: urllib.request.Request, *, public_download: bool):
+        """One request only; retries and POST reconciliation belong to the caller.
+
+        Credentials are passed through stdin/private temporary files, never
+        process arguments. API redirects are refused to avoid token forwarding.
+        """
+        curl = self._curl_executable or shutil.which("curl")
+        if not curl:
+            raise GiteeRequestError("curl API 请求需要系统提供 curl。", retryable=False)
+        parsed = urllib.parse.urlsplit(request.full_url)
+        if parsed.scheme != "https" or parsed.username or parsed.password:
+            raise GiteeRequestError("curl API 请求只允许无内嵌凭据的 HTTPS 地址。", retryable=False)
+        if public_download and (request.get_method() != "GET" or request.data is not None):
+            raise GiteeRequestError("公开附件读取只允许 GET。", retryable=False)
+        with tempfile.TemporaryDirectory(prefix="hr-gitee-request-") as temporary:
+            response_path = Path(temporary) / "response"
+            # TemporaryDirectory is private (0700); files additionally use 0600.
+            with response_path.open("wb"):
+                pass
+            response_path.chmod(0o600)
+            config = ['url = "' + _curl_config_escape(request.full_url) + '"']
+            for key, value in request.header_items():
+                config.append('header = "' + _curl_config_escape(key + ": " + value) + '"')
+            config.append('header = "Expect:"')
+            if request.data is not None:
+                body_path = Path(temporary) / "body"
+                body_path.write_bytes(request.data)
+                body_path.chmod(0o600)
+                config.append('data-binary = "@' + _curl_config_escape(str(body_path)) + '"')
+            command = [curl, "--disable", "--config", "-", "--silent", "--show-error",
+                       "--globoff", "--http1.1", "--proto", "=https", "--tlsv1.2",
+                       "--connect-timeout", str(min(30, self.timeout)), "--max-time", str(self.timeout),
+                       "--max-filesize", str(API_RESPONSE_MAX_BYTES),
+                       "--request", request.get_method(), "--output", str(response_path),
+                       "--write-out", "%{http_code}"]
+            if public_download:
+                command.extend(["--location", "--max-redirs", "5", "--proto-redir", "=https"])
+            try:
+                result = subprocess.run(command, input="\n".join(config) + "\n", text=True,
+                                        encoding="utf-8", capture_output=True, check=False,
+                                        timeout=self.timeout + 5)
+            except subprocess.TimeoutExpired:
+                raise GiteeRequestError("curl API 请求超时。", retryable=True) from None
+            except OSError:
+                raise GiteeRequestError("无法启动 curl API 请求。", retryable=False) from None
+            if result.returncode:
+                # Never echo stderr, response bodies or a config-bearing exception.
+                # Certificate, configuration, redirect and size failures are final.
+                raise GiteeRequestError(
+                    f"curl API 连接失败，退出码 {result.returncode}。",
+                    retryable=result.returncode in {5, 6, 7, 18, 28, 52, 55, 56, 92},
+                )
+            status_text = result.stdout.strip()
+            if len(status_text) != 3 or not status_text.isdigit():
+                raise GiteeRequestError("curl API 未返回有效 HTTP 状态。", retryable=False)
+            status = int(status_text)
+            if 300 <= status < 400:
+                raise GiteeRequestError(f"Gitee API 返回 HTTP {status}，已拒绝转发凭据。",
+                                        retryable=False, status=status)
+            if status < 200:
+                raise GiteeRequestError("curl API 未返回最终 HTTP 状态。", retryable=False)
+            with response_path.open("rb") as stream:
+                payload = stream.read(API_RESPONSE_MAX_BYTES + 1 if status < 400 else 4096)
+            if status >= 400:
+                raise urllib.error.HTTPError(request.full_url, status, "HTTP error", {}, io.BytesIO(payload))
+            if len(payload) > API_RESPONSE_MAX_BYTES:
+                raise GiteeRequestError("Gitee API 响应过大。", retryable=False)
+            return io.BytesIO(payload)
+
+    def _open_api_request(self, request: urllib.request.Request, *, public_download: bool):
+        if self.api_transport == "curl":
+            return self._curl_api_request(request, public_download=public_download)
+        return urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context)
 
     def get_release_by_tag(self, repository: str, tag: str) -> dict[str, Any] | None:
         path = f"/repos/{_quoted_repository(repository)}/releases/tags/{urllib.parse.quote(tag, safe='')}"
@@ -269,7 +355,7 @@ class GiteeClient:
 
     def get_public_bytes(self, url: str) -> bytes:
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        return self._request_bytes(request, "读取公开附件")
+        return self._request_bytes(request, "读取公开附件", public_download=True)
 
     def _request_bytes(
         self,
@@ -278,14 +364,13 @@ class GiteeClient:
         *,
         allow_not_found: bool = False,
         require_json: bool = False,
+        public_download: bool = False,
     ) -> bytes | None:
         # POST has its own reconcile-before-retry logic at release/asset level.
         retries = API_RETRY_DELAYS if request.get_method() in {"GET", "PATCH", "DELETE"} else ()
         for attempt in range(len(retries) + 1):
             try:
-                with urllib.request.urlopen(
-                    request, timeout=self.timeout, context=self._ssl_context,
-                ) as response:
+                with self._open_api_request(request, public_download=public_download) as response:
                     payload = response.read()
                 if require_json:
                     try:
@@ -316,7 +401,7 @@ class GiteeClient:
                     if blocked else _redact(body[:1000], self._token)
                 )
                 error = GiteeRequestError(
-                    f"{operation} 返回 HTTP {exc.code}：{detail}",
+                    f"{operation} [{self.api_transport}] 返回 HTTP {exc.code}：{detail}",
                     retryable=blocked or exc.code in RETRYABLE_HTTP_CODES,
                     status=exc.code,
                 )
@@ -944,6 +1029,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument("--token-env", default="GITEE_TOKEN")
     parser.add_argument("--timeout", type=_positive_int, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--api-transport", choices=UPLOAD_TRANSPORTS, default="urllib",
+                        help="API 和公开元数据读取方式；CI 使用 curl，重试及发布核对策略不变")
     parser.add_argument(
         "--max-asset-bytes",
         type=_positive_int,
@@ -1004,7 +1091,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         api_base=args.api_base,
         timeout=args.timeout,
         upload_transport=args.upload_transport,
+        api_transport=args.api_transport,
     )
+    print(f"Gitee API 请求方式：{args.api_transport}；HTTPS 证书校验已启用。")
     release_name = args.name or f"HR Toolkit {tag}"
     if args.source_metadata_only:
         body = args.body or "源码与校验文件自动同步；安装包由维护者手动上传。"
