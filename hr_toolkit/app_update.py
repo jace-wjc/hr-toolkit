@@ -157,7 +157,17 @@ def create_https_context() -> ssl.SSLContext:
         raise UpdateError(f"无法加载 HTTPS 根证书：{exc}") from exc
     if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
         raise UpdateError("HTTPS 证书校验未正确启用。")
+    # urllib adds this for its default context, but not for a custom CA context.
+    # Keep HTTP/1.1 negotiation consistent without weakening certificate checks.
+    alpn = False
+    if getattr(ssl, "HAS_ALPN", False):
+        try:
+            context.set_alpn_protocols(["http/1.1"])
+            alpn = True
+        except NotImplementedError:
+            pass
     diagnostics.event("tls_context", ca_source=ca_source, verify_peer=True, check_hostname=True,
+                      alpn_http11=alpn,
                       minimum_version=getattr(getattr(context, "minimum_version", None), "name", "unknown"))
     return context
 
@@ -445,13 +455,19 @@ def _fetch_json_value(url: str, *, timeout: int, no_cache: bool = False) -> Any:
         # credentials. Diagnostics only classify one bounded error-body sample.
         endpoint = diagnostics.endpoint(url)
         diagnostics.response_info(exc, request_number, url)
-        diagnostics.error_sample(exc, request_number)
+        waf_response = diagnostics.error_sample(exc, request_number)
+        retry_after = str((exc.headers or {}).get("Retry-After", "")).strip()
         request_id = re.sub(r"[^\w.-]", "", str((exc.headers or {}).get("X-Request-Id", "")))[:120]
         status = exc.code
         exc.close()
         diagnostics.event("request_end", request=request_number, outcome="http_error", status=status,
                           elapsed_ms=int((time.monotonic() - started) * 1000))
         runlog.log_line(f"更新请求被拒绝：{endpoint}；HTTP {status}；request_id={request_id}")
+        if (status == 403 and waf_response and not retry_after
+                and url == GITEE_LATEST_RELEASE_API_URL and sys.platform == "win32"):
+            recovered = _try_windows_release_request(url, headers, timeout)
+            if recovered is not None:
+                return recovered
         raise _MetadataRequestError(
             f"无法读取更新配置：HTTP {status}；接口 {endpoint}",
             retryable=status in (403, 408, 429, 500, 502, 503, 504),
@@ -483,6 +499,53 @@ def _fetch_json_value(url: str, *, timeout: int, no_cache: bool = False) -> Any:
         raise UpdateError("更新配置不是有效的 JSON。") from exc
     diagnostics.event("json_decoded", request=request_number, value_type=type(data).__name__)
     return data
+
+
+def _try_windows_release_request(url, headers, timeout):
+    """One compatibility attempt, not a fallback for auth/TLS/rate-limit errors."""
+    try:
+        from hr_toolkit import windows_update_http
+
+        if not windows_update_http.direct_connection_allowed():
+            diagnostics.event("transport_fallback_skipped", reason="network_policy", transport="winhttp")
+            return None
+    except Exception as exc:
+        diagnostics.event("transport_fallback_skipped", reason="unavailable", transport="winhttp",
+                          **diagnostics.exception_fields(exc))
+        return None
+    request_number = diagnostics.next_request()
+    started = time.monotonic()
+    diagnostics.event("transport_fallback", transport="winhttp", reason="identified_waf",
+                      request=request_number, endpoint=diagnostics.endpoint(url))
+    diagnostics.event("request_start", request=request_number, transport="winhttp",
+                      endpoint=diagnostics.endpoint(url), timeout_seconds=timeout,
+                      user_agent=USER_AGENT, ca_source="windows_system", verify_peer=True,
+                      check_hostname=True, redirects=False)
+    try:
+        with windows_update_http.fetch_release(url, headers, timeout) as response:
+            diagnostics.response_info(response, request_number, url)
+            if response.status != 200:
+                diagnostics.error_sample(response, request_number)
+                diagnostics.event("request_end", request=request_number, transport="winhttp",
+                                  outcome="http_error", status=response.status,
+                                  elapsed_ms=int((time.monotonic() - started) * 1000))
+                return None
+            raw = response.read(UPDATE_MANIFEST_MAX_BYTES + 1)
+            if len(raw) > UPDATE_MANIFEST_MAX_BYTES:
+                raise ValueError("Native update response too large")
+            data = json.loads(raw.decode("utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("Native update response is not an object")
+        diagnostics.event("request_end", request=request_number, transport="winhttp",
+                          outcome="recovered", bytes_read=len(raw),
+                          elapsed_ms=int((time.monotonic() - started) * 1000))
+        return data
+    except Exception as exc:
+        # Keep the original HTTP error and existing bounded list fallback.
+        diagnostics.event("request_end", request=request_number, transport="winhttp",
+                          outcome="failed", elapsed_ms=int((time.monotonic() - started) * 1000),
+                          **diagnostics.exception_fields(exc))
+        return None
 
 
 def parse_update_manifest(manifest: dict[str, Any], manifest_url: str, platform: str) -> UpdateInfo:

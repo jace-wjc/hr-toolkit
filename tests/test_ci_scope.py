@@ -16,6 +16,14 @@ SPEC.loader.exec_module(ci_scope)
 
 
 class CIScopeTests(unittest.TestCase):
+    def test_windows_update_transport_covers_callers_and_win7(self):
+        for path in ("hr_toolkit/windows_update_http.py", "hr_toolkit/app_update.py",
+                     "hr_toolkit/update_diagnostics.py"):
+            scope = ci_scope.select_scope([path])
+            self.assertTrue({"tests.test_windows_update_http", "tests.test_app_update",
+                             "tests.test_update_diagnostics"}.issubset(scope["targets"]))
+            self.assertIn("tests.test_windows_update_http", scope["win7_targets"])
+
     def test_update_diagnostics_routes_cover_existing_update_callers(self):
         for path in ("hr_toolkit/update_diagnostics.py", "hr_toolkit/app_update.py"):
             with self.subTest(path=path):

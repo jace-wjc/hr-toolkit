@@ -34,7 +34,7 @@ WIN7 = set((
     "salary_split social_security tool_registry paths pdf_backend_compat "
     "release_metadata background_process qt_controller qt_entrypoint qt_form_specs "
     "run_coordinator material_preferences material_collector_gui project_creation_gui "
-    "ci_scope presentation personnel_reconcile ai_assistant update_diagnostics"
+    "ci_scope presentation personnel_reconcile ai_assistant update_diagnostics windows_update_http"
 ).split())
 PIN_TEST = (
     "tests.test_windows_packaging.WindowsPackagingTests."
@@ -82,8 +82,9 @@ ROUTES = {
     "hr_toolkit/tutorial_content.py": GUI,
     "hr_toolkit/_icon_data.py": "app_icons qt_entrypoint",
     "hr_toolkit/update_runner.py": "app_update",
-    "hr_toolkit/app_update.py": "app_update update_diagnostics qt_controller qt_entrypoint",
-    "hr_toolkit/update_diagnostics.py": "update_diagnostics app_update qt_controller",
+    "hr_toolkit/app_update.py": "app_update update_diagnostics windows_update_http qt_controller qt_entrypoint",
+    "hr_toolkit/update_diagnostics.py": "update_diagnostics windows_update_http app_update qt_controller",
+    "hr_toolkit/windows_update_http.py": "windows_update_http app_update update_diagnostics qt_controller",
     "packaging/windows/HRToolkit.iss": "app_update windows_packaging release_metadata",
     "hr_toolkit/release_notes.py": "release release_metadata app_update qt_controller windows_packaging prepare_gitee_release",
     "hr_toolkit/material_preferences.py": MATERIAL,

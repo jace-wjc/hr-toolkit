@@ -1,7 +1,7 @@
 """Bounded, local-only update diagnostics; never log credentials or raw bodies.
 
-This module observes existing requests. It must not change their headers,
-transport, proxy, TLS policy, retries or application results.
+This module observes requests without initiating network operations. Error
+classification can be used by the caller's bounded compatibility policy.
 """
 
 from __future__ import annotations
@@ -93,9 +93,15 @@ def exception_fields(exc):
 def environment():
     try:
         windows = sys.getwindowsversion() if sys.platform == "win32" else None
+        # GetVersionEx/.build can report 9200 on Windows 11 without a manifest.
+        actual_version = platform.win32_ver()[1] if windows is not None else ""
+        build_parts = actual_version.split(".")
+        actual_build = int(build_parts[2]) if len(build_parts) >= 3 and build_parts[2].isdigit() else None
+        if actual_build is None and windows is not None:
+            actual_build = getattr(windows, "platform_version", (None, None, None))[2]
         event("environment", app=version_label(__version__), os=sys.platform,
               os_release=platform.release(),
-              windows_build=windows.build if windows is not None else None,
+              windows_build=actual_build,
               python=".".join(str(n) for n in sys.version_info[:3]),
               ssl=ssl.OPENSSL_VERSION, frozen=bool(getattr(sys, "frozen", False)),
               process_bits=64 if sys.maxsize > 2 ** 32 else 32,
@@ -198,6 +204,7 @@ def response_info(response, request_number, requested_url):
 def error_sample(response, request_number):
     """Read at most one small buffer using the existing request timeout.
 
+    Returns True only for known HTML WAF content without a rate-limit marker.
     Only fixed classifications leave this function. A marker is evidence of a
     response type, NOT proof of the remote firewall's rule or who configured it.
     """
@@ -207,7 +214,7 @@ def error_sample(response, request_number):
         reader = getattr(response, "read1", None)
         if encoding not in ("", "identity") or not callable(reader):
             event("error_sample", request=request_number, sample="unavailable")
-            return
+            return False
         raw = reader(ERROR_SAMPLE_BYTES)
         text = raw.decode("utf-8-sig", errors="replace").lower()
         stripped = text.lstrip()
@@ -216,10 +223,13 @@ def error_sample(response, request_number):
             kind = "json_like"
         elif "<html" in text or "<!doctype html" in text:
             kind = "html"
+        waf = "baidu_waf_intercept_page" in text
+        rate_limit = any(marker in text for marker in (
+            "rate limit", "rate_limit", "too many requests", "访问频率", "请求过于频繁"))
         event("error_sample", request=request_number, sample="read", sampled_bytes=len(raw),
               sample_at_limit=len(raw) >= ERROR_SAMPLE_BYTES, body_kind=kind,
-              waf_marker="baidu_waf_intercept_page" in text,
-              rate_limit_marker=any(marker in text for marker in (
-                  "rate limit", "rate_limit", "too many requests", "访问频率", "请求过于频繁")))
+              waf_marker=waf, rate_limit_marker=rate_limit)
+        return kind == "html" and waf and not rate_limit
     except Exception as exc:
         event("error_sample", request=request_number, sample="unavailable", **exception_fields(exc))
+        return False
