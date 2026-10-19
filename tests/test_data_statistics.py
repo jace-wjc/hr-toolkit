@@ -477,6 +477,76 @@ class DataStatisticsTest(unittest.TestCase):
             self.assertEqual(rows["黄六"][2], "财务部")
             wb.close()
 
+    def test_staff_list_limits_all_output_sheets(self) -> None:
+        from hr_toolkit.tools.data_statistics import ExpectedReporter, ReportRecord
+
+        source_name = "模拟数据09.01-10.02.xlsx"
+        attendance = [
+            AttendanceSourceRow(
+                source_file=source_name, source_row=index, name=name,
+                company="总部", department="模拟部门", day=datetime(2026, 9, 21).date(),
+                missing_punch_count=1, expected_hours=7, actual_hours=7,
+                plan_time="08:30~12:00|14:00~17:30", punch_record="08:08,17:31",
+            )
+            for index, name in enumerate(("李四", "张三", "王五"), start=2)
+        ]
+        weekly = [
+            ReportRecord("周报", str(index), datetime(2026, 9, 21, 18), name,
+                         "总部", "模拟部门", source_name, index)
+            for index, name in enumerate(("李四", "王五"), start=2)
+        ]
+        monthly = [ReportRecord("月报", "1", datetime(2026, 10, 2, 18), "李四",
+                                "总部", "模拟部门", source_name, 2)]
+        cases = (
+            (None, {"张三", "李四", "王五"}, {"李四", "王五"}),
+            (["张三"], {"张三"}, {"张三"}),
+            ([], set(), set()),
+            (["名单内无考勤"], set(), {"名单内无考勤"}),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / source_name
+            staff_file = root / "应汇报人员名单.xlsx"
+            source.touch()
+            staff_file.touch()
+            for index, (staff_names, attendance_names, report_names) in enumerate(cases):
+                with self.subTest(staff_names=staff_names), patch(
+                    "hr_toolkit.tools.data_statistics._read_statistics_file",
+                    return_value=(attendance, weekly, monthly),
+                ), patch(
+                    "hr_toolkit.tools.data_statistics._read_expected_reporters",
+                    return_value=[ExpectedReporter(name) for name in staff_names or []],
+                ):
+                    kwargs = {
+                        "report_staff_path": staff_file if staff_names is not None else None,
+                        "week_start": "2026-09-21", "week_end": "2026-09-21",
+                    }
+                    result = generate_data_statistics_reports(source, root / str(index), **kwargs)
+                    preview = generate_data_statistics_reports(source, root / str(index), dry_run=True, **kwargs)
+                    self.assertEqual(result.attendance_source_count, 3)
+                    self.assertEqual((result.weekly_record_count, result.monthly_record_count), (2, 1))
+                    sheets = (
+                        ("考勤统计", 4, 3, "attendance_person_count", attendance_names),
+                        ("周月报统计", 4, 3, "report_person_count", report_names),
+                        ("考勤异常明细", 3, 2, "attendance_exception_count", attendance_names),
+                        ("周月报异常明细", 3, 2, "report_exception_count", report_names),
+                    )
+                    wb = load_workbook(result.output_file, data_only=False)
+                    try:
+                        for title, column, start, count_field, names in sheets:
+                            count = getattr(result, count_field)
+                            self.assertEqual(getattr(preview, count_field), count)
+                            actual = {wb[title].cell(row, column).value for row in range(start, start + count)}
+                            self.assertEqual(actual, names)
+                        if staff_names == ["张三"]:
+                            self.assertEqual(result.attendance_person_count, 1)
+                            self.assertEqual(result.report_person_count, 1)
+                            self.assertEqual(result.attendance_exception_count, 1)
+                            self.assertEqual(result.report_exception_count, 2)
+                            self.assertEqual(wb["考勤异常明细"].cell(2, 7).value, "下班未打卡")
+                    finally:
+                        wb.close()
+
     def test_report_deadline_allows_170059(self) -> None:
         self.assertFalse(
             _generate_deadline_case(datetime(2026, 5, 2, 17, 0, 59)).report_exception_count,

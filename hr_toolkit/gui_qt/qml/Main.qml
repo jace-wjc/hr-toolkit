@@ -1162,6 +1162,16 @@ ApplicationWindow {
                                             RecentSelectionButton { objectName: "supportRecentButton"; backend: controller; selectionRole: "support" }
                                             AppButton { enabled: controller.selectionEnabled; visible: !!controller.supportPath; text: "清除"; variant: "link"; onClicked: controller.clearSupport() }
                                         }
+                                        Text {
+                                            objectName: "reportStaffScopeHint"
+                                            Layout.fillWidth: true
+                                            visible: controller.currentTool === "data_statistics"
+                                            text: Ui.text("上传名单：只统计名单内人员的考勤、周报和月报，名单外人员不纳入结果。\n不上传名单：统计已上传考勤、周报和月报数据中的全部人员，不按名单筛选。")
+                                            textFormat: Text.PlainText
+                                            color: root.textMain
+                                            font.pixelSize: 12
+                                            wrapMode: Text.Wrap
+                                        }
                                         Text { Layout.fillWidth: true; text: Ui.text(controller.supportDropHint); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
                                         Text {
                                             id: supportSelectionFeedback

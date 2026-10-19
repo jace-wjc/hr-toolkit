@@ -299,6 +299,15 @@ def generate_data_statistics_reports(
         )
         warnings.extend(report_warnings)
 
+        if staff_path is not None:
+            # 保留原始记录推断周期及个人统计，仅统一限定汇总和明细的人员范围。
+            # 已上传但未识别出人员的名单也不回退为统计所有人。
+            expected_names = {reporter.name for reporter in expected_reporters}
+            attendance_summaries = [item for item in attendance_summaries if item.name in expected_names]
+            attendance_exceptions = [item for item in attendance_exceptions if item.name in expected_names]
+            report_summaries = [item for item in report_summaries if item.name in expected_names]
+            report_exceptions = [item for item in report_exceptions if item.name in expected_names]
+
         result = DataStatisticsResult(
             input_dir=display_input,
             output_dir=output,
