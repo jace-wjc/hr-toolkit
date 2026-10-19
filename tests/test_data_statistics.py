@@ -17,6 +17,8 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from hr_toolkit.tools.data_statistics import (
     AttendancePersonSummary,
+    AttendanceSourceRow,
+    _summarize_attendance,
     _write_attendance_sheet,
     generate_data_statistics_reports,
     parse_report_date,
@@ -98,11 +100,11 @@ class DataStatisticsTest(unittest.TestCase):
             self.assertEqual(attendance.cell(3, 8).value, 0.5)
             self.assertEqual(attendance.cell(3, 12).value, 0.5)
             self.assertEqual(attendance.cell(3, 15).value, 3)
-            self.assertIn("4.10上班未打卡", attendance.cell(3, 17).value)
+            self.assertIn("4.10漏打卡1次（上班或下班待人工确认）", attendance.cell(3, 17).value)
             self.assertIn("4.15晚上加班0.5天", attendance.cell(3, 17).value)
             self.assertIn("4.15晚上加班0.5天、下班未打卡", attendance.cell(3, 17).value)
-            self.assertIn("4.30上班未打卡", attendance.cell(3, 17).value)
-            self.assertNotIn("4.30下班未打卡", attendance.cell(3, 17).value)
+            self.assertIn("4.30下班未打卡", attendance.cell(3, 17).value)
+            self.assertNotIn("4.30上班未打卡", attendance.cell(3, 17).value)
 
             report = wb["周月报统计"]
             self.assertEqual(report.max_column, 10)
@@ -144,18 +146,59 @@ class DataStatisticsTest(unittest.TestCase):
             self.assertEqual(remarks_by_day[1], "下班未打卡")
             self.assertEqual(remarks_by_day[2], "上班未打卡")
             self.assertEqual(remarks_by_day[3], "下班未打卡")
-            self.assertEqual(remarks_by_day[4], "上班未打卡")
+            self.assertEqual(remarks_by_day[4], "漏打卡1次（上班或下班待人工确认）")
             self.assertEqual(remarks_by_day[5], "下班未打卡")
             self.assertEqual(remarks_by_day[6], "上班未打卡")
-            self.assertEqual(remarks_by_day[7], "上班未打卡")
+            self.assertEqual(remarks_by_day[7], "漏打卡1次（上班或下班待人工确认）")
             self.assertEqual(remarks_by_day[8], "下班未打卡")
             self.assertEqual(remarks_by_day[9], "上班未打卡")
             self.assertEqual(remarks_by_day[10], "漏打卡1次")
             self.assertEqual(remarks_by_day[11], "漏打卡1次")
-            self.assertEqual(remarks_by_day[20], "上班未打卡")
-            self.assertEqual(remarks_by_day[25], "上班未打卡")
-            self.assertEqual(remarks_by_day[29], "上班未打卡")
+            self.assertEqual(remarks_by_day[20], "漏打卡1次（上班或下班待人工确认）")
+            self.assertEqual(remarks_by_day[25], "漏打卡1次（上班或下班待人工确认）")
+            self.assertEqual(remarks_by_day[29], "下班未打卡")
             self.assertEqual(remarks_by_day[30], "下班未打卡")
+
+    def test_makeup_punch_remarks_preserve_source_count_and_explicit_direction(self) -> None:
+        day_plan = "08:30~12:00|14:00~17:30"
+        uncertain = "漏打卡1次（上班或下班待人工确认）"
+        cases = (
+            # 用户源表 9 月 24 日、30 日均已补下班卡，漏卡次数仍为 1。
+            (24, 1, day_plan, "08:08,17:31", "", 0, "下班未打卡"),
+            (30, 1, day_plan, "06:06,18:20", "", 0, "下班未打卡"),
+            (1, 1, day_plan, "08:21,17:42", "", 0, "上班未打卡"),
+            # 即使有加班，两侧同类时也应保留人工确认提示。
+            (2, 1, day_plan, "08:21,17:30", "", 0.5, uncertain),
+            (3, 1, day_plan, "08:08,17:42", "", 0, uncertain),
+            (4, 1, day_plan, "08:30,17:30,21:43", "", 0.5, uncertain),
+            # 半天班、跨午夜班和乱序记录仍使用实际班次区分两侧。
+            (5, 1, "08:30~12:00", "08:08,12:01", "", 0, "下班未打卡"),
+            (6, 1, "20:00~00:00|01:00~08:00", "08:01,19:55", "", 0, "下班未打卡"),
+            (7, 1, "", "08:08,17:31", "", 0, uncertain),
+            # 时间特征不能新增漏卡，也不能覆盖源表明确的缺卡方向。
+            (8, 0, day_plan, "08:08,17:31", "", 0, None),
+            (9, 1, day_plan, "08:08,17:31", "上班未打卡", 0, "上班未打卡"),
+        )
+        for day, count, plan, punches, explicit, overtime, expected in cases:
+            with self.subTest(day=day, punches=punches):
+                row = AttendanceSourceRow(
+                    source_file="补卡判定样例.xlsx", source_row=2,
+                    name="王小丽", company="总部", department="运营部",
+                    day=datetime(2026, 9, day).date(),
+                    missing_punch_count=count, plan_time=plan, punch_record=punches,
+                    missing_record=explicit, overtime_days=overtime,
+                )
+                summaries, exceptions = _summarize_attendance([row])
+                self.assertEqual(summaries[0].missing_punch_count, count)
+                missing = [item for item in exceptions if item.exception_type == "漏打卡"]
+                if expected is None:
+                    self.assertEqual(missing, [])
+                    self.assertEqual(summaries[0].remarks, [])
+                else:
+                    self.assertEqual(len(missing), 1)
+                    self.assertEqual(missing[0].value, str(count))
+                    self.assertEqual(missing[0].remark, expected)
+                    self.assertIn(expected, summaries[0].remarks[0])
 
     def test_overtime_slot_uses_last_punch_and_exact_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1365,7 +1408,7 @@ def _write_missing_punch_boundary_file(path: Path) -> None:
         # 计划或刷卡信息不足时不强猜方向，只保留事实性次数。
         ["王小丽", "运营部", datetime(2026, 4, 10), 1, 7, 7, 0, 0, 0, 0, "08:30", "17:30", None],
         ["王小丽", "运营部", datetime(2026, 4, 11), 1, 7, 7, 0, 0, 0, 0, None, None, None],
-        # 补上班卡早于 08:30，但已有下班侧刷卡。
+        # 两侧都有刷卡时，特征相同的记录待人工确认，只有下班侧命中特征时记下班漏卡。
         ["王小丽", "运营部", datetime(2026, 4, 20), 1, 7, 7, 0, 0, 0, 0, day_plan, "08:20,17:30", None],
         ["王小丽", "运营部", datetime(2026, 4, 25), 1, 7, 7, 0, 0, 0, 0, day_plan, "08:25,17:35", None],
         ["王小丽", "运营部", datetime(2026, 4, 29), 1, 7, 7, 0, 0, 0, 0, day_plan, "08:29,18:00", None],

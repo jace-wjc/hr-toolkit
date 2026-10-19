@@ -1465,11 +1465,26 @@ def _missing_punch_remark(row: AttendanceSourceRow) -> str:
     if row.missing_record:
         return row.missing_record
     if row.missing_punch_count == 1:
-        if row.overtime_days:
-            return "下班未打卡"
         plan_start = _first_time_in_text(row.plan_time)
         plan_end = _last_time_in_text(row.plan_time)
         punches = _times_in_text(row.punch_record)
+        punch_sides = _punch_sides_for_shift(plan_start, plan_end, punches)
+        if len(punches) > 1:
+            uncertain_remark = "漏打卡1次（上班或下班待人工确认）"
+            if punch_sides is None:
+                return uncertain_remark
+            if any(punch_sides) and not all(punch_sides):
+                # 两侧已有记录时，补卡可能已写回。集团补卡通常为整十分钟或再加一分钟，
+                # 仅在一侧命中特征时推断该侧漏卡；两侧同类时不能按最后一条卡反推。
+                makeup_sides = {
+                    end_side for punch, end_side in zip(punches, punch_sides)
+                    if punch.minute % 10 in (0, 1)
+                }
+                if len(makeup_sides) == 1:
+                    return "下班未打卡" if True in makeup_sides else "上班未打卡"
+                return uncertain_remark
+        if row.overtime_days:
+            return "下班未打卡"
         if len(punches) == 1:
             # 单卡且平台已明确迟到/早退时，优先使用该信号，避免半天班等场景被中点误导。
             has_late = bool(row.late_count or row.late_minutes)
@@ -1477,9 +1492,8 @@ def _missing_punch_remark(row: AttendanceSourceRow) -> str:
             if has_late != has_early:
                 return "下班未打卡" if has_late else "上班未打卡"
         # 其余场景按完整班次的前后半段判断；计划不完整时不强猜缺卡方向。
-        end_side = _punch_record_is_shift_end_side(plan_start, plan_end, row.punch_record)
-        if end_side is not None:
-            return "上班未打卡" if end_side else "下班未打卡"
+        if punch_sides is not None:
+            return "上班未打卡" if any(punch_sides) else "下班未打卡"
         return "漏打卡1次"
     return f"漏打卡{row.missing_punch_count}次"
 
@@ -2373,15 +2387,14 @@ def _last_time_in_text(text: str) -> time | None:
     return values[-1] if values else None
 
 
-def _punch_record_is_shift_end_side(
+def _punch_sides_for_shift(
     plan_start: time | None,
     plan_end: time | None,
-    punch_record: str,
-) -> bool | None:
-    """判断最晚一条有效刷卡是否落在班次后半段；信息不足时返回 None。"""
+    punches: tuple[time, ...],
+) -> tuple[bool, ...] | None:
+    """按原顺序判断每条刷卡是否位于班次后半段；信息不足时返回 None。"""
     if plan_start is None or plan_end is None or plan_start == plan_end:
         return None
-    punches = _times_in_text(punch_record)
     if not punches:
         return None
 
@@ -2406,9 +2419,8 @@ def _punch_record_is_shift_end_side(
         candidates = (minutes, minutes + day_minutes)
         return min(candidates, key=_distance_to_shift)
 
-    latest_punch = max(_on_shift_timeline(value) for value in punches)
     shift_midpoint = start_minutes + (end_minutes - start_minutes) / 2
-    return latest_punch >= shift_midpoint
+    return tuple(_on_shift_timeline(value) >= shift_midpoint for value in punches)
 
 
 def _zero_blank(value: float) -> float | None:
