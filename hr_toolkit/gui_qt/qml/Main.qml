@@ -1809,6 +1809,7 @@ ApplicationWindow {
                     HoverHandler { id: fileFieldHover }
                 }
                 AppButton { text: "选择文件"; variant: "link"; enabled: controller.selectionEnabled; onClicked: controller.chooseFieldFile(field.id) }
+                RecentSelectionButton { backend: controller; selectionRole: field.id; filesAllowed: true; foldersAllowed: false }
                 AppButton { text: "清除"; variant: "link"; visible: !!field.value; enabled: controller.selectionEnabled; onClicked: controller.setFieldValue(field.id, "") }
             }
             Text { Layout.fillWidth: true; text: Ui.text(field.hint || ""); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
@@ -1818,7 +1819,7 @@ ApplicationWindow {
                 visible: !!feedback.text
                 text: Ui.text(feedback.text || "")
                 textFormat: Text.PlainText
-                color: Ui.color("error"); font.pixelSize: 12; wrapMode: Text.Wrap
+                color: feedback.error ? Ui.color("error") : root.textMuted; font.pixelSize: 12; wrapMode: Text.Wrap
             }
         }
     }

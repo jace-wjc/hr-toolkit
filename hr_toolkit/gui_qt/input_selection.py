@@ -14,6 +14,8 @@ def selection_mode(spec: ToolUiSpec, role: str) -> str:
         return spec.input_mode
     if role == "support" and spec.support_id:
         return spec.support_mode
+    if any(field["id"] == role and field.get("kind") == "file" for field in spec.fields):
+        return "excel_file"
     raise ValueError("这里没有可接收资料的区域。")
 
 

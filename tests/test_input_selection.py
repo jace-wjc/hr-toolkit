@@ -24,6 +24,10 @@ class InputSelectionTests(unittest.TestCase):
         self.assertEqual(selection_mode(spec_for("personnel_change_merge"), "support"), "excel_or_folder")
         self.assertEqual(selection_mode(spec_for("archive_import", "export"), "support"), "excel_archive_or_folder")
         self.assertEqual(selection_mode(spec_for("personnel_change_merge", "reconcile"), "support"), "excel_file")
+        self.assertEqual(selection_mode(spec_for("data_statistics"), "existing_summary_path"), "excel_file")
+        for nav_id, role in (("social_security", "existing_summary_path"), ("data_statistics", "history_options")):
+            with self.subTest(tool=nav_id, role=role), self.assertRaises(ValueError):
+                selection_mode(spec_for(nav_id), role)
 
     def test_types_counts_and_compound_archive_suffixes(self):
         with tempfile.TemporaryDirectory() as temp:

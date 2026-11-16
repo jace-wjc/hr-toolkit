@@ -591,25 +591,32 @@ class QtControllerTests(unittest.TestCase):
         controller = self.controller()
         self.addCleanup(controller.close)
         controller.selectTool("data_statistics")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        source = Path(temporary.name) / "历史.xlsx"
+        source.touch()
         prompts = []
         controller.notificationRequested.connect(lambda *args: prompts.append(args))
         controller._apply_invocation(None, FormValidationError("历史汇总不可用", "请选择历史汇总", "existing_summary_path"), False)
         self.assertTrue(controller.selectionFeedback["existing_summary_path"]["error"])
         self.assertEqual(prompts, [])
         revision = controller.formRevision
-        with patch.object(controller.presentation, "file_dialog", return_value=("/tmp/历史.xlsx", "")), \
+        with patch.object(controller.presentation, "file_dialog", return_value=(str(source), "")), \
+             patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker, \
              patch.object(controller, "_remember_file_dialog_path"):
             controller.chooseFieldFile("existing_summary_path")
+            worker.call_args.kwargs["target"]()
         self.assertGreater(controller.formRevision, revision)
-        self.assertEqual(next(field["value"] for field in controller.formFields if field["id"] == "existing_summary_path"), "/tmp/历史.xlsx")
-        self.assertNotIn("existing_summary_path", controller.selectionFeedback)
+        self.assertEqual(next(field["value"] for field in controller.formFields if field["id"] == "existing_summary_path"), str(source))
+        self.assertFalse(controller.selectionFeedback["existing_summary_path"]["error"])
+        self.assertEqual(controller.recentSelectionItems("existing_summary_path", "file")[0]["path"], str(source))
         self.assertTrue(next(field["visible"] for field in controller.formFields if field["id"] == "history_options"))
         controller.setFieldValue("history_rest_mode", "mixed")
         controller.setFieldValue("history_deducted_people", "张三")
         controller.setFieldValue("history_period", "2026-07")
         with patch.object(controller.presentation, "file_dialog", return_value=("", "")):
             controller.chooseFieldFile("existing_summary_path")
-        self.assertEqual(controller._form_states[controller._state_key()]["existing_summary_path"], "/tmp/历史.xlsx")
+        self.assertEqual(controller._form_states[controller._state_key()]["existing_summary_path"], str(source))
         controller.setFieldValue("existing_summary_path", "")
         self.assertEqual(next(field["value"] for field in controller.formFields if field["id"] == "existing_summary_path"), "")
         options = next(field for field in controller.formFields if field["id"] == "history_options")
@@ -1203,6 +1210,57 @@ class QtControllerTests(unittest.TestCase):
                 self.assertEqual(controller.supportPath, str(source))
                 self.assertTrue(controller.selectionFeedback["support"]["error"])
                 run.assert_not_called()
+
+    def test_attendance_history_recent_selection_is_independent_and_validated(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("data_statistics")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            history, source, staff = (root / name for name in ("历史.xlsx", "考勤.xlsx", "名单.xlsx"))
+            history.touch()
+            key = controller._state_key()
+            controller._input_states[key] = [source]
+            controller._support_states[key] = str(staff)
+            controller._recent_selections[controller._spec.nav_id] = [
+                {"path": str(history), "kind": "file"}, {"path": str(root / "资料.zip"), "kind": "file"},
+            ]
+            with patch.object(Path, "stat", side_effect=AssertionError("history must not touch disk")):
+                self.assertEqual([item["path"] for item in controller.recentSelectionItems("existing_summary_path", "file")], [str(history)])
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker, patch.object(controller, "runOrCancel") as run:
+                controller.useRecentSelection("existing_summary_path", str(history), "file", False)
+                worker.call_args.kwargs["target"]()
+                self.assertEqual(controller._form_states[key]["existing_summary_path"], str(history))
+                self.assertEqual(controller._input_states[key], [source])
+                self.assertEqual(controller.supportPath, str(staff))
+                controller.setFieldValue("history_rest_mode", "pending")
+                history.unlink()
+                controller.useRecentSelection("existing_summary_path", str(history), "file", False)
+                worker.call_args.kwargs["target"]()
+                self.assertEqual(controller._form_states[key]["existing_summary_path"], str(history))
+                self.assertEqual(controller._form_states[key]["history_rest_mode"], "pending")
+                self.assertTrue(controller.selectionFeedback["existing_summary_path"]["error"])
+                run.assert_not_called()
+
+    def test_attendance_history_recent_folder_browses_its_own_picker(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("data_statistics")
+        controller.setFieldValue("existing_summary_path", "/previous.xlsx")
+        controller.setFieldValue("history_rest_mode", "pending")
+        with tempfile.TemporaryDirectory() as temp:
+            controller._recent_selections[controller._spec.nav_id] = [{"path": temp, "kind": "folder"}]
+            with patch("hr_toolkit.gui_qt.controller.threading.Thread") as worker, \
+                 patch.object(controller.presentation, "file_dialog", return_value=("", "")) as picker:
+                controller.useRecentSelection("existing_summary_path", temp, "browse_files", False)
+                worker.call_args.kwargs["target"]()
+                self.assertEqual(picker.call_args.args[2], "历史考勤汇总（可选）")
+                self.assertEqual(picker.call_args.args[3], temp)
+                self.assertEqual(controller._form_states[controller._state_key()]["existing_summary_path"], "/previous.xlsx")
+                self.assertEqual(controller._form_states[controller._state_key()]["history_rest_mode"], "pending")
+                worker.reset_mock()
+                controller.useRecentSelection("existing_summary_path", temp, "browse_folder", False)
+                worker.assert_not_called()
 
     def test_recent_folder_opens_existing_picker_and_cancel_preserves_selection(self) -> None:
         controller = self.controller()

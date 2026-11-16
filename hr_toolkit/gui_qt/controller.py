@@ -1371,9 +1371,10 @@ class AppController(QObject):
 
     @Slot(str, str, result="QVariantList")
     def recentSelectionItems(self, role: str, kind: str):
-        if role not in {"input", "support"} or (role == "support" and not self.hasSupportField):
+        try:
+            mode = selection_mode(self._spec, role)
+        except ValueError:
             return []
-        mode = selection_mode(self._spec, role)
         return [{**item, "name": Path(item["path"]).name or item["path"]}
                 for item in self._tool_recent_selections() if item["kind"] == kind
                 and (kind == "folder" or accepts_file_name(Path(item["path"]), mode))]
@@ -1397,19 +1398,22 @@ class AppController(QObject):
 
     @Slot(str, str, str, bool)
     def useRecentSelection(self, role: str, path: str, action: str, append: bool) -> None:
-        if (not self.selectionEnabled or role not in {"input", "support"}
-                or (role == "support" and not self.hasSupportField)):
+        if not self.selectionEnabled:
+            return
+        try:
+            selection_mode(self._spec, role)
+        except ValueError:
             return
         kind = "file" if action == "file" else "folder"
         if action not in {"file", "browse_files", "browse_folder"} or not any(
                 item["path"] == path and item["kind"] == kind for item in self._tool_recent_selections()):
             return
         allows_files = self.inputAllowsFiles if role == "input" else True
-        allows_folder = self.inputAllowsFolder if role == "input" else self.supportAllowsFolder
+        allows_folder = self.inputAllowsFolder if role == "input" else (role == "support" and self.supportAllowsFolder)
         if (action in {"file", "browse_files"} and not allows_files
                 or action == "browse_folder" and not allows_folder):
             return
-        replace = role == "support" or not self.inputAllowsMultiple or (
+        replace = role != "input" or not self.inputAllowsMultiple or (
             self._spec.tool_id == "data_statistics" and not append)
         self._submit_selection(role, [Path(path)], replace=replace,
                                recent_action=action, recent_append=append)
@@ -1728,14 +1732,20 @@ class AppController(QObject):
             if role == "input":
                 chooser = self._choose_input_files if action == "browse_files" else self._choose_input_folder
                 chooser(append=request["recent_append"], initial_dir=initial_dir)
-            else:
+            elif role == "support":
                 chooser = self._choose_support_file if action == "browse_files" else self._choose_support_folder
                 chooser(initial_dir=initial_dir)
+            else:
+                self._choose_field_file(role, initial_dir=initial_dir)
             return
         if role == "support":
             self._support_states[self._state_key()] = str(paths[0])
             self.supportChanged.emit()
             message = "已设置" + self.supportLabel + "。"
+        elif role != "input":
+            field = next(item for item in self._spec.fields if item["id"] == role and item.get("kind") == "file")
+            self.setFieldValue(role, str(paths[0]))
+            message = "已设置" + field["label"] + "。"
         else:
             before = len(self._input_states[self._state_key()])
             self._set_inputs(paths, replace=request["replace"])
@@ -1901,6 +1911,9 @@ class AppController(QObject):
 
     @Slot(str)
     def chooseFieldFile(self, field_id: str) -> None:
+        self._choose_field_file(field_id)
+
+    def _choose_field_file(self, field_id: str, *, initial_dir: str | None = None) -> None:
         if not self.selectionEnabled:
             return
         field = next((item for item in self._spec.fields if item["id"] == field_id and item["kind"] == "file"), None)
@@ -1908,11 +1921,11 @@ class AppController(QObject):
             return
         filename, _selected = self._presentation.file_dialog(
             QFileDialog.getOpenFileName, self._dialog_parent(), field["label"],
-            self._file_dialog_initial_dir(), "Excel 工作簿 (*.xlsx *.xls)",
+            self._file_dialog_initial_dir() if initial_dir is None else initial_dir, "Excel 工作簿 (*.xlsx *.xls)",
         )
         if filename:
             self._remember_file_dialog_path(filename)
-            self.setFieldValue(field_id, filename)
+            self._submit_selection(field_id, [Path(filename)], replace=True)
 
     def _choose_support_file(self, *, initial_dir: str | None = None) -> None:
         if not self.selectionEnabled or not self.hasSupportField:
