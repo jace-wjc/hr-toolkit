@@ -159,12 +159,27 @@ class CIScopeTests(unittest.TestCase):
         scope = ci_scope.select_scope(["scripts/ci_scope.py"])
         with patch.dict(os.environ, {"CI_SCOPE": json.dumps(scope), "CI_WIN7": "false"}), patch.object(ci_scope.subprocess, "run") as run:
             ci_scope.run_tests()
-        self.assertNotIn("discover", run.call_args[0][0])
-        self.assertIn("tests.test_ci_scope", run.call_args[0][0])
+        selected = run.call_args[0][0]
+        self.assertIn(str(ci_scope.ROOT / 'scripts' / 'run_isolated_tests.py'), selected)
+        self.assertNotIn("--directory", selected)
+        self.assertEqual(selected[selected.index('--targets') + 1:], scope['targets'])
+        self.assertEqual(selected[selected.index('--timeout') + 1], '300')
         scope["full"] = True
         with patch.dict(os.environ, {"CI_SCOPE": json.dumps(scope), "CI_WIN7": "false"}), patch.object(ci_scope.subprocess, "run") as run:
             ci_scope.run_tests()
-        self.assertIn("discover", run.call_args[0][0])
+        self.assertIn("--directory", run.call_args[0][0])
+        self.assertNotIn("--targets", run.call_args[0][0])
+
+    def test_win7_keeps_selected_targets_and_never_uses_full_discovery(self):
+        scope = ci_scope.select_scope(['scripts/run_isolated_tests.py'])
+        self.assertIn('tests.test_run_isolated_tests', scope['win7_targets'])
+        for full in (False, True):
+            scope['full'] = full
+            with patch.dict(os.environ, {'CI_SCOPE': json.dumps(scope), 'CI_WIN7': 'true'}), patch.object(ci_scope.subprocess, 'run') as run:
+                ci_scope.run_tests()
+            selected = run.call_args[0][0]
+            self.assertNotIn('--directory', selected)
+            self.assertEqual(selected[selected.index('--targets') + 1:], scope['win7_targets'])
 
 
 if __name__ == "__main__":

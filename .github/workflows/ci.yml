@@ -183,6 +183,8 @@ jobs:
     name: Windows 7 compatibility stack on Python 3.8
     needs: scope
     if: needs.scope.outputs.run == 'true'
+    # Per-module watchdogs dump stacks and stop at 300s; also bound the whole job.
+    timeout-minutes: 20
     # Keep the frozen Python 3.8/PySide2 stack off Windows Server 2025.
     runs-on: windows-2022
     env:

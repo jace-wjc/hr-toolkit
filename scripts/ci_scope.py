@@ -34,7 +34,7 @@ WIN7 = set((
     "salary_split social_security tool_registry paths pdf_backend_compat "
     "release_metadata background_process qt_controller qt_entrypoint qt_form_specs "
     "run_coordinator material_preferences material_collector_gui project_creation_gui "
-    "ci_scope presentation personnel_reconcile ai_assistant update_diagnostics windows_update_http"
+    "ci_scope run_isolated_tests presentation personnel_reconcile ai_assistant update_diagnostics windows_update_http"
 ).split())
 PIN_TEST = (
     "tests.test_windows_packaging.WindowsPackagingTests."
@@ -116,7 +116,7 @@ ROUTES = {
     "hr_toolkit_qt_app.py": GUI,
     "hr_toolkit_updater.py": "app_update",
     "scripts/ci_scope.py": "ci_scope",
-    "scripts/run_isolated_tests.py": "run_isolated_tests windows_packaging ci_scope",
+    "scripts/run_isolated_tests.py": "run_isolated_tests windows_packaging ci_scope qt_controller presentation",
     "scripts/versioning.py": "versioning release release_metadata",
     "scripts/bump_version.py": "versioning",
     "scripts/release.py": "release versioning",
@@ -258,8 +258,10 @@ def plan():
 def run_tests():
     scope = json.loads(os.environ["CI_SCOPE"])
     win7 = os.environ.get("CI_WIN7") == "true"
+    command = [sys.executable, '-u', str(ROOT / 'scripts' / 'run_isolated_tests.py'),
+               '--timeout', '300']
     if scope["full"] and not win7:
-        command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"]
+        command.extend(['--directory', str(ROOT / 'tests')])
     else:
         targets = scope["win7_targets" if win7 else "targets"]
         if not targets:
@@ -267,7 +269,7 @@ def run_tests():
             return
         if not all(re.fullmatch(r"tests\.test_\w+(?:\.\w+)*", item) for item in targets):
             raise ValueError("Invalid unittest target")
-        command = [sys.executable, "-m", "unittest", "-v", *targets]
+        command.extend(['--targets', *targets])
     subprocess.run(command, cwd=str(ROOT), check=True)
 
 
