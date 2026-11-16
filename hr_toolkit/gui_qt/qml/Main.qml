@@ -52,15 +52,6 @@ ApplicationWindow {
     // Navigation stays full-width when shown; small windows start collapsed.
     readonly property bool compactSidebar: false
 
-    // Native window movement needs no new content frame. Suspend only the
-    // decorative download water while moving; never pause the downloader.
-    property bool windowMoving: false
-    function noteWindowMotion() {
-        if (controller.updateBusy && controller.updatePhase !== "checking") {
-            windowMoving = true
-            windowMoveSettle.restart()
-        }
-    }
     property bool aiPanelRequested: false
     property bool aiPanelCreated: false
     property string rightPanelTab: "files"
@@ -118,15 +109,6 @@ ApplicationWindow {
         }
         else if (rightPanelTab === "sage") sageLauncher.forceActiveFocus()
     }
-    onXChanged: noteWindowMotion()
-    onYChanged: noteWindowMotion()
-    Timer {
-        id: windowMoveSettle
-        interval: 180
-        repeat: false
-        onTriggered: root.windowMoving = false
-    }
-
     // Modal dialogs can wait briefly for settled dimensions. The main layout
     // and docked project-files panel follow live dimensions on every frame.
     property int settledWidth: width
@@ -557,123 +539,85 @@ ApplicationWindow {
                     visible: controller.updateReady || (controller.updateBusy && controller.updatePhase !== "checking")
                     enabled: controller.updateReady && !controller.updateBusy
                     hoverEnabled: true
-                    padding: 10
+                    padding: 9
+                    topPadding: controller.updateReady ? padding : 3
+                    bottomPadding: controller.updateReady ? padding : 15
                     Accessible.name: Ui.text(controller.updateReady ? "重启以更新，版本" + controller.updateVersion : "正在下载更新")
                     onClicked: controller.restartToUpdate()
                     background: Item {
                         Rectangle { anchors.fill: parent; anchors.topMargin: 2; anchors.bottomMargin: -2; color: Ui.color("overlay3"); radius: 10 }
                         Rectangle {
                             anchors.fill: parent; radius: 10
-                            color: sidebarUpdateCard.down ? Ui.color("surface6") : Ui.color("surface")
-                        }
-                        // Small CPU-painted waves also work with Qt 5's software
-                        // renderer. No shader, blur layer or continuous idle work.
-                        Canvas {
-                            id: updateFill
-                            readonly property real fraction: controller.updateReady ? 0 : controller.updatePhase === "verifying" ? 1 : Math.max(0, Math.min(1, controller.updateProgress))
-                            readonly property real level: fraction
-                            property real wavePhase: 0
-                            readonly property bool paintSuspended: root.windowMoving || !visible || !root.visible
-                                || root.visibility === Window.Minimized || Qt.application.state !== Qt.ApplicationActive
-                            readonly property bool wavesRunning: !paintSuspended
-                                && controller.updateBusy && controller.updatePhase === "downloading"
-                                && level > 0 && level < 1
-                            anchors.fill: parent; anchors.margins: 1
-                            visible: !controller.updateReady
-                            renderTarget: Canvas.Image
-                            renderStrategy: Canvas.Cooperative
-                            // Do not stack a per-frame level animation on top
-                            // of the wave timer. Repaint latest progress on resume.
-                            onLevelChanged: if (!paintSuspended) requestPaint()
-                            onWidthChanged: if (!paintSuspended) requestPaint()
-                            onHeightChanged: if (!paintSuspended) requestPaint()
-                            onPaintSuspendedChanged: if (!paintSuspended) requestPaint()
-                            Timer {
-                                interval: 50
-                                repeat: true
-                                running: updateFill.wavesRunning
-                                onTriggered: {
-                                    updateFill.wavePhase = (updateFill.wavePhase + 0.068) % (Math.PI * 2)
-                                    updateFill.requestPaint()
-                                }
-                            }
-                            property color themeRepaintColor: Ui.color("text")
-            onThemeRepaintColorChanged: requestPaint()
-            onPaint: {
-                                if (paintSuspended) return
-                                // Geometry and phase stay constant throughout
-                                // this paint; avoid QML property lookups per point.
-                                var paintWidth = width
-                                var paintHeight = height
-                                var paintLevel = level
-                                var paintPhase = wavePhase
-                                var ctx = getContext("2d")
-                                ctx.clearRect(0, 0, paintWidth, paintHeight)
-                                if (paintWidth <= 0 || paintHeight <= 0 || paintLevel <= 0)
-                                    return
-                                ctx.save()
-                                ctx.beginPath()
-                                ctx.roundedRect(0, 0, paintWidth, paintHeight, Math.min(9, paintWidth / 2, paintHeight / 2), Math.min(9, paintWidth / 2, paintHeight / 2))
-                                ctx.clip()
-                                var waterline = paintHeight * (1 - paintLevel)
-                                // Taper at both ends: 0% stays empty; 100% is full.
-                                var amplitude = Math.min(2.4, paintHeight * paintLevel * 0.45, waterline * 0.45)
-                                function drawWave(offset, direction, scale, color) {
-                                    ctx.beginPath()
-                                    ctx.moveTo(0, paintHeight)
-                                    for (var x = 0; x <= paintWidth + 5; x += 5) {
-                                        var px = Math.min(x, paintWidth)
-                                        var angle = px / paintWidth * Math.PI * 2 + paintPhase * direction + offset
-                                        ctx.lineTo(px, waterline + Math.sin(angle) * amplitude * scale)
-                                    }
-                                    ctx.lineTo(paintWidth, paintHeight)
-                                    ctx.closePath()
-                                    ctx.fillStyle = color
-                                    ctx.fill()
-                                }
-                                drawWave(1.4, -1, 0.7, "rgba(173, 200, 209, 0.22)")
-                                drawWave(0, 1, 1, "rgba(194, 215, 221, 0.42)")
-                                ctx.restore()
-                            }
+                            color: !controller.updateReady ? Ui.color("surface3")
+                                                          : sidebarUpdateCard.down ? Ui.color("selection4") : root.primarySoft
                         }
                         Rectangle {
-                            anchors.fill: parent; anchors.margins: 1; radius: 9
-                            color: "transparent"; border.color: Ui.color("overlay43")
+                            id: updateTrack
+                            readonly property bool verifying: controller.updatePhase === "verifying"
+                            readonly property real fraction: verifying ? 1 : Math.max(0, Math.min(1, controller.updateProgress))
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                            anchors.leftMargin: 9; anchors.rightMargin: 9; anchors.bottomMargin: 2
+                            height: 3
+                            radius: height / 2
+                            color: root.primarySoft
+                            visible: !controller.updateReady && (verifying || controller.updateProgress >= 0)
+
+                            Rectangle {
+                                id: updateFill
+                                width: updateTrack.width * updateTrack.fraction
+                                height: parent.height
+                                radius: parent.radius
+                                color: root.primary
+                            }
                         }
                         Rectangle {
                             anchors.fill: parent; radius: 10; color: "transparent"
-                            border.color: sidebarUpdateCard.visualFocus ? Ui.color("link6") : Ui.color("border8")
+                            border.color: sidebarUpdateCard.visualFocus ? Ui.color("link6") : root.primary
+                            opacity: sidebarUpdateCard.visualFocus ? 1
+                                : !controller.updateReady ? 0.28 : sidebarUpdateCard.hovered ? 0.62 : 0.45
                         }
                     }
                     contentItem: RowLayout {
-                        spacing: 10
-                        Image {
+                        spacing: 8
+                        Rectangle {
                             Layout.preferredWidth: 28; Layout.preferredHeight: 28
-                            source: Qt.resolvedUrl("components/update-feather.png")
-                            fillMode: Image.PreserveAspectFit; smooth: true
+                            radius: 7
+                            color: controller.updateReady ? root.primary : root.primarySoft
+                            ToolIcon {
+                                anchors.centerIn: parent
+                                width: 15; height: 15
+                                iconId: controller.updateReady ? "check" : "arrow_down"
+                                strokeColor: controller.updateReady ? Ui.color("onAccent") : root.primary
+                                lineWidth: 1.6
+                            }
                         }
                         ColumnLayout {
-                            Layout.fillWidth: true; spacing: 3
+                            Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 1
                             Text {
-                                Layout.fillWidth: true; font.pixelSize: 12; font.bold: true; color: root.textMain
+                                Layout.fillWidth: true; font.pixelSize: 13; font.weight: Font.DemiBold
+                                color: controller.updateReady ? root.primary : root.textMain
                                 text: Ui.text(controller.updateReady ? (controller.updateRestarting ? "正在重启…" : "重启以更新") : controller.updatePhase === "verifying" ? "正在检查更新文件…" : "正在下载更新")
                                 elide: Text.ElideRight
                             }
-                            Text {
-                                Layout.fillWidth: true; font.pixelSize: 10; color: root.textMuted
-                                text: Ui.text(controller.updateVersion ? "v" + controller.updateVersion : controller.updateStatus)
-                                elide: Text.ElideRight
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    Layout.fillWidth: true; font.pixelSize: 11
+                                    color: Ui.dark ? root.textMuted : Ui.color("text1")
+                                    text: Ui.text(controller.updateVersion ? "v" + controller.updateVersion : controller.updateStatus)
+                                    elide: Text.ElideRight
+                                }
+                                Text {
+                                    visible: !controller.updateReady && controller.updateProgress >= 0
+                                    text: Ui.text(Math.floor(controller.updateProgress * 100) + "%")
+                                    font.pixelSize: 13; font.weight: Font.DemiBold; color: root.textMain
+                                }
                             }
                         }
-                        Text {
-                            visible: !controller.updateReady && controller.updateProgress >= 0
-                            text: Ui.text(Math.floor(controller.updateProgress * 100) + "%")
-                            font.pixelSize: 13; color: root.textMain
-                        }
-                        ThemedImage {
+                        ToolIcon {
                             visible: controller.updateReady
                             Layout.preferredWidth: 14; Layout.preferredHeight: 14
-                            source: Qt.resolvedUrl("components/arrow-right.png"); sourceSize.width: 28; sourceSize.height: 28; opacity: 0.45
+                            iconId: "chevron_right"; strokeColor: root.primary; lineWidth: 1.55
                         }
                     }
                 }
