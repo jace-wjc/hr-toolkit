@@ -79,7 +79,8 @@ jobs:
     name: Python ${{ matrix.python-version }}
     needs: scope
     if: needs.scope.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    # Python 3.9 has no Ubuntu 26.04 build; keep its supported runner image.
+    runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     env:
       CI_SCOPE: ${{ needs.scope.outputs.scope }}
     strategy:
