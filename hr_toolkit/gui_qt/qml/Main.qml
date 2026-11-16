@@ -1140,25 +1140,6 @@ ApplicationWindow {
                                     }
                                 }
 
-                                RowLayout {
-                                    width: formColumn.width
-                                    visible: controller.currentTool !== "folder_rename"
-                                    spacing: 10
-                                    Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text("结果位置"); color: root.textMain; font.pixelSize: 13 }
-                                    Rectangle {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 36
-                                        color: root.surfaceAlt
-                                        radius: 6
-                                        border.width: 1
-                                        border.color: root.border
-                                        Text { anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; text: Ui.text(controller.hasProject ? "当前项目 / 本次处理结果" : "请先新建或打开工作项目"); color: controller.hasProject ? root.textFaint : root.textDisabled; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
-                                    }
-                                    AppButton { text: "打开项目"; variant: "link"; visible: controller.hasProject; onClicked: controller.openProjectFolder() }
-                                    AppButton { text: "新建项目"; variant: "link"; visible: !controller.hasProject; enabled: controller.selectionEnabled; onClicked: controller.requestCreateProject() }
-                                    AppButton { text: "打开已有"; variant: "link"; visible: !controller.hasProject; enabled: controller.selectionEnabled; onClicked: controller.openProjectDialog() }
-                                }
-
                                 Column {
                                     id: materialOptions
                                     width: formColumn.width
@@ -1375,6 +1356,25 @@ ApplicationWindow {
                                     }
                                     TextMetrics { id: businessTripMetrics; font: businessTrip.contentItem.font; text: Ui.text(businessTrip.text) }
                                     TextMetrics { id: workdayTripMetrics; font: workdayTrip.contentItem.font; text: Ui.text(workdayTrip.text) }
+                                }
+
+                                RowLayout {
+                                    width: formColumn.width
+                                    visible: controller.currentTool !== "folder_rename"
+                                    spacing: 10
+                                    Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text("结果位置"); color: root.textMain; font.pixelSize: 13 }
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 36
+                                        color: root.surfaceAlt
+                                        radius: 6
+                                        border.width: 1
+                                        border.color: root.border
+                                        Text { anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; text: Ui.text(controller.hasProject ? "当前项目 / 本次处理结果" : "请先新建或打开工作项目"); color: controller.hasProject ? root.textFaint : root.textDisabled; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideMiddle }
+                                    }
+                                    AppButton { text: "打开项目"; variant: "link"; visible: controller.hasProject; onClicked: controller.openProjectFolder() }
+                                    AppButton { text: "新建项目"; variant: "link"; visible: !controller.hasProject; enabled: controller.selectionEnabled; onClicked: controller.requestCreateProject() }
+                                    AppButton { text: "打开已有"; variant: "link"; visible: !controller.hasProject; enabled: controller.selectionEnabled; onClicked: controller.openProjectDialog() }
                                 }
 
                             }
