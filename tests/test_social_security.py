@@ -25,6 +25,70 @@ from hr_toolkit.tools.social_security import (
 
 
 class SocialSecurityTest(unittest.TestCase):
+    def test_low_base_rule_respects_threshold_explicit_nature_and_opt_out(self) -> None:
+        from hr_toolkit.tools.social_security import (
+            SocialPaymentLine, _classify_payment_natures,
+            PAYMENT_NORMAL, PAYMENT_ARREARS, PAYMENT_DIFFERENCE,
+        )
+        cases = (
+            (77, None, True, PAYMENT_DIFFERENCE),
+            (499.99, None, True, PAYMENT_DIFFERENCE),
+            (500, None, True, PAYMENT_NORMAL),
+            (4588, None, True, PAYMENT_NORMAL),
+            (None, None, True, PAYMENT_NORMAL),
+            (0, None, True, PAYMENT_NORMAL),
+            (-77, None, True, PAYMENT_NORMAL),
+            (77, PAYMENT_NORMAL, True, PAYMENT_NORMAL),
+            (77, PAYMENT_ARREARS, True, PAYMENT_ARREARS),
+            (1000, PAYMENT_DIFFERENCE, True, PAYMENT_DIFFERENCE),
+            (77, None, False, PAYMENT_NORMAL),
+            (77, PAYMENT_DIFFERENCE, False, PAYMENT_DIFFERENCE),
+        )
+        for basis, nature, enabled, expected in cases:
+            with self.subTest(basis=basis, nature=nature, enabled=enabled):
+                line = SocialPaymentLine(
+                    source_file="缴费.xlsx", source_row=2, name="张三", id_card="360111199001010011",
+                    fee_period="202604", fee_period_end="", billing_period_hint="202604",
+                    period_split_file=False, account_hint="账户", company_hint="", category="养老",
+                    side="单位", wage=None, base=basis, rate=0.16, amount=12.32, nature_hint=nature,
+                )
+                result = _classify_payment_natures(
+                    [line], {line: "账户"}, {"账户": "202604"}, infer_low_base_difference=enabled,
+                )
+                self.assertEqual(result[line], expected)
+
+    def test_low_base_moves_to_difference_without_changing_payment_total(self) -> None:
+        from hr_toolkit.tools.social_security import _read_roster, _build_detail_records
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "北京春苗抚州账户2026年4月社保单位缴费明细.xlsx"
+            roster = root / "参保人员花名册.xlsx"
+            _write_roster(roster)
+            _write_long_payment_rows_with_nature(source, [
+                ["张三", "360111199001010011", "养老保险费", "养老保险单位", date(2026, 4, 1), 77, 0.16, 12.32, ""],
+            ])
+            people = _read_roster(roster, root)
+            lines = _read_payment_file(source)
+            for enabled in (False, True):
+                with self.subTest(enabled=enabled):
+                    records = _build_detail_records(lines, people, [], infer_low_base_difference=enabled)
+                    self.assertEqual(len(records), 1)
+                    self.assertEqual(records[0].unit_total, 12.32)
+                    self.assertEqual(records[0].personal_total, 0)
+                    result = generate_social_security_reports(
+                        source, roster, root / str(enabled), infer_low_base_difference=enabled,
+                    )
+                    book = load_workbook(result.detail_output_file)
+                    try:
+                        ws = book["社保明细表"]
+                        self.assertEqual(ws.cell(4, 44).value, 77 if enabled else None)
+                        self.assertEqual(ws.cell(4, 9).value, None if enabled else 77)
+                        if enabled:
+                            self.assertEqual(ws.cell(4, 48).value, 12.32)
+                            self.assertEqual(ws.cell(2, 44).value, "养老2026年4月补差")
+                    finally:
+                        book.close()
+
     def test_adjustment_cohort_allows_different_history_start_months(self) -> None:
         """同批补差人员参保月份不同，不应把 77 元补差基数当作正常基数。"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -80,7 +144,11 @@ class SocialSecurityTest(unittest.TestCase):
                             base=4588 if month == 10 else 77, rate=0.16,
                             fee_period=f"2025{month:02d}",
                         ))
-                actual = _classify_payment_natures(lines, {line: "账户" for line in lines}, {"账户": "202510"})
+                # 关闭新基数规则时，原有群体识别的重叠月份约束仍然生效。
+                actual = _classify_payment_natures(
+                    lines, {line: "账户" for line in lines}, {"账户": "202510"},
+                    infer_low_base_difference=False,
+                )
                 for line in lines:
                     expected = (PAYMENT_NORMAL if line.fee_period == "202510" else
                                 PAYMENT_DIFFERENCE if line.id_card in confirmed else PAYMENT_UNKNOWN)

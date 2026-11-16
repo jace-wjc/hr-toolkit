@@ -109,6 +109,10 @@ SPECS: tuple[ToolUiSpec, ...] = (
         "社保缴费清单", MULTI_HINT, "选择缴费清单、压缩包或文件夹", "生成报表",
         "请选择社保缴费清单和参保人员花名册，然后点击“生成报表”。结果会保存在当前项目，源文件请自行保管。",
         support_id="roster_path", support_label="参保人员花名册", support_button="选择花名册",
+        fields=({
+            "id": "infer_low_base_difference", "kind": "check", "default": True,
+            "label": "基数低于 500 按补差处理（特殊地区可取消，源表明确性质优先）",
+        },),
     ),
     ToolUiSpec(
         "insurance_ledger", "default", "insurance_ledger", "社保与保险",
@@ -437,7 +441,11 @@ def build_invocation(
         description=description,
     )
     if spec.tool_id == "social_security":
-        return ToolInvocation(**base, function_module="hr_toolkit.tools.social_security", function_name="generate_social_security_reports", args=(inputs, support, output_dir), kwargs={})
+        return ToolInvocation(
+            **base, function_module="hr_toolkit.tools.social_security", function_name="generate_social_security_reports",
+            args=(inputs, support, output_dir),
+            kwargs={"infer_low_base_difference": bool(values.get("infer_low_base_difference", True))},
+        )
     if spec.tool_id == "insurance_ledger":
         return ToolInvocation(**base, function_module="hr_toolkit.tools.insurance_ledger", function_name="generate_insurance_ledger", args=(inputs, support, output_dir), kwargs={})
     if spec.tool_id == "data_statistics":

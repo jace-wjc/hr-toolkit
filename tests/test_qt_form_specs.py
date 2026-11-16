@@ -15,6 +15,11 @@ from hr_toolkit.gui_qt.form_specs import (
 
 
 class QtFormSpecTests(unittest.TestCase):
+    def test_social_low_base_rule_defaults_on_and_can_be_disabled(self) -> None:
+        self.assertTrue(self.invocation("social_security").kwargs["infer_low_base_difference"])
+        call = self.invocation("social_security", values={"infer_low_base_difference": False})
+        self.assertFalse(call.kwargs["infer_low_base_difference"])
+
     def test_reconcile_starts_without_confirmations_and_preserves_explicit_options(self) -> None:
         default_call = self.invocation("personnel_change_merge", "reconcile")
         self.assertEqual(default_call.tool_id, "personnel_reconcile")

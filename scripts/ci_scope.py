@@ -54,6 +54,7 @@ ROUTES = {
     "hr_toolkit/gui_qt/input_selection.py": "input_selection " + GUI,
     "hr_toolkit/gui_qt/controller.py": "ai_assistant input_selection personnel_reconcile " + GUI,
     "hr_toolkit/gui_qt/form_specs.py": "input_selection personnel_reconcile " + GUI,
+    "hr_toolkit/tools/social_security.py": "social_security qt_form_specs",
     "hr_toolkit/tools/personnel_reconcile.py": "personnel_reconcile template_mapping tool_registry project_run run_coordinator " + GUI,
     "hr_toolkit/gui_qt/qml/components/FileDropTarget.qml": "input_selection " + GUI,
     "hr_toolkit/gui_qt/qml/components/PresetMenuButton.qml": "material_preferences " + GUI,

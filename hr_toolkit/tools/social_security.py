@@ -90,6 +90,7 @@ PAYMENT_NORMAL = "normal"
 PAYMENT_ARREARS = "arrears"
 PAYMENT_DIFFERENCE = "difference"
 PAYMENT_UNKNOWN = "unknown"
+LOW_BASE_DIFFERENCE_THRESHOLD = 500
 
 FEE_PERIOD_START_HEADERS = (
     "费款所属日期起",
@@ -330,6 +331,7 @@ def generate_social_security_reports(
     roster_path: str | Path,
     output_dir: str | Path,
     *,
+    infer_low_base_difference: bool = True,
     dry_run: bool = False,
     cancelled: Callable[[], bool] | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
@@ -387,7 +389,9 @@ def generate_social_security_reports(
                     f"正在读取社保缴费清单：{file_index}/{len(source_files)}",
                 )
 
-        detail_records = _build_detail_records(lines, roster_people, warnings)
+        detail_records = _build_detail_records(
+            lines, roster_people, warnings, infer_low_base_difference=infer_low_base_difference,
+        )
         result = SocialSecurityResult(
             input_path=display_input,
             roster_path=roster,
@@ -941,6 +945,8 @@ def _build_detail_records(
     lines: list[SocialPaymentLine],
     roster_people: dict[str, RosterPerson],
     warnings: list[str],
+    *,
+    infer_low_base_difference: bool = True,
 ) -> list[DetailRecord]:
     resolved: list[tuple[SocialPaymentLine, RosterPerson, str, str, str]] = []
     account_by_line: dict[SocialPaymentLine, str] = {}
@@ -961,7 +967,10 @@ def _build_detail_records(
         resolved.append((line, person, account_display, source_company, source_place))
 
     billing_periods = _billing_periods_by_account(resolved)
-    natures = _classify_payment_natures([item[0] for item in resolved], account_by_line, billing_periods)
+    natures = _classify_payment_natures(
+        [item[0] for item in resolved], account_by_line, billing_periods,
+        infer_low_base_difference=infer_low_base_difference,
+    )
     resolved_groups: OrderedDict[
         tuple[str, str, str],
         list[tuple[SocialPaymentLine, RosterPerson, str, str, str]],
@@ -978,7 +987,7 @@ def _build_detail_records(
             if warning_key not in unsupported_difference_warning_keys:
                 unsupported_difference_warning_keys.add(warning_key)
                 warnings.append(
-                    f"{person.name} {line.category}来源明确为补差，但模板没有对应补差明细列；"
+                    f"{person.name} {line.category}识别为补差，但模板没有对应补差明细列；"
                     "金额已保留在普通缴费区，请人工确认。"
                 )
             nature = PAYMENT_NORMAL
@@ -1161,6 +1170,8 @@ def _classify_payment_natures(
     lines: list[SocialPaymentLine],
     account_by_line: dict[SocialPaymentLine, str],
     billing_periods: dict[str, str],
+    *,
+    infer_low_base_difference: bool = True,
 ) -> dict[SocialPaymentLine, str]:
     result: dict[SocialPaymentLine, str] = {}
     current_by_person: dict[tuple[str, str, str, str], list[SocialPaymentLine]] = {}
@@ -1172,6 +1183,11 @@ def _classify_payment_natures(
         billing_period = billing_periods.get(account, "")
         if line.nature_hint:
             result[line] = line.nature_hint
+        elif (infer_low_base_difference and line.base is not None
+              and 0 < line.base < LOW_BASE_DIFFERENCE_THRESHOLD):
+            # 客户确认的通用经验规则；空白/零基数不作为有效依据，
+            # 明确缴费性质优先，特殊地区可关闭此规则保留原判断。
+            result[line] = PAYMENT_DIFFERENCE
         if line.fee_period and billing_period and line.fee_period < billing_period:
             history_groups.setdefault((line.id_card, account, line.category, line.side), []).append(line)
         elif line.fee_period and line.fee_period == billing_period:
