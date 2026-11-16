@@ -281,15 +281,17 @@ class ProjectRunCoordinator:
                 text = f"正在检查原文件：已发现 {scanned} 个文件"
                 callbacks.progress(completed, int(total or 0), text)
 
-            # Only the explicitly selected existing change summary opts into
-            # current-version reading. Other tools/inputs keep strict reuse.
-            current_version_roles = (
-                frozenset({"template_path"})
-                if request.tool_id == "personnel_change_merge"
+            # Explicitly selected historical summaries may contain manual edits.
+            # All other inputs retain the existing strict reuse checks.
+            current_version_roles = frozenset()
+            if (request.tool_id == "personnel_change_merge"
                 and getattr(request.function, "__module__", "") == "hr_toolkit.tools.personnel_change_merge"
-                and getattr(request.function, "__name__", "") == "merge_personnel_changes"
-                else frozenset()
-            )
+                and getattr(request.function, "__name__", "") == "merge_personnel_changes"):
+                current_version_roles = frozenset({"template_path"})
+            elif (request.tool_id == "data_statistics"
+                  and getattr(request.function, "__module__", "") == "hr_toolkit.tools.data_statistics"
+                  and getattr(request.function, "__name__", "") == "generate_data_statistics_reports"):
+                current_version_roles = frozenset({"existing_summary_path"})
             replacements = store.reference_run_sources(
                 batch_id,
                 sources,
@@ -301,6 +303,8 @@ class ProjectRunCoordinator:
                 raise BusinessProcessCancelled("本次处理已停止。")
             if current_version_roles and replacements.get("template_path"):
                 callbacks.log("已使用当前选择的汇总表，原文件由用户自行保存。")
+            if "existing_summary_path" in current_version_roles and replacements.get("existing_summary_path"):
+                callbacks.log("已读取当前选择的历史考勤汇总，将按抵扣状态结转余额，原表不会被修改。")
             # Renaming needs a result copy before execution. Reuse its existing
             # read-only preview to validate configuration before making that copy.
             if getattr(request.function, "__module__", "") in {"hr_toolkit.tools.folder_rename", "hr_toolkit.tools.rename_plan"}:

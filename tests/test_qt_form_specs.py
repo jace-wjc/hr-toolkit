@@ -15,6 +15,30 @@ from hr_toolkit.gui_qt.form_specs import (
 
 
 class QtFormSpecTests(unittest.TestCase):
+    def test_attendance_history_is_optional_and_separate_from_staff_list(self) -> None:
+        self.assertNotIn("existing_summary_path", self.invocation("data_statistics").kwargs)
+        history = self.root / "历史.xlsx"
+        history.touch()
+        call = self.invocation("data_statistics", values={"existing_summary_path": str(history), "history_rest_mode": "pending"})
+        self.assertEqual(call.kwargs["existing_summary_path"], history)
+        self.assertEqual(call.kwargs["report_staff_path"], self.file_b)
+        self.assertEqual(call.kwargs["history_rest_mode"], "pending")
+        self.assertIsNone(call.kwargs["history_period"])
+        for values in ({}, {"history_rest_mode": "mixed"}, {"history_rest_mode": "pending", "history_period": "2026-13"}):
+            with self.subTest(values=values), self.assertRaises(FormValidationError) as caught:
+                self.invocation("data_statistics", values={"existing_summary_path": str(history), **values})
+            self.assertEqual(caught.exception.field, "history_options")
+        mixed = self.invocation("data_statistics", values={"existing_summary_path": str(history),
+            "history_rest_mode": "mixed", "history_deducted_people": "张三、李四", "history_period": "2026-07"})
+        self.assertEqual(mixed.kwargs["history_deducted_people"], "张三、李四")
+        self.assertEqual(mixed.kwargs["history_period"], "2026-07")
+        self.assertNotIn("existing_summary_path", self.invocation("data_statistics", values={"existing_summary_path": ""}).kwargs)
+        self.assertNotIn("history_rest_mode", self.invocation("data_statistics", values={"history_rest_mode": "deducted"}).kwargs)
+        for invalid in (self.folder, self.root / "不存在.xlsx", self.root / "说明.txt"):
+            with self.subTest(path=invalid), self.assertRaises(FormValidationError) as caught:
+                self.invocation("data_statistics", values={"existing_summary_path": str(invalid)})
+            self.assertEqual(caught.exception.field, "existing_summary_path")
+
     def test_social_low_base_rule_defaults_on_and_can_be_disabled(self) -> None:
         self.assertTrue(self.invocation("social_security").kwargs["infer_low_base_difference"])
         call = self.invocation("social_security", values={"infer_low_base_difference": False})

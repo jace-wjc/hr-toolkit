@@ -585,6 +585,37 @@ class QtControllerTests(unittest.TestCase):
         self.assertEqual(controller._form_states[controller._state_key()]["week_start"], "20260230")
         self.assertTrue(controller.selectionFeedback["week_range"]["error"])
 
+    def test_attendance_history_picker_updates_visible_value_and_can_clear(self) -> None:
+        from hr_toolkit.gui_qt.form_specs import FormValidationError
+
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("data_statistics")
+        prompts = []
+        controller.notificationRequested.connect(lambda *args: prompts.append(args))
+        controller._apply_invocation(None, FormValidationError("历史汇总不可用", "请选择历史汇总", "existing_summary_path"), False)
+        self.assertTrue(controller.selectionFeedback["existing_summary_path"]["error"])
+        self.assertEqual(prompts, [])
+        revision = controller.formRevision
+        with patch.object(controller.presentation, "file_dialog", return_value=("/tmp/历史.xlsx", "")), \
+             patch.object(controller, "_remember_file_dialog_path"):
+            controller.chooseFieldFile("existing_summary_path")
+        self.assertGreater(controller.formRevision, revision)
+        self.assertEqual(next(field["value"] for field in controller.formFields if field["id"] == "existing_summary_path"), "/tmp/历史.xlsx")
+        self.assertNotIn("existing_summary_path", controller.selectionFeedback)
+        self.assertTrue(next(field["visible"] for field in controller.formFields if field["id"] == "history_options"))
+        controller.setFieldValue("history_rest_mode", "mixed")
+        controller.setFieldValue("history_deducted_people", "张三")
+        controller.setFieldValue("history_period", "2026-07")
+        with patch.object(controller.presentation, "file_dialog", return_value=("", "")):
+            controller.chooseFieldFile("existing_summary_path")
+        self.assertEqual(controller._form_states[controller._state_key()]["existing_summary_path"], "/tmp/历史.xlsx")
+        controller.setFieldValue("existing_summary_path", "")
+        self.assertEqual(next(field["value"] for field in controller.formFields if field["id"] == "existing_summary_path"), "")
+        options = next(field for field in controller.formFields if field["id"] == "history_options")
+        self.assertFalse(options["visible"])
+        self.assertEqual((options["value"], options["peopleValue"], options["periodValue"]), ("", "", ""))
+
     def test_notice_filter_reuse_never_keeps_rows_from_previous_result(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)

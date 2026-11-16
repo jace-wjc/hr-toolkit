@@ -132,6 +132,17 @@ SPECS: tuple[ToolUiSpec, ...] = (
         support_optional=True,
         fields=(
             {
+                "id": "existing_summary_path", "kind": "file", "default": "",
+                "label": "历史考勤汇总（可选）",
+                "hint": "选择同年度的旧汇总表：按先早后晚抵扣旧表调休，结转各月剩余加班；其他项目和备注只统计本次资料。",
+            },
+            {"id": "history_options", "kind": "history_options", "label": "历史调休结转设置", "options": [
+                {"label": "请选择旧表各月加班的抵扣状态", "value": ""},
+                {"label": "尚未抵扣：仅累计余额扣过调休", "value": "pending"},
+                {"label": "全部已人工抵扣：各月已是余额", "value": "deducted"},
+                {"label": "部分人员已人工抵扣", "value": "mixed"},
+            ]},
+            {
                 "id": "week_range",
                 "kind": "date_range",
                 "label": "周报（可选）",
@@ -334,6 +345,9 @@ def variants_for(nav_id: str) -> tuple[ToolUiSpec, ...]:
 def default_values(spec: ToolUiSpec) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for field in spec.fields:
+        if field.get("kind") == "history_options":
+            values.update(history_period="", history_rest_mode="", history_deducted_people="")
+            continue
         if field.get("kind") == "date_range":
             values[str(field["startId"])] = field.get("startDefault", "")
             values[str(field["endId"])] = field.get("endDefault", "")
@@ -471,6 +485,27 @@ def build_invocation(
             "include_business_trip": bool(values.get("include_business_trip")),
             "include_workday_business_trip": bool(values.get("include_workday_business_trip")),
         }
+        history_text = str(values.get("existing_summary_path") or "").strip()
+        if history_text:
+            history_path = Path(history_text).expanduser()
+            if not history_path.is_file() or history_path.suffix.lower() not in EXCEL_SUFFIXES:
+                raise FormValidationError("历史汇总不可用", "请选择工具生成的 .xlsx 或 .xls 考勤汇总表。", "existing_summary_path")
+            kwargs["existing_summary_path"] = history_path
+            mode = str(values.get("history_rest_mode") or "")
+            if mode not in {"pending", "deducted", "mixed"}:
+                raise FormValidationError("请确认抵扣状态", "旧表仅累计余额减少时，请选择“尚未抵扣”；各月加班已手动扣减的，请选择已抵扣。", "history_options")
+            period = str(values.get("history_period") or "").strip()
+            if period:
+                from hr_toolkit.tools.data_statistics import _history_period_value
+                try:
+                    _history_period_value(period)
+                except ValueError as exc:
+                    raise FormValidationError("历史月份有误", str(exc), "history_options") from exc
+            people = str(values.get("history_deducted_people") or "").strip()
+            if mode == "mixed" and not people:
+                raise FormValidationError("请填写已抵扣人员", "填写已人工抵扣人员的姓名，用顿号分隔；重名时填写“公司/部门/姓名”。", "history_options")
+            kwargs.update(history_period=period or None, history_rest_mode=mode,
+                          history_deducted_people=people if mode == "mixed" else "")
         return ToolInvocation(**base, function_module="hr_toolkit.tools.data_statistics", function_name="generate_data_statistics_reports", args=(inputs, output_dir), kwargs=kwargs)
     if spec.tool_id == "salary_split":
         return ToolInvocation(**base, function_module="hr_toolkit.tools.salary_split", function_name="split_salary_by_company", args=(inputs[0], output_dir), kwargs={})

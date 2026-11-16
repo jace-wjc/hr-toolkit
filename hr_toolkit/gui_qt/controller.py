@@ -608,6 +608,10 @@ class AppController(QObject):
             if field.get("kind") == "date_range":
                 field["startValue"] = values.get(field["startId"], "")
                 field["endValue"] = values.get(field["endId"], "")
+            elif field.get("kind") == "history_options":
+                field["value"] = values.get("history_rest_mode", "")
+                field["periodValue"] = values.get("history_period", "")
+                field["peopleValue"] = values.get("history_deducted_people", "")
             else:
                 field["value"] = values.get(field["id"], field.get("default", ""))
             field["visible"] = self._field_visible(field["id"], values)
@@ -621,6 +625,8 @@ class AppController(QObject):
         return payload
 
     def _field_visible(self, field_id: str, values: dict[str, Any]) -> bool:
+        if self._spec.tool_id == "data_statistics" and field_id == "history_options":
+            return bool(values.get("existing_summary_path"))
         if self._spec.tool_id == "folder_rename":
             mode = values.get("rename_mode") or "append"
             if field_id in {"source_column", "target_column"}:
@@ -1043,6 +1049,13 @@ class AppController(QObject):
         if field_id in {"rename_mode", "collect_all", "library_mode", "use_ocr_cache"}:
             self.specChanged.emit()
             self._bump_form_revision()
+        elif field_id == "existing_summary_path":
+            state.update(history_period="", history_rest_mode="", history_deducted_people="")
+            self._bump_form_revision()
+        elif field_id == "history_rest_mode":
+            self._bump_form_revision()
+        elif field_id in {"history_period", "history_deducted_people"}:
+            self._selection_message("history_options", "")
 
     @Slot(str, str)
     def normalizeDateField(self, field_id: str, text: str) -> None:
@@ -1267,6 +1280,8 @@ class AppController(QObject):
         feedback.pop("week_range", None)
         feedback.pop("month_range", None)
         feedback.pop("material_types", None)
+        feedback.pop("existing_summary_path", None)
+        feedback.pop("history_options", None)
         if self._spec.tool_id == "material_collector" and str(self._form_states[self._state_key()].get("target_input") or "").strip():
             feedback.pop("support", None)
         # The connected environment handler invalidates stale requests and
@@ -1883,6 +1898,21 @@ class AppController(QObject):
     @Slot()
     def chooseSupportFile(self) -> None:
         self._choose_support_file()
+
+    @Slot(str)
+    def chooseFieldFile(self, field_id: str) -> None:
+        if not self.selectionEnabled:
+            return
+        field = next((item for item in self._spec.fields if item["id"] == field_id and item["kind"] == "file"), None)
+        if field is None:
+            return
+        filename, _selected = self._presentation.file_dialog(
+            QFileDialog.getOpenFileName, self._dialog_parent(), field["label"],
+            self._file_dialog_initial_dir(), "Excel 工作簿 (*.xlsx *.xls)",
+        )
+        if filename:
+            self._remember_file_dialog_path(filename)
+            self.setFieldValue(field_id, filename)
 
     def _choose_support_file(self, *, initial_dir: str | None = None) -> None:
         if not self.selectionEnabled or not self.hasSupportField:
@@ -3957,7 +3987,7 @@ class AppController(QObject):
                 # Only these controls actually render selectionFeedback in
                 # Main.qml. Text/choice/check fields need the dialog fallback;
                 # otherwise validation stops the run without any visible reason.
-                if error.field in {"input", "support", "week_range", "month_range", "material_types"}:
+                if error.field in {"input", "support", "week_range", "month_range", "material_types", "existing_summary_path", "history_options"}:
                     return
             self.notificationRequested.emit(title, str(error), "warning")
             return

@@ -28,6 +28,322 @@ from hr_toolkit.tools.data_statistics import (
 
 
 class DataStatisticsTest(unittest.TestCase):
+    def test_history_rest_matches_hr_examples_in_day_and_hour_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "八月.xlsx", root / "七月.xlsx"
+            _write_attendance_file(source, month=8)
+            cases = (({6: 0.5, 7: 0.5}, {6: 0, 7: 0.5}), ({6: 1}, {6: 0.5, 7: 0}))
+            for index, (overtime, expected) in enumerate(cases):
+                for old_unit in ("day", "hour"):
+                    for new_unit in ("day", "hour"):
+                        with self.subTest(example=index, old_unit=old_unit, new_unit=new_unit):
+                            _write_attendance_history(history, month=7, overtime=overtime, rest_days=0.5, by_hour=old_unit == "hour")
+                            original = history.read_bytes()
+                            result = generate_data_statistics_reports(source, root / f"result_{index}_{old_unit}_{new_unit}",
+                                existing_summary_path=history, history_rest_mode="pending", remark_unit=new_unit)
+                            workbook = load_workbook(result.output_file)
+                            try:
+                                ws = workbook["考勤统计"]
+                                columns = {cell.value: cell.column for cell in ws[2]}
+                                unit, factor = ("小时数", 7) if new_unit == "hour" else ("天数", 1)
+                                for month, days in expected.items():
+                                    self.assertEqual(ws.cell(3, columns[f"{month}月份加班{unit}"]).value or 0, days * factor)
+                                self.assertEqual(ws.cell(3, columns[f"8月份加班{unit}"]).value, 0.5 * factor)
+                                self.assertEqual(ws.cell(3, 8).value, 0.5 * factor)  # 本月调休仍然显示。
+                                self.assertNotIn("旧月份", ws.cell(3, columns["备注"]).value)
+                            finally:
+                                workbook.close()
+                            self.assertEqual(history.read_bytes(), original)
+
+    def test_history_same_month_rerun_and_next_month_do_not_double_deduct(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "本月.xlsx", root / "七月.xlsx"
+            _write_attendance_history(history, month=7, overtime={6: 0.5, 7: 0.5}, rest_days=0.5)
+            _write_attendance_file(source, month=8)
+            august = generate_data_statistics_reports(source, root / "august", existing_summary_path=history, history_rest_mode="pending")
+            # 新结果不用再次手填月份；同月重算会替换本月数据，不再扣旧表本月调休。
+            repeat = generate_data_statistics_reports(source, root / "repeat", existing_summary_path=august.output_file, history_rest_mode="pending")
+            first, second = load_workbook(august.output_file), load_workbook(repeat.output_file)
+            try:
+                self.assertEqual(list(first["考勤统计"].values), list(second["考勤统计"].values))
+            finally:
+                first.close()
+                second.close()
+            _write_attendance_file(source, month=9)
+            september = generate_data_statistics_reports(source, root / "september", existing_summary_path=august.output_file, history_rest_mode="pending")
+            workbook = load_workbook(september.output_file)
+            try:
+                ws = workbook["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                self.assertIsNone(ws.cell(3, columns["6月份加班天数"]).value)
+                self.assertIsNone(ws.cell(3, columns["7月份加班天数"]).value)
+                self.assertEqual(ws.cell(3, columns["8月份加班天数"]).value, 0.5)
+                self.assertEqual(ws.cell(3, columns["9月份加班天数"]).value, 0.5)
+                self.assertEqual(ws.cell(3, 8).value, 0.5)
+            finally:
+                workbook.close()
+
+    def test_manual_history_deductions_are_not_repeated_and_can_be_per_person(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "八月.xlsx", root / "七月.xlsx"
+            _write_attendance_file(source, month=8)
+            _write_attendance_history(history, month=7, overtime={6: 0.5}, rest_days=0.5)
+            workbook = load_workbook(history)
+            other = [cell.value for cell in workbook.active[3]]
+            other[3], other[13] = "另一人", 1  # 另一人六月1天，尚未扣0.5天调休。
+            workbook.active.append(other)
+            workbook.save(history)
+            workbook.close()
+            for mode, people, expected_other in (("mixed", "王小丽", 0.5), ("deducted", "", 1)):
+                result = generate_data_statistics_reports(source, root / mode, existing_summary_path=history,
+                    history_rest_mode=mode, history_deducted_people=people)
+                workbook = load_workbook(result.output_file)
+                try:
+                    ws = workbook["考勤统计"]
+                    columns = {cell.value: cell.column for cell in ws[2]}
+                    rows = {ws.cell(row, 4).value: row for row in range(3, ws.max_row + 1)}
+                    self.assertEqual(ws.cell(rows["王小丽"], columns["6月份加班天数"]).value, 0.5)
+                    self.assertEqual(ws.cell(rows["另一人"], columns["6月份加班天数"]).value, expected_other)
+                finally:
+                    workbook.close()
+            with self.assertRaisesRegex(ValueError, "未找到已抵扣人员"):
+                generate_data_statistics_reports(source, root / "unknown", existing_summary_path=history,
+                    history_rest_mode="mixed", history_deducted_people="填错姓名")
+            self.assertFalse((root / "unknown").exists())
+
+    def test_overtime_shortfall_requires_review_without_borrowing_from_new_month(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "八月.xlsx", root / "七月.xlsx"
+            _write_attendance_file(source, month=8)  # 八月有0.5天加班，也不能用来弥补七月欠额。
+            _write_attendance_history(history, month=7, overtime={6: 1}, rest_days=1.5)
+            with self.assertRaisesRegex(ValueError, "王小丽.*历史调休超过加班余额.*0.5"):
+                generate_data_statistics_reports(source, root / "shortfall", existing_summary_path=history, history_rest_mode="pending")
+            self.assertFalse((root / "shortfall").exists())
+            _write_attendance_history(history, month=7, overtime={6: 0.5}, rest_days=0.5)
+            workbook = load_workbook(source)
+            workbook.active.cell(4, 27, 7)  # 本月调休1天，超过本月可用的0.5天。
+            workbook.save(source)
+            workbook.close()
+            with self.assertRaisesRegex(ValueError, "王小丽.*本次调休超过加班余额"):
+                generate_data_statistics_reports(source, root / "current_shortfall", existing_summary_path=history, history_rest_mode="pending")
+            self.assertFalse((root / "current_shortfall").exists())
+
+    def test_manual_history_deduction_requires_disambiguation_for_duplicate_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "八月.xlsx", root / "七月.xlsx"
+            _write_attendance_file(source, month=8)
+            _write_attendance_history(history, month=7, overtime={6: 1}, rest_days=0.5)
+            workbook = load_workbook(history)
+            row = [cell.value for cell in workbook.active[3]]
+            for department in ("甲部门", "乙部门"):
+                row[2], row[3] = department, "同名人员"
+                workbook.active.append(row)
+            workbook.save(history)
+            workbook.close()
+            with self.assertRaisesRegex(ValueError, "重名"):
+                generate_data_statistics_reports(source, root / "ambiguous", existing_summary_path=history,
+                    history_rest_mode="mixed", history_deducted_people="同名人员")
+            self.assertFalse((root / "ambiguous").exists())
+            result = generate_data_statistics_reports(source, root / "specified", existing_summary_path=history,
+                history_rest_mode="mixed", history_deducted_people="总部/甲部门/同名人员")
+            workbook = load_workbook(result.output_file)
+            try:
+                ws = workbook["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                balances = {ws.cell(row, 3).value: ws.cell(row, columns["6月份加班天数"]).value
+                            for row in range(3, ws.max_row + 1) if ws.cell(row, 4).value == "同名人员"}
+                self.assertEqual(balances, {"甲部门": 1, "乙部门": 0.5})
+            finally:
+                workbook.close()
+
+    def test_history_period_and_deduction_state_must_be_unambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "八月.xlsx", root / "旧表.xlsx"
+            _write_attendance_file(source, month=8)
+            _write_attendance_history(history, month=7, overtime={6: 1}, rest_days=0.5)
+            with self.assertRaisesRegex(ValueError, "历史汇总月份与表题或文件名不一致"):
+                generate_data_statistics_reports(source, root / "wrong_period", existing_summary_path=history,
+                    history_rest_mode="pending", history_period="2026-08")
+            self.assertFalse((root / "wrong_period").exists())
+            workbook = load_workbook(history)
+            workbook.active["A1"] = "考勤汇总"  # 保留九月预留列，不能误用它来推断月份。
+            workbook.save(history)
+            workbook.close()
+            with self.assertRaisesRegex(ValueError, "请确认历史汇总的各月加班是否已扣调休"):
+                generate_data_statistics_reports(source, root / "unspecified", existing_summary_path=history)
+            with self.assertRaisesRegex(ValueError, "无法确认旧表统计月份"):
+                generate_data_statistics_reports(source, root / "no_period", existing_summary_path=history, history_rest_mode="pending")
+            result = generate_data_statistics_reports(source, root / "specified", existing_summary_path=history,
+                history_rest_mode="pending", history_period="2026-07")
+            with self.assertRaisesRegex(ValueError, "重算同月.*已人工抵扣"):
+                generate_data_statistics_reports(source, root / "manual_repeat", existing_summary_path=result.output_file, history_rest_mode="deducted")
+            for name in ("unspecified", "no_period", "manual_repeat"):
+                self.assertFalse((root / name).exists())
+
+    def test_history_rest_consumes_oldest_positive_balance_first(self) -> None:
+        from hr_toolkit.tools.data_statistics import _deduct_history_rest_hours
+
+        cases = (
+            # 图示：6月、7月各0.5天，7月调休0.5天，先用完6月余额。
+            ({7: 3.5, 4: 0, 6: 3.5, 5: 0}, 3.5, {7: 3.5, 4: 0, 6: 0, 5: 0}, 0),
+            ({8: 7, 6: 3.5, 7: 7}, 7, {8: 7, 6: 0, 7: 3.5}, 0),
+            ({6: 3.5}, 0, {6: 3.5}, 0),
+            # 返回不足部分供调用方提示核对，不借用未来加班。
+            ({6: 3.5, 7: 3.5}, 10.5, {6: 0, 7: 0}, 3.5),
+            ({}, 3.5, {}, 3.5),
+        )
+        for source, rest, expected, shortfall in cases:
+            with self.subTest(source=source, rest=rest):
+                original = dict(source)
+                self.assertEqual(_deduct_history_rest_hours(source, rest), (expected, shortfall))
+                self.assertEqual(source, original)
+
+    def test_history_keeps_other_months_overtime_and_current_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inputs = root / "inputs"
+            inputs.mkdir()
+            source = inputs / "本月考勤.xlsx"
+            _write_attendance_file(source)
+            book = load_workbook(source)
+            for row in book.active.iter_rows(min_row=2):
+                row[3].value = row[3].value.replace(month=9)
+            book.active.cell(2, 18, 1)  # 本次事假
+            book.active.cell(2, 19, 0.5)  # 本次病假
+            book.save(source)
+            book.close()
+            source_bytes = source.read_bytes()
+            for old_unit, new_unit in (("day", "day"), ("day", "hour"), ("hour", "day"), ("hour", "hour")):
+                with self.subTest(old_unit=old_unit, new_unit=new_unit):
+                    history = inputs / "旧统计2026.xlsx"
+                    _write_attendance_history(history, by_hour=old_unit == "hour")
+                    history_bytes = history.read_bytes()
+                    options = dict(remark_unit=new_unit, include_business_trip=True, include_workday_business_trip=True)
+                    baseline = generate_data_statistics_reports(source, root / f"base_{new_unit}", **options)
+                    merged = generate_data_statistics_reports(
+                        inputs, root / f"merged_{old_unit}_{new_unit}", existing_summary_path=history,
+                        history_rest_mode="pending", **options,
+                    )
+                    self.assertEqual(merged.attendance_source_count, baseline.attendance_source_count)
+                    self.assertEqual(merged.attendance_person_count, baseline.attendance_person_count)
+                    self.assertNotIn("existing_summary_path", baseline.to_dict())
+                    self.assertEqual(merged.to_dict()["existing_summary_path"], str(history.resolve()))
+                    original = load_workbook(baseline.output_file)
+                    combined = load_workbook(merged.output_file)
+                    try:
+                        ws = combined["考勤统计"]
+                        by_header = {cell.value: cell.column for cell in ws[2]}
+                        unit = "小时数" if new_unit == "hour" else "天数"
+                        factor = 7 if new_unit == "hour" else 1
+                        self.assertEqual(ws.cell(3, by_header[f"7月份加班{unit}"]).value, 2 * factor)
+                        self.assertEqual(ws.cell(3, by_header[f"8月份加班{unit}"]).value, factor)
+                        self.assertEqual(ws.cell(3, by_header[f"9月份加班{unit}"]).value, 0.5 * factor)
+                        # 全部其他列（包括调休、余额公式和备注）与只统计本次资料完全一致。
+                        old_month_cols = {by_header[f"7月份加班{unit}"], by_header[f"8月份加班{unit}"]}
+                        for column in range(1, ws.max_column + 1):
+                            if column not in old_month_cols:
+                                self.assertEqual(ws.cell(3, column).value, original["考勤统计"].cell(3, column).value)
+                        for name in ("周月报统计", "考勤异常明细", "周月报异常明细"):
+                            self.assertEqual(list(combined[name].values), list(original[name].values))
+                    finally:
+                        original.close()
+                        combined.close()
+                    self.assertEqual(history.read_bytes(), history_bytes)
+                    self.assertEqual(source.read_bytes(), source_bytes)
+
+    def test_history_only_people_follow_staff_scope_and_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history, staff = (root / name for name in ("本次.xlsx", "历史2026.xlsx", "名单.xlsx"))
+            _write_attendance_file(source, month=9)
+            _write_attendance_history(history)
+            book = load_workbook(history)
+            row = [cell.value for cell in book.active[3]]
+            for name in ("张三", "李四"):
+                row[3] = name
+                row[7] = 99 if name == "李四" else 0  # 名单外的历史欠额不影响名单内统计。
+                book.active.append(row)
+            book.save(history)
+            book.close()
+            book = Workbook()
+            book.active.append(["姓名"])
+            book.active.append(["张三"])
+            book.active.append(["王小丽"])
+            book.save(staff)
+            book.close()
+            result = generate_data_statistics_reports(source, root / "out", existing_summary_path=history,
+                                                      history_rest_mode="pending", report_staff_path=staff)
+            book = load_workbook(result.output_file)
+            try:
+                ws = book["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                self.assertEqual([ws.cell(row, 4).value for row in (3, 4)], ["张三", "王小丽"])
+                self.assertEqual(result.attendance_person_count, 2)
+                self.assertEqual(ws.cell(3, columns["7月份加班天数"]).value, 2)
+                for header in ("事假（天）", "病假（天）", "带薪休假（天）", "调休（天）", "旷工", "漏打卡", "备注"):
+                    self.assertIsNone(ws.cell(3, columns[header]).value)
+                self.assertTrue(any("1 人本次没有考勤数据" in warning for warning in result.warnings))
+            finally:
+                book.close()
+
+    def test_history_zero_current_month_replaces_old_value_and_dry_run_writes_nothing(self) -> None:
+        from hr_toolkit.tools.data_statistics import _carry_forward_attendance_overtime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "本次.xlsx", root / "历史2026.xlsx"
+            _write_attendance_file(source, month=9)
+            _write_attendance_history(history)
+            rows = [AttendanceSourceRow(str(source), 2, "王小丽", "总部", "运营部", datetime(2026, 9, 1).date())]
+            summaries, _ = _summarize_attendance(rows)
+            _carry_forward_attendance_overtime(summaries, rows, history, root, [], rest_mode="pending")
+            self.assertEqual(summaries[0].month_overtime_days, {7: 2, 8: 1, 9: 0})
+            preview = generate_data_statistics_reports(source, root / "preview", existing_summary_path=history,
+                                                       history_rest_mode="pending", dry_run=True)
+            self.assertIsNone(preview.output_file)
+            self.assertFalse((root / "preview").exists())
+
+    def test_invalid_history_stops_before_creating_results(self) -> None:
+        cases = (
+            ("bad_number", "O3", "待核对", "不是有效数字"),
+            ("formula_without_cache", "O3", "=1+1", "公式无计算结果"),
+            ("wrong_company", "B3", "其他公司", "公司或部门不一致"),
+            ("wrong_year", "A1", "2025年考勤", "年度与本次数据不一致"),
+            ("duplicate_month", "P2", "7月份加班天数", "月份加班列无效或重复"),
+            ("missing_identity", "D2", "未确认", "缺少公司"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "本次.xlsx", root / "历史.xlsx"
+            _write_attendance_file(source, month=9)
+            for case, cell, value, message in cases:
+                with self.subTest(case=case):
+                    _write_attendance_history(history)
+                    book = load_workbook(history)
+                    book.active[cell] = value
+                    book.save(history)
+                    book.close()
+                    output = root / case
+                    with self.assertRaisesRegex(ValueError, message):
+                        generate_data_statistics_reports(source, output, existing_summary_path=history,
+                                                         history_rest_mode="pending", history_period="2026-08")
+                    self.assertFalse(output.exists())
+            _write_attendance_history(history)
+            book = load_workbook(history)
+            book.active.append([cell.value for cell in book.active[3]])
+            book.save(history)
+            book.close()
+            with self.assertRaisesRegex(ValueError, "公司、部门、姓名重复"):
+                generate_data_statistics_reports(source, root / "duplicate", existing_summary_path=history,
+                                                 history_rest_mode="pending")
+            self.assertFalse((root / "duplicate").exists())
+
     def test_unrelated_sheet_reads_only_recognition_prefix(self) -> None:
         from openpyxl.worksheet._read_only import ReadOnlyWorksheet
         from hr_toolkit.tools.data_statistics import _read_statistics_file
@@ -1363,7 +1679,32 @@ def _write_formula_cache_missing_attendance(path: Path) -> None:
     workbook.close()
 
 
-def _write_attendance_file(path: Path) -> None:
+def _write_attendance_history(
+    path: Path, *, by_hour: bool = False, month: int = 8,
+    overtime: dict[int, float] | None = None, rest_days: float = 0.0,
+) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "考勤统计"
+    sheet.append([f"2026年{month}月份考勤异动"])
+    unit, factor = ("小时数", 7) if by_hour else ("天数", 1)
+    overtime = {7: 2, 8: 1} if overtime is None else overtime
+    sheet.append([
+        "序号", "公司", "部门（片区）", "姓名", "事假（天）", "病假（天）", "带薪休假（天）",
+        "调休（小时）" if by_hour else "调休（天）",
+        *[f"{month}月份加班{unit}" for month in range(1, 10)],
+        "旷工", "迟到/早退（分钟）", "漏打卡", "累计剩余加班天数", "备注",
+    ])
+    sheet.append([
+        1, "总部", "运营部", "王小丽", 99, 99, 99, rest_days * factor,
+        *[overtime.get(value, 0) * factor or None for value in range(1, 10)],
+        99, 99, 99, 99, "旧月份的事假和备注不能带入",
+    ])
+    workbook.save(path)
+    workbook.close()
+
+
+def _write_attendance_file(path: Path, *, month: int = 4) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "日结果"
@@ -1409,6 +1750,7 @@ def _write_attendance_file(path: Path) -> None:
         ["王小丽", "运营部", "否", datetime(2026, 4, 30), "否", 1, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "08:30,12:00|14:00,17:30", "08:23,17:30", None],
     ]
     for row_index, row in enumerate(rows, start=2):
+        row[3] = row[3].replace(month=month)
         for col_index, value in enumerate(row, start=1):
             ws.cell(row_index, col_index).value = value
     wb.save(path)

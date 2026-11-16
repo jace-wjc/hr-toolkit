@@ -1369,6 +1369,8 @@ ApplicationWindow {
                                         property var field: modelData
                                         sourceComponent: field.id === "company_aliases" ? companyRulesComponent
                                                        : field.kind === "text" ? textFieldComponent
+                                                       : field.kind === "file" ? fileFieldComponent
+                                                       : field.kind === "history_options" ? historyOptionsComponent
                                                        : field.kind === "choice" ? choiceFieldComponent
                                                        : field.kind === "check" ? checkFieldComponent
                                                        : field.kind === "date_range" ? dateRangeFieldComponent
@@ -1838,6 +1840,99 @@ ApplicationWindow {
                 text: field.value === undefined || field.value === null ? "" : String(field.value)
                 placeholderText: Ui.text(field.placeholder || "")
                 onTextEdited: controller.setFieldValue(field.id, text)
+            }
+        }
+    }
+
+    Component {
+        id: fileFieldComponent
+        ColumnLayout {
+            spacing: 4
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text(field.label); color: root.textMain; font.pixelSize: 13 }
+                Text {
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: String(field.value || Ui.text("未选择"))
+                    textFormat: Text.PlainText
+                    font.pixelSize: 12
+                    color: field.value ? root.textMain : root.textFaint
+                    elide: Text.ElideMiddle
+                    ToolTip.visible: fileFieldHover.hovered && !!field.value
+                    ToolTip.text: String(field.value || "")
+                    HoverHandler { id: fileFieldHover }
+                }
+                AppButton { text: "选择文件"; variant: "link"; enabled: controller.selectionEnabled; onClicked: controller.chooseFieldFile(field.id) }
+                AppButton { text: "清除"; variant: "link"; visible: !!field.value; enabled: controller.selectionEnabled; onClicked: controller.setFieldValue(field.id, "") }
+            }
+            Text { Layout.fillWidth: true; text: Ui.text(field.hint || ""); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+            Text {
+                Layout.fillWidth: true
+                property var feedback: controller.selectionFeedback[field.id] || ({})
+                visible: !!feedback.text
+                text: Ui.text(feedback.text || "")
+                textFormat: Text.PlainText
+                color: Ui.color("error"); font.pixelSize: 12; wrapMode: Text.Wrap
+            }
+        }
+    }
+
+    Component {
+        id: historyOptionsComponent
+        ColumnLayout {
+            spacing: 6
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Text { Layout.preferredWidth: 145; text: Ui.text("旧表抵扣状态"); color: root.textMain; font.pixelSize: 13 }
+                AppComboBox {
+                    id: historyMode
+                    Layout.fillWidth: true
+                    model: field.options
+                    textRole: "label"
+                    currentIndex: root.choiceIndex(field)
+                    enabled: controller.selectionEnabled
+                    onActivated: controller.setFieldValue("history_rest_mode", field.options[index].value)
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                text: Ui.text("仅“累计剩余加班”按公式减少，各月加班列未改动的，选择“尚未抵扣”。已人工扣过的人员不会再扣一次。")
+                color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                visible: field.value === "mixed"
+                Text { Layout.preferredWidth: 145; text: Ui.text("已抵扣人员"); color: root.textMain; font.pixelSize: 13 }
+                AppTextField {
+                    Layout.fillWidth: true
+                    text: String(field.peopleValue || "")
+                    placeholderText: Ui.text("姓名用顿号分隔；重名时填写公司/部门/姓名")
+                    enabled: controller.selectionEnabled
+                    onTextEdited: controller.setFieldValue("history_deducted_people", text)
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Text { Layout.preferredWidth: 145; text: Ui.text("历史汇总月份"); color: root.textMain; font.pixelSize: 13 }
+                AppTextField {
+                    Layout.fillWidth: true
+                    text: String(field.periodValue || "")
+                    placeholderText: Ui.text("如 2026-07；工具记录或表题能识别时可留空")
+                    enabled: controller.selectionEnabled
+                    onTextEdited: controller.setFieldValue("history_period", text)
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                property var feedback: controller.selectionFeedback.history_options || ({})
+                visible: !!feedback.text
+                text: Ui.text(feedback.text || ""); textFormat: Text.PlainText
+                color: Ui.color("error"); font.pixelSize: 12; wrapMode: Text.Wrap
             }
         }
     }

@@ -44,6 +44,57 @@ def _fake_folder_rename(root_dir, *, mode, cancelled=None, progress_callback=Non
 
 
 class ProjectRunCoordinatorTests(unittest.TestCase):
+    def test_attendance_history_reads_manual_edits_without_relaxing_other_inputs(self) -> None:
+        from datetime import datetime
+        from openpyxl import Workbook, load_workbook
+        from hr_toolkit.tools.data_statistics import generate_data_statistics_reports
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "考勤.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "日结果"
+            workbook.active.append(["姓名", "部门名称", "日期", "漏打卡次数", "应出勤小时数", "加班计调休时长"])
+            workbook.active.append(["张三", "人事部", datetime(2026, 7, 1), 0, 7, 7])
+            workbook.save(source)
+            store = ProjectStore.create(root / "project", "测试项目")
+            errors, successes = [], []
+            callbacks = RunCallbacks(error=errors.append, success=lambda *args: successes.append(args))
+            try:
+                with patch("hr_toolkit.run_coordinator.should_use_process", return_value=False):
+                    request = RunRequest("data_statistics", "考勤与周月报", "测试", "七月", generate_data_statistics_reports, (source, root), {})
+                    ProjectRunCoordinator()._run(store, request, callbacks, threading.Event())
+                    self.assertEqual(errors, [])
+                    history = Path(successes[-1][0]["output_file"])
+                    previous = load_workbook(history)
+                    columns = {cell.value: cell.column for cell in previous["考勤统计"][2]}
+                    previous["考勤统计"].cell(3, columns["7月份加班天数"], 3)
+                    previous.save(history)
+                    previous.close()
+                    history_bytes = history.read_bytes()
+                    workbook.active["C2"] = datetime(2026, 9, 1)
+                    workbook.save(source)
+                    request = RunRequest("data_statistics", "考勤与周月报", "测试", "九月", generate_data_statistics_reports,
+                                         (source, root), {"existing_summary_path": history, "history_rest_mode": "pending", "history_period": "2026-07"})
+                    ProjectRunCoordinator()._run(store, request, callbacks, threading.Event())
+                    self.assertEqual(errors, [])
+                    result = load_workbook(successes[-1][0]["output_file"])
+                    try:
+                        self.assertEqual(result["考勤统计"].cell(3, columns["7月份加班天数"]).value, 3)
+                    finally:
+                        result.close()
+                    self.assertEqual(history.read_bytes(), history_bytes)
+                    # 同一份人工修改的结果作为普通资料时，仍保留原有复用校验。
+                    strict_request = RunRequest("data_statistics", "考勤与周月报", "测试", "普通输入", generate_data_statistics_reports,
+                                                (history, root), {})
+                    ProjectRunCoordinator()._run(store, strict_request, callbacks, threading.Event())
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn("项目资料已发生变化", str(errors[0]))
+                    self.assertEqual(len(successes), 2)
+            finally:
+                workbook.close()
+                store.close()
+
     def test_failed_reviewed_rename_keeps_journal_and_files_in_reported_quarantine(self) -> None:
         from hr_toolkit.tools.rename_plan import build_rename_plan, execute_rename_plan
         from hr_toolkit.tools.folder_rename import _rename_text_no_replace

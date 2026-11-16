@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import re
 import shutil
+from contextlib import ExitStack
 from hr_toolkit.common.run_temp import temporary_directory
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -10,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openpyxl import load_workbook
+from openpyxl.packaging.custom import StringProperty
 from hr_toolkit.common.template_mapping import (
     file_template_source,
     template_tool, choose_sheet, map_sheet, assigned_role, active,
@@ -49,6 +52,7 @@ DEFAULT_COMPANY = "总部"
 REMARK_UNIT_DAY = "day"
 REMARK_UNIT_HOUR = "hour"
 _VALID_REMARK_UNITS = (REMARK_UNIT_DAY, REMARK_UNIT_HOUR)
+_ATTENDANCE_PERIOD_PROPERTY = "HRToolkitAttendancePeriod"
 
 
 @dataclass
@@ -191,6 +195,7 @@ class DataStatisticsResult:
     month_range_end: date | None = None
     remark_unit: str = REMARK_UNIT_DAY
     warnings: list[str] = field(default_factory=list)
+    existing_summary_path: Path | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -210,6 +215,7 @@ class DataStatisticsResult:
             "report_exception_count": self.report_exception_count,
             "expected_reporter_count": self.expected_reporter_count,
             "report_staff_path": None if self.report_staff_path is None else str(self.report_staff_path),
+            **({"existing_summary_path": str(self.existing_summary_path)} if self.existing_summary_path else {}),
             "week_range_start": None if self.week_range_start is None else self.week_range_start.isoformat(),
             "week_range_end": None if self.week_range_end is None else self.week_range_end.isoformat(),
             "month_range_start": None if self.month_range_start is None else self.month_range_start.isoformat(),
@@ -225,6 +231,10 @@ def generate_data_statistics_reports(
     output_dir: str | Path,
     *,
     report_staff_path: str | Path | None = None,
+    existing_summary_path: str | Path | None = None,
+    history_period: str | None = None,
+    history_rest_mode: str | None = None,
+    history_deducted_people: str = "",
     week_start: date | str | None = None,
     week_end: date | str | None = None,
     month_start: date | str | None = None,
@@ -242,9 +252,16 @@ def generate_data_statistics_reports(
     display_input = input_paths[0] if len(input_paths) == 1 else input_paths[0].parent
     output = Path(output_dir).expanduser().resolve()
     staff_path = Path(report_staff_path).expanduser().resolve() if report_staff_path else None
+    history_path = Path(existing_summary_path).expanduser().resolve() if existing_summary_path else None
     week_range = resolve_week_range(week_start, week_end)
     month_range = resolve_month_range(month_start, month_end)
     warnings: list[str] = []
+
+    if history_path is not None:
+        if not history_path.is_file() or history_path.suffix.lower() not in {".xlsx", ".xls"}:
+            raise ValueError("历史考勤汇总不存在或格式不支持，请选择工具生成的 .xlsx 或 .xls 汇总表。")
+        if history_path == output / OUTPUT_FILENAME:
+            raise ValueError("结果位置与历史考勤汇总相同，请更换结果目录，避免覆盖原表。")
 
     for path in input_paths:
         _check_cancelled(cancelled)
@@ -258,7 +275,7 @@ def generate_data_statistics_reports(
 
     with temporary_directory(prefix="hr_data_statistics_") as temp_root:
         temp_dir = Path(temp_root)
-        files = _find_source_files(input_paths, temp_dir, warnings)
+        files = _find_source_files(input_paths, temp_dir, warnings, excluded_path=history_path)
         _check_cancelled(cancelled)
         if not files:
             raise ValueError("未找到 .xlsx 或 .xls 数据文件。")
@@ -299,6 +316,16 @@ def generate_data_statistics_reports(
         )
         warnings.extend(report_warnings)
 
+        attendance_history_period = None
+        if history_path is not None:
+            attendance_history_period = _carry_forward_attendance_overtime(
+                attendance_summaries, attendance_rows, history_path, temp_dir, warnings,
+                expected_names={person.name for person in expected_reporters} if staff_path else None,
+                history_period=history_period, rest_mode=history_rest_mode,
+                deducted_people=history_deducted_people,
+                cancelled=cancelled,
+            )
+
         if staff_path is not None:
             # 保留原始记录推断周期及个人统计，仅统一限定汇总和明细的人员范围。
             # 已上传但未识别出人员的名单也不回退为统计所有人。
@@ -322,6 +349,7 @@ def generate_data_statistics_reports(
             report_exception_count=len(report_exceptions),
             expected_reporter_count=len(expected_reporters),
             report_staff_path=staff_path,
+            existing_summary_path=history_path,
             week_range_start=None if week_range is None else week_range[0],
             week_range_end=None if week_range is None else week_range[1],
             month_range_start=None if month_range is None else month_range[0],
@@ -350,6 +378,7 @@ def generate_data_statistics_reports(
             include_business_trip=include_business_trip,
             include_workday_business_trip=include_workday_business_trip,
             remark_unit=remark_unit,
+            attendance_history_period=attendance_history_period,
             cancelled=cancelled,
         )
         result.output_file = output_file
@@ -375,6 +404,223 @@ def _order_attendance_for_output(
 def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
     if cancelled is not None and cancelled():
         raise RuntimeError("本次处理已停止。")
+
+
+def _deduct_history_rest_hours(
+    overtime_by_month: dict[int, float], rest_hours: float,
+) -> tuple[dict[int, float], float]:
+    """Return monthly balances and any shortfall without deciding how to carry debt.
+
+    Inputs must be remaining overtime and rest that has NOT been deducted yet.
+    The caller must establish that state before applying this calculation.
+    """
+    if not math.isfinite(rest_hours) or rest_hours < 0:
+        raise ValueError("待抵扣调休必须是非负的有效小时数。")
+    balances = dict(overtime_by_month)
+    for month, hours in balances.items():
+        if month not in range(1, 13) or not math.isfinite(hours) or hours < 0:
+            raise ValueError("历史各月加班余额必须是非负的有效小时数。")
+    remaining = rest_hours
+    for month in sorted(balances):
+        if remaining <= 0:
+            break
+        deduction = min(balances[month], remaining)
+        balances[month] = round(balances[month] - deduction, 10)
+        remaining = round(remaining - deduction, 10)
+    return balances, remaining
+
+
+def _history_number(raw: Any, cached: Any, address: str) -> float:
+    if isinstance(raw, str) and raw.startswith("=") and cached is None:
+        raise ValueError(f"历史汇总 {address} 的公式无计算结果，请用 Excel 重新计算并保存。")
+    if cached is None or (isinstance(cached, str) and not cached.strip()):
+        return 0.0
+    try:
+        number = float(str(cached).replace(",", "").strip())
+        if not math.isfinite(number) or isinstance(cached, bool):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError(f"历史汇总 {address} 不是有效数字，请先核对。") from None
+    if number < 0:
+        raise ValueError(f"历史汇总 {address} 为负数，请核对加班或调休数据。")
+    return number
+
+
+def _history_period_value(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"(20\d{2})-(0?[1-9]|1[0-2])", value.strip())
+    if not match:
+        raise ValueError("历史汇总月份请填写为年月，例如 2026-07。")
+    return int(match.group(1)), int(match.group(2))
+
+
+def _resolve_history_period(workbook, supplied: str | None, title: str, filename: str, current_year: int) -> tuple[int, int]:
+    recorded = next((item.value for item in workbook.custom_doc_props if item.name == _ATTENDANCE_PERIOD_PROPERTY), None)
+    described = None
+    # 空的预留月份列不是统计月份。只识别明确的表题/文件名，不能用最后一列推断。
+    for text in (title, filename):
+        months = {int(value) for value in re.findall(r"(?<!\d)(0?[1-9]|1[0-2])月份?考勤", text)}
+        years = {int(value) for value in re.findall(r"(?<!\d)(20\d{2})(?!\d)", text)}
+        if len(months) == 1 and len(years) <= 1:
+            described = (next(iter(years), current_year), next(iter(months)))
+            break
+    if supplied:
+        selected = _history_period_value(supplied)
+        if recorded and selected != _history_period_value(str(recorded)):
+            raise ValueError("填写的历史汇总月份与工具记录不一致，请核对所选文件。")
+        if not recorded and described is not None and selected != described:
+            raise ValueError("填写的历史汇总月份与表题或文件名不一致，请核对所选文件。")
+        return selected
+    if recorded:
+        return _history_period_value(str(recorded))
+    if described is not None:
+        return described
+    raise ValueError("无法确认旧表统计月份，请填写“历史汇总月份”，例如 2026-07；不要按最后一列的月份填写。")
+
+
+def _check_overtime_shortfall(key: tuple[str, str, str], shortfall: float, scope: str) -> None:
+    if shortfall > 1e-8:
+        raise ValueError(
+            f"{' / '.join(key)} 的{scope}调休超过加班余额，差 {_format_number(shortfall / STANDARD_HOURS_PER_DAY)} 天"
+            f"（{_format_number(shortfall)} 小时）。请核对后再生成结果，不能借用之后的加班。"
+        )
+
+
+def _carry_forward_attendance_overtime(
+    summaries: list[AttendancePersonSummary],
+    source_rows: list[AttendanceSourceRow],
+    history_path: Path,
+    temp_dir: Path,
+    warnings: list[str],
+    *,
+    expected_names: set[str] | None = None,
+    history_period: str | None = None,
+    rest_mode: str | None = None,
+    deducted_people: str = "",
+    cancelled: Callable[[], bool] | None = None,
+) -> str:
+    """Settle the old period's rest once, then carry monthly balances into this period."""
+    if not source_rows:
+        raise ValueError("选择历史考勤汇总后，请同时上传本次考勤数据。")
+    if rest_mode not in {"pending", "deducted", "mixed"}:
+        raise ValueError("请确认历史汇总的各月加班是否已扣调休；仅累计余额减少，仍应选择“尚未抵扣”。")
+    manual_tokens = {value.strip() for value in re.split(r"[,，、;；\n]+", deducted_people) if value.strip()} if rest_mode == "mixed" else set()
+    if rest_mode == "mixed" and not manual_tokens:
+        raise ValueError("请填写已人工抵扣人员的姓名，用顿号分隔；重名时填写“公司/部门/姓名”。")
+    manual_matches: dict[str, set[tuple[str, str, str]]] = {token: set() for token in manual_tokens}
+    scoped_rows = [row for row in source_rows if expected_names is None or row.name in expected_names] or source_rows
+    periods = {(row.day.year, row.day.month) for row in scoped_rows}
+    if len(periods) != 1:
+        raise ValueError("结转历史加班时，请每次只上传一个月的考勤数据，其他项目和备注将只显示该月。")
+    current_year, current_month = next(iter(periods))
+    current = {(item.company, item.department, item.name): item for item in summaries}
+    current_names = {item.name for item in summaries}
+    seen: set[tuple[str, str, str]] = set()
+    history_only = 0
+    workbook_path = ensure_xlsx_workbook(history_path, temp_dir)
+    with ExitStack() as stack:
+        raw_book = load_workbook(workbook_path, read_only=True, data_only=False)
+        stack.callback(raw_book.close)
+        value_book = load_workbook(workbook_path, read_only=True, data_only=True)
+        stack.callback(value_book.close)
+        if "考勤统计" not in raw_book.sheetnames:
+            raise ValueError("历史汇总中没有“考勤统计”页，请选择工具生成的考勤汇总表。")
+        ws, values_ws = raw_book["考勤统计"], value_book["考勤统计"]
+        title = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        title_text = " ".join(str(value or "") for value in title)
+        old_year, old_month = _resolve_history_period(raw_book, history_period, title_text, history_path.name, current_year)
+        if old_year != current_year or old_month > current_month:
+            raise ValueError("请选择同年度、且不晚于本次统计月份的历史考勤汇总。")
+        same_period = old_month == current_month
+        if same_period and rest_mode in {"deducted", "mixed"}:
+            raise ValueError("重算同月时，已人工抵扣的旧表无法还原扣前余额，请改用上一期汇总表。")
+        year_text = history_path.name + " " + title_text
+        history_years = {int(value) for value in re.findall(r"(?<!\d)(20\d{2})(?!\d)", year_text)}
+        if history_years and history_years != {current_year}:
+            raise ValueError("历史考勤汇总标注的年度与本次数据不一致，请选择同年度汇总表。")
+        if not history_years and not history_period and not any(item.name == _ATTENDANCE_PERIOD_PROPERTY for item in raw_book.custom_doc_props):
+            warnings.append(f"历史汇总未标注年度，请核对其中的加班数据是否属于 {current_year} 年。")
+        headers = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
+        positions = {_cell_text(value): index for index, value in enumerate(headers)}
+        if not {"公司", "部门（片区）", "姓名"}.issubset(positions):
+            raise ValueError("历史考勤汇总缺少公司、部门（片区）或姓名列，请保留工具原有表头。")
+        overtime_columns = []
+        months_seen = set()
+        for column, header in enumerate(headers):
+            match = re.fullmatch(r"(\d{1,2})月份加班(天数|小时数)", re.sub(r"\s+", "", str(header or "")))
+            if not match:
+                continue
+            month = int(match.group(1))
+            if month not in range(1, 13) or month in months_seen:
+                raise ValueError("历史考勤汇总的月份加班列无效或重复，请先核对表头。")
+            months_seen.add(month)
+            overtime_columns.append((column, month, match.group(2) == "小时数"))
+        if not overtime_columns:
+            raise ValueError("历史考勤汇总未找到月份加班列，请选择工具生成的考勤汇总表。")
+        rest_columns = []
+        for column, header in enumerate(headers):
+            normalized = re.sub(r"\s+", "", str(header or "")).replace("（", "(").replace("）", ")")
+            if normalized in {"调休(天)", "调休(小时)"}:
+                rest_columns.append((column, normalized == "调休(小时)"))
+        if not same_period and rest_mode != "deducted" and len(rest_columns) != 1:
+            raise ValueError("历史汇总需要唯一的“调休（天）”或“调休（小时）”列，才能抵扣后结转。")
+        for row_index, (raw, cached) in enumerate(zip(
+            ws.iter_rows(min_row=3, values_only=True), values_ws.iter_rows(min_row=3, values_only=True),
+        ), start=3):
+            _check_cancelled(cancelled)
+            name = _cell_text(raw[positions["姓名"]])
+            if not name:
+                continue
+            key = (_cell_text(raw[positions["公司"]]), _cell_text(raw[positions["部门（片区）"]]), name)
+            matching_tokens = manual_tokens.intersection({name, "/".join(key)})
+            for token in matching_tokens:
+                manual_matches[token].add(key)
+            if expected_names is not None and name not in expected_names:
+                continue
+            if key in seen:
+                raise ValueError(f"历史考勤汇总中 {name} 的公司、部门、姓名重复，请先核对。")
+            seen.add(key)
+            carried: dict[int, float] = {}
+            for column, month, by_hour in overtime_columns:
+                if same_period and month == current_month:
+                    continue
+                number = _history_number(raw[column], cached[column], f"{get_column_letter(column + 1)}{row_index}")
+                if number:
+                    if month > old_month:
+                        raise ValueError(f"历史汇总 {name} 的 {month} 月加班晚于所选汇总月份，请核对历史汇总月份。")
+                    carried[month] = number if by_hour else number * STANDARD_HOURS_PER_DAY
+            already_deducted = rest_mode == "deducted" or bool(matching_tokens)
+            if not same_period and not already_deducted:
+                rest_column, rest_by_hour = rest_columns[0]
+                rest = _history_number(raw[rest_column], cached[rest_column], f"{get_column_letter(rest_column + 1)}{row_index}")
+                carried, shortfall = _deduct_history_rest_hours(carried, rest if rest_by_hour else rest * STANDARD_HOURS_PER_DAY)
+                _check_overtime_shortfall(key, shortfall, "历史")
+            if not any(carried.values()):
+                continue
+            target = current.get(key)
+            if target is None:
+                if name in current_names:
+                    raise ValueError(f"{name} 的历史与本次考勤公司或部门不一致，请核对后再合并。")
+                target = AttendancePersonSummary(company=key[0], department=key[1], name=name)
+                summaries.append(target)
+                history_only += 1
+            for month, hours in carried.items():
+                target.month_overtime_days[month] = hours / STANDARD_HOURS_PER_DAY
+                target.month_overtime_hours[month] = hours
+    for token, matches in manual_matches.items():
+        if not matches:
+            raise ValueError(f"历史汇总中未找到已抵扣人员“{token}”，请核对姓名。")
+        if len(matches) > 1:
+            raise ValueError(f"历史汇总中“{token}”重名，请按“公司/部门/姓名”指定已抵扣人员。")
+    for target in summaries:
+        if expected_names is None or target.name in expected_names:
+            _check_overtime_shortfall((target.company, target.department, target.name), target.rest_hours - sum(target.month_overtime_hours.values()), "本次")
+    if history_only:
+        warnings.append(f"{history_only} 人本次没有考勤数据，已保留其历史加班，其他项目和备注留空。")
+    if same_period:
+        warnings.append("本次为同月重算：保留期初各月余额，旧表该月调休不再抵扣；本月加班、调休等使用本次资料。")
+    else:
+        warnings.append("历史未抵扣的调休已按月份从早到晚抵扣；标记为已人工抵扣的人员直接结转余额，本月项目和备注只使用本次资料。")
+    return f"{current_year:04d}-{current_month:02d}"
 
 
 def _normalize_input_paths(input_path: str | Path | list[str | Path]) -> list[Path]:
@@ -424,11 +670,15 @@ def resolve_month_range(month_start: date | str | None, month_end: date | str | 
     return start, end
 
 
-def _find_source_files(input_paths: list[Path], temp_dir: Path, warnings: list[str]) -> list[Path]:
+def _find_source_files(
+    input_paths: list[Path], temp_dir: Path, warnings: list[str], *, excluded_path: Path | None = None,
+) -> list[Path]:
     files: list[Path] = []
     seen: set[Path] = set()
     for input_path in input_paths:
         for path in _iter_input_files(input_path, temp_dir, warnings):
+            if excluded_path is not None and path.resolve() == excluded_path:
+                continue
             if _is_non_source_file(path):
                 continue
             working_path = ensure_xlsx_workbook(path, temp_dir)
@@ -1832,6 +2082,7 @@ def _write_output_workbook(
     include_workday_business_trip: bool = False,
     cancelled: Callable[[], bool] | None = None,
     remark_unit: str = REMARK_UNIT_DAY,
+    attendance_history_period: str | None = None,
 ) -> None:
     template_path = _copy_template(temp_dir)
     workbook = load_workbook(template_path)
@@ -1867,6 +2118,8 @@ def _write_output_workbook(
             report_exceptions,
             cancelled=cancelled,
         )
+        if attendance_history_period:
+            workbook.custom_doc_props.append(StringProperty(name=_ATTENDANCE_PERIOD_PROPERTY, value=attendance_history_period))
         _check_cancelled(cancelled)
         workbook.save(output_file)
     finally:
