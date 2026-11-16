@@ -742,12 +742,102 @@ class DataStatisticsTest(unittest.TestCase):
                 month_end=date(2026, 4, 30),
             )
 
-            month_exceptions = [
-                exc for exc in result.to_dict() if isinstance(exc, dict)
-            ]
-            # 4 月只有黄三交了，黄五未交 → 至少 1 个「未写月报」
-            self.assertGreaterEqual(result.monthly_record_count, 1)
-            self.assertGreaterEqual(result.report_exception_count, 1)
+            wb = load_workbook(result.output_file, data_only=True)
+            try:
+                monthly_issues = [
+                    (row[2], row[5], row[7])
+                    for row in wb["周月报异常明细"].iter_rows(min_row=2, values_only=True)
+                    if row[3] == "月报"
+                ]
+                self.assertEqual(monthly_issues, [("黄五", "未写月报", None)])
+            finally:
+                wb.close()
+
+    def test_september_ranges_remain_independent_through_form_and_excel_output(self) -> None:
+        from hr_toolkit.gui_qt.form_specs import build_invocation, default_values, spec_for
+
+        def snapshot(ws):
+            return (
+                tuple(tuple((cell.value, tuple(cell._style) if cell.has_style else None)
+                            for cell in row) for row in ws.iter_rows()),
+                tuple(str(item) for item in ws.merged_cells.ranges),
+            )
+
+        # 现场未提供年份，同时覆盖 9.1 为周一和周二的情况。
+        for year in (2025, 2026):
+            with self.subTest(year=year), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                attendance = root / "考勤.xlsx"
+                weekly = root / "周报09.01-10.24.xlsx"
+                monthly = root / "月报09.01-10.24.xlsx"
+                _write_attendance_file(attendance)
+                _write_weekly_rows_file(weekly, [datetime(year, 9, 1, 17, 31), datetime(year, 9, 8, 17, 31)])
+                _write_report_boundary_file(monthly, datetime(year, 9, 1, 16), "月报")
+                outputs = {}
+                for use_week, use_month in ((False, False), (True, False), (False, True), (True, True)):
+                    spec = spec_for("data_statistics")
+                    values = default_values(spec)
+                    for enabled, prefix in ((use_week, "week"), (use_month, "month")):
+                        if enabled:
+                            values.update({f"{prefix}_start": f"{year}-09-06", f"{prefix}_end": f"{year}-10-24"})
+                    call = build_invocation(
+                        spec, input_paths=[attendance, weekly, monthly], support_text="",
+                        values=values, output_dir=root / f"out-{use_week}-{use_month}",
+                    )
+                    result = call.resolve_function()(*call.args, **call.kwargs)
+                    wb = load_workbook(result.output_file)
+                    try:
+                        issues = list(wb["周月报异常明细"].iter_rows(min_row=2, values_only=True))
+                        # 忽略跨类型排序生成的序号，核对实际统计与来源字段。
+                        week_issues = [row[1:] for row in issues if row[3] == "周报"]
+                        month_issues = [row[1:] for row in issues if row[3] == "月报"]
+                        if use_month:
+                            self.assertEqual([(row[1], row[4], row[6]) for row in month_issues],
+                                             [("黄三", "未写月报", None)])
+                        else:
+                            self.assertEqual(month_issues, [])
+                        if use_week:
+                            self.assertFalse(any(row[6] == datetime(year, 9, 1, 17, 31) for row in week_issues))
+                        outputs[use_week, use_month] = (
+                            week_issues, month_issues,
+                            snapshot(wb["考勤统计"]), snapshot(wb["考勤异常明细"]),
+                        )
+                    finally:
+                        wb.close()
+                for use_week in (False, True):
+                    self.assertEqual(outputs[use_week, False][0], outputs[use_week, True][0])
+                for use_month in (False, True):
+                    self.assertEqual(outputs[False, use_month][1], outputs[True, use_month][1])
+                for output in outputs.values():
+                    self.assertEqual(output[2:], outputs[False, False][2:])
+
+    def test_month_range_boundaries_and_old_submission_do_not_mask_missing_or_late(self) -> None:
+        from datetime import date
+        from hr_toolkit.tools.data_statistics import ExpectedReporter, ReportRecord, _summarize_reports
+
+        start, end = date(2026, 9, 6), date(2026, 10, 24)
+        cases = (
+            ([], (1, 0)),
+            ([datetime(2026, 9, 1, 16)], (1, 0)),
+            ([datetime(2026, 9, 5, 23, 59)], (1, 0)),
+            ([datetime(2026, 9, 6)], (0, 0)),
+            ([datetime(2026, 10, 24, 23, 59)], (0, 1)),
+            ([datetime(2026, 10, 25)], (1, 0)),
+            ([datetime(2026, 9, 1, 16), datetime(2026, 10, 3, 9)], (0, 1)),
+        )
+        for submitted, expected in cases:
+            with self.subTest(submitted=submitted):
+                records = [ReportRecord("月报", str(index), stamp, "黄三", "总部", "人事部", "月报.xlsx", index + 2)
+                           for index, stamp in enumerate(submitted)]
+                summaries, issues, _ = _summarize_reports(
+                    [], records, [ExpectedReporter("黄三")], month_range=(start, end),
+                )
+                actual = (summaries[0].missing_monthly_count, summaries[0].late_monthly_count) if summaries else (0, 0)
+                self.assertEqual(actual, expected)
+                for issue in issues:
+                    if issue.report_time is not None:
+                        self.assertLessEqual(start, issue.report_time.date())
+                        self.assertLessEqual(issue.report_time.date(), end)
 
     def test_parse_report_date_formats(self) -> None:
         from datetime import date
