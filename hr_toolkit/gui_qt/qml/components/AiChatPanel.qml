@@ -423,6 +423,38 @@ Item {
                 onMovementEnded: if (!conversationScrollBar.pressed) followTail = atYEnd
                 Component.onCompleted: scheduleTail()
 
+                // Let scrollable message contents handle their own wheel events first.
+                MouseArea {
+                    parent: aiChatView.contentItem
+                    z: -1
+                    y: aiChatView.contentY
+                    width: aiChatView.width
+                    height: aiChatView.height
+                    acceptedButtons: Qt.NoButton
+                    scrollGestureEnabled: false
+
+                    onWheel: function(wheel) {
+                        var delta = wheel.angleDelta.y
+                        if (delta === 0 || Math.abs(wheel.angleDelta.x) > Math.abs(delta)) {
+                            wheel.accepted = false
+                            return
+                        }
+                        // Apply 96 logical pixels per notch. Restarting a native
+                        // flick on each event loses distance during fast scrolling.
+                        var top = aiChatView.originY - aiChatView.topMargin
+                        var bottom = Math.max(top, aiChatView.originY + aiChatView.contentHeight
+                                                   + aiChatView.bottomMargin - aiChatView.height)
+                        var nextY = Math.max(top, Math.min(bottom, aiChatView.contentY - delta * 96 / 120))
+                        if (nextY === aiChatView.contentY) return
+
+                        if (aiChatView.flicking) aiChatView.cancelFlick()
+                        aiChatView.followTail = false
+                        tailTimer.stop()
+                        aiChatView.contentY = nextY
+                        if (!conversationScrollBar.pressed) aiChatView.followTail = aiChatView.atYEnd
+                    }
+                }
+
                 // 空状态：一句说明 + 几个建议问题。
                 // 注意这些子项都是布局子项，只能写 Layout.* 不能写 anchors，
                 // 否则 anchors 会盖掉布局结果、把几行字和按钮叠在一起。
