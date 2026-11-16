@@ -38,17 +38,13 @@ AppButton {
         id: menu
         objectName: "recentSelectionPopup"
         parent: Overlay.overlay
+        anchors.centerIn: parent
         width: Math.min(480, parent ? parent.width - 24 : 480)
         height: Math.min(390, parent ? parent.height - 24 : 390)
         padding: 12
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        onAboutToShow: {
-            var point = control.mapToItem(parent, control.width, control.height)
-            x = Math.max(12, Math.min(point.x - width, parent.width - width - 12))
-            y = Math.max(12, Math.min(point.y + 4, parent.height - height - 12))
-        }
         background: Rectangle { radius: 10; color: Ui.color("surface"); border.color: Ui.color("border") }
         contentItem: ColumnLayout {
             spacing: 8
