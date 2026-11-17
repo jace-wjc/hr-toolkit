@@ -64,3 +64,14 @@
 - 修复方式与影响文件：
 - 实际验证结果及未验证范围：
 - 下次提交前的防复发检查项：
+
+## 2026-11-17：历史考勤断言复用了旧报表列号
+
+- CI：[44057831559](https://github.com/jace-wjc/hr-toolkit/actions/runs/44057831559)，提交 `97458b2b4663c9bf829eda4b0e73a5e30a592c89`。
+- 失败 job：Python 3.12（`133951793706`）、Windows 7 兼容栈 Python 3.8（`133951793679`）；均在单元测试步骤的 `tests.test_run_coordinator` 失败。
+- 最终报错：`test_attendance_history_reads_manual_edits_without_relaxing_other_inputs` 的历史余额断言得到 `None != 3`，模块结果 `Ran 15 tests; FAILED (failures=1)`。
+- 已确认根因：七月与九月考勤报表的结转月份列不同，测试将七月报表的列号用于九月结果，实际读取了“漏打卡”。本地复现时，九月结果的“7月份加班天数”仍为人工修改后的 `3`，业务结转未丢失。
+- 修复：在 `tests/test_run_coordinator.py` 中从本次结果重新解析列名；保留历史余额、原文件未修改、普通资料仍拒绝被篡改结果等断言，不改生产代码。
+- 实际验证：本机 Python 3.13 上单独运行上述失败用例，修复前复现、修复后 `Ran 1 test; OK`。
+- 未验证：修复后的远程 CI、Windows 和 Win7 实机；未执行全量测试、构建、打包或发布。CI 的 Win7 兼容栈运行在现代 Windows runner 上，不等同于 Win7 实机验收。
+- 防复发：测试跨期报表时分别解析每份结果的动态表头，不沿用输入或旧月份的列索引。

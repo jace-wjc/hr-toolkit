@@ -81,7 +81,10 @@ class ProjectRunCoordinatorTests(unittest.TestCase):
                     self.assertEqual(errors, [])
                     result = load_workbook(successes[-1][0]["output_file"])
                     try:
-                        self.assertEqual(result["考勤统计"].cell(3, columns["7月份加班天数"]).value, 3)
+                        # 结转月份会改变表头布局，按本次结果的表头读取历史余额。
+                        result_sheet = result["考勤统计"]
+                        result_columns = {cell.value: cell.column for cell in result_sheet[2]}
+                        self.assertEqual(result_sheet.cell(3, result_columns["7月份加班天数"]).value, 3)
                     finally:
                         result.close()
                     self.assertEqual(history.read_bytes(), history_bytes)
