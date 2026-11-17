@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import threading
 import unittest
@@ -265,15 +266,60 @@ class ProjectRunCoordinatorTests(unittest.TestCase):
             store = ProjectStore.create(root / "project", "测试项目")
             errors = []
             request = RunRequest("social_security", "社保", "测试", "社保", _copy_probe, (source, root), {})
-            remote_error = BusinessProcessError(str(TemplateSelectionRequired({"tool": "social_security"})))
+            preview = "测试预览单元格"
+            needed = TemplateSelectionRequired({"tool": "social_security", "sheets": [{"rows": [[preview]]}]})
+            remote_error = BusinessProcessError(
+                f"TemplateSelectionRequired: {needed}", remote_traceback=f"Remote traceback: {needed}",
+            )
+            log_path = root / "application.log"
             try:
                 with patch("hr_toolkit.run_coordinator.should_use_process", return_value=True), patch(
                     "hr_toolkit.run_coordinator.run_business_process", side_effect=remote_error,
+                ), patch(
+                    "hr_toolkit.runlog.run_log_path", return_value=log_path,
                 ):
                     ProjectRunCoordinator()._run(store, request, RunCallbacks(error=errors.append), threading.Event())
                 self.assertEqual(errors, [remote_error])
                 self.assertEqual(store.list_batches(), ())
                 self.assertFalse((store.root / "测试").exists())
+                log = log_path.read_text(encoding="utf-8")
+                self.assertIn("社保：等待确认模板或业务规则。", log)
+                self.assertNotIn(preview, log)
+                self.assertNotIn("Remote traceback", log)
+            finally:
+                store.close()
+
+    def test_name_confirmation_details_reach_ui_without_persisting_in_failed_batch(self) -> None:
+        from hr_toolkit.tools.personnel_reconcile import NAME_CONFIRMATION_PREFIX
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.txt"
+            source.write_text("source", encoding="utf-8")
+            store = ProjectStore.create(root / "project", "测试项目")
+            log_path = root / "application.log"
+            details = [{"field": "项目", "company": "测试公司", "left": "测试项目甲", "right": "测试项目乙"}]
+            message = NAME_CONFIRMATION_PREFIX + json.dumps(details, ensure_ascii=False)
+            errors = []
+
+            def confirm_mapping(input_path, output_dir):
+                # Exercise the failure path where a batch already has an output directory.
+                output_dir.mkdir(parents=True)
+                raise ValueError(message)
+
+            request = RunRequest("personnel_reconcile", "人员核对", "测试", "核对", confirm_mapping, (source, root), {})
+            try:
+                with patch("hr_toolkit.run_coordinator.should_use_process", return_value=False), patch(
+                    "hr_toolkit.runlog.run_log_path", return_value=log_path,
+                ):
+                    ProjectRunCoordinator()._run(store, request, RunCallbacks(error=errors.append), threading.Event())
+                self.assertEqual([str(error) for error in errors], [message])
+                batch, = store.list_batches()
+                self.assertEqual(batch.status, "failed")
+                self.assertEqual(batch.error_message, "等待确认地市、专业或项目名称。")
+                log = log_path.read_text(encoding="utf-8")
+                self.assertIn("人员核对：等待确认地市、专业或项目名称。", log)
+                self.assertNotIn(details[0]["left"], log)
             finally:
                 store.close()
 

@@ -17,6 +17,7 @@ from typing import Any
 from .header_aliases import normalize_alias, validate_alias_rules, protected_aliases, has_custom_aliases
 
 ERROR_PREFIX = "HR_TEMPLATE_SELECTION:"
+NAME_CONFIRMATION_PREFIX = "HR_RECONCILE_NAMES:"
 SUPPORTED_TOOLS = ("salary_split", "personnel_change_merge", "roster_update", "personnel_reconcile", "archive_import", "archive_export",
                    "insurance_ledger", "data_statistics", "social_security")
 _current = ContextVar("hr_input_template_mapping", default=None)

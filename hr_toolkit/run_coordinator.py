@@ -18,6 +18,8 @@ from .background_process import (
     run_business_process,
     should_use_process,
 )
+from .common.template_mapping import ERROR_PREFIX as TEMPLATE_SELECTION_PREFIX
+from .common.template_mapping import NAME_CONFIRMATION_PREFIX
 from .project_run import (
     call_with_project_inputs,
     context_from_call,
@@ -28,6 +30,22 @@ from .project_run import (
 
 Callback = Callable[..., None]
 PROGRESS_UI_INTERVAL_SECONDS = 0.1
+
+
+def _confirmation_summary(tool_id: str, message: str) -> str | None:
+    # Direct calls send the marker first. Spawned workers include the original
+    # exception type before the same marker. Either payload can include cells.
+    if message.startswith((
+        TEMPLATE_SELECTION_PREFIX,
+        f"TemplateSelectionRequired: {TEMPLATE_SELECTION_PREFIX}",
+    )):
+        return "等待确认模板或业务规则。"
+    if tool_id == "personnel_reconcile" and message.startswith((
+        NAME_CONFIRMATION_PREFIX,
+        f"ValueError: {NAME_CONFIRMATION_PREFIX}",
+    )):
+        return "等待确认地市、专业或项目名称。"
+    return None
 
 
 @dataclass(frozen=True)
@@ -353,6 +371,9 @@ class ProjectRunCoordinator:
             callbacks.success(payload, result_dir, elapsed, isolated)
         except BaseException as exc:
             stopped = cancel_event.is_set() or isinstance(exc, BusinessProcessCancelled)
+            message = str(exc)
+            confirmation = _confirmation_summary(request.tool_id, message)
+            failure_reason = confirmation or message
             finalization_error: BaseException | None = None
             rename_recovery_hint = ""
             if batch_id is not None:
@@ -365,7 +386,7 @@ class ProjectRunCoordinator:
                         if stopped:
                             store.mark_stopped(batch_id)
                         else:
-                            store.mark_failed(batch_id, str(exc))
+                            store.mark_failed(batch_id, failure_reason)
                         if getattr(request.function, "__module__", "") == "hr_toolkit.tools.rename_plan":
                             recovery_dir = store.quarantine_dir / batch_id
                             if recovery_dir.is_dir():
@@ -377,19 +398,26 @@ class ProjectRunCoordinator:
                         raise RuntimeError("项目批次仍未进入安全结束状态。")
                 except BaseException as project_exc:
                     finalization_error = project_exc
-                    runlog.log_exception("保存项目批次状态失败", project_exc)
+                    if confirmation:
+                        # The chained exception would include the confirmation payload.
+                        runlog.log_line(f"保存项目批次状态失败：{type(project_exc).__name__}")
+                    else:
+                        runlog.log_exception("保存项目批次状态失败", project_exc)
             if finalization_error is not None:
                 callbacks.error(
                     RuntimeError(
-                        f"处理失败，且项目未能安全结案：{exc}；{finalization_error}"
+                        f"处理失败，且项目未能安全结案：{failure_reason}；{finalization_error}"
                     )
                 )
             elif stopped:
                 callbacks.stopped()
             else:
-                if isinstance(exc, BusinessProcessError) and exc.remote_traceback:
-                    runlog.log_line(exc.remote_traceback)
-                runlog.log_exception(f"{request.tool_name} 失败", exc)
+                if confirmation:
+                    runlog.log_line(f"{request.tool_name}：{confirmation}")
+                else:
+                    if isinstance(exc, BusinessProcessError) and exc.remote_traceback:
+                        runlog.log_line(exc.remote_traceback)
+                    runlog.log_exception(f"{request.tool_name} 失败", exc)
                 callbacks.error(RuntimeError(f"{exc}\n{rename_recovery_hint}") if rename_recovery_hint else exc)
         finally:
             if batch_id is not None:

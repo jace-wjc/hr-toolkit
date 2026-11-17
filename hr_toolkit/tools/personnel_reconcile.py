@@ -23,8 +23,8 @@ from openpyxl.utils.datetime import from_excel
 from hr_toolkit.common.excel_compat import ensure_xlsx_workbook
 from hr_toolkit.common.run_temp import temporary_directory
 from hr_toolkit.common.template_mapping import (
-    active, assigned_role, file_template_source, has_sheet_profile, map_sheet, request_selection,
-    template_tool,
+    NAME_CONFIRMATION_PREFIX, active, assigned_role, file_template_source, has_sheet_profile,
+    map_sheet, request_selection, template_tool,
 )
 from hr_toolkit.tools.personnel_change_merge import _iter_input_files
 
@@ -80,7 +80,6 @@ FILL_HEADERS = ("异动", "姓名", "身份证号码", "补入字段", "补入�
 FILLED = PatternFill("solid", fgColor="E4EFEA")
 WARNING = PatternFill("solid", fgColor="FFF2CC")
 NAME_FIELDS = ("地市", "所属专业", "项目")
-NAME_CONFIRMATION_PREFIX = "HR_RECONCILE_NAMES:"
 
 
 def clean_name_rules(rows):
