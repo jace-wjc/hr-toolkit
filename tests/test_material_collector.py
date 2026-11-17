@@ -1015,8 +1015,11 @@ class TestOCRCacheHelpers(unittest.TestCase):
     """OCR 智能索引缓存：纯函数单测。"""
 
     def test_engine_signature_is_non_empty(self) -> None:
+        from importlib import import_module
         from hr_toolkit.tools import material_collector as mc
 
+        # 在 sys.modules 快照之前加载，避免旧版 mock 恢复快照后补丁指向失效模块。
+        metadata = import_module("importlib.metadata")
         for modern, expected in (
             (False, "rapidocr_onnxruntime@1.4.4"),
             (True, "rapidocr@3.9.2:ppocrv4-mobile:2"),
@@ -1026,7 +1029,7 @@ class TestOCRCacheHelpers(unittest.TestCase):
             ), mock.patch.dict(
                 sys.modules,
                 {"rapidocr_onnxruntime": SimpleNamespace(__version__="1.4.4")},
-            ), mock.patch("importlib.metadata.version", return_value="3.9.2") as version:
+            ), mock.patch.object(metadata, "version", return_value="3.9.2") as version:
                 self.assertEqual(_get_engine_signature(), expected)
                 if modern:
                     version.assert_called_once_with("rapidocr")

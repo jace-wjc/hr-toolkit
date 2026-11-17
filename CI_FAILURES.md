@@ -75,3 +75,13 @@
 - 实际验证：本机 Python 3.13 上单独运行上述失败用例，修复前复现、修复后 `Ran 1 test; OK`。
 - 未验证：修复后的远程 CI、Windows 和 Win7 实机；未执行全量测试、构建、打包或发布。CI 的 Win7 兼容栈运行在现代 Windows runner 上，不等同于 Win7 实机验收。
 - 防复发：测试跨期报表时分别解析每份结果的动态表头，不沿用输入或旧月份的列索引。
+
+## 2026-11-17：Python 3.9 的 OCR 版本模拟指向旧模块
+
+- CI：[44057831559](https://github.com/jace-wjc/hr-toolkit/actions/runs/44057831559)，提交 `97458b2b4663c9bf829eda4b0e73a5e30a592c89`；失败 job：Python 3.9（`133951793618`），单元测试步骤。
+- 最终报错：`tests.test_material_collector.TestOCRCacheHelpers.test_engine_signature_is_non_empty` 的 `modern=True` 分支得到 `rapidocr@unavailable`，期望 `rapidocr@3.9.2:ppocrv4-mobile:2`；模块结果 `Ran 113 tests; FAILED (failures=1, skipped=2)`。
+- 已确认根因：测试先对 `sys.modules` 建立快照，再通过字符串补丁懒加载 `importlib.metadata`；第一次循环恢复快照后模块被移除，Python 3.9 的 `mock` 在第二次循环仍从父包属性找到旧模块，实际函数重新导入的模块没有被模拟。问题发生在测试补丁的生命周期，不是 OCR 包版本或安装错误。
+- 修复：`tests/test_material_collector.py` 在快照之前导入元数据模块，使用对象补丁；继续在两个后端分支校验签名及版本查询次数，不修改生产代码或 OCR 依赖。
+- 实际验证：临时隔离的 Python 3.9.25 环境中，原用例复现相同失败，修复后单独运行通过；本机 Python 3.13 同一用例也通过。临时环境未安装现代 OCR 包，因此通过结果不依赖本机恰好存在该包。
+- 未验证：修复后的远程 CI、Windows 和 Win7 实机；未执行全量测试、构建、打包或发布。
+- 防复发：混用 `patch.dict(sys.modules)` 与模块补丁时，先加载被模拟模块，再保存模块快照，并在项目支持的旧版 Python 上检查懒加载路径。
