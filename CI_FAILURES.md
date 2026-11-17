@@ -96,3 +96,13 @@
 - 实际验证：临时 Python 3.12.16 / Qt 6.6.3 环境中，原失败 UI 用例修复后通过；新年份输入用例在该环境及本机 Python 3.13 / Qt 6.11.2 均通过。新探针通过 Python 3.8 语法解析。
 - 未验证：修复后的远程 Windows CI、Qt 5.15 / Win7 实机；未执行全量测试、构建、打包或发布。
 - 防复发：自定义数字控件的文本转换时，同时核对校验器区域设置；QML 回归使用 CI 固定的生产 Qt 版本，不能以较新 Qt 的通过结果替代。
+
+## 2026-11-17：UI 探针失败后未释放项目文件锁
+
+- CI：[44057831559](https://github.com/jace-wjc/hr-toolkit/actions/runs/44057831559)，提交 `97458b2b4663c9bf829eda4b0e73a5e30a592c89`；失败 job：Windows Python 3.12（`133951793714`），与上条 UI 用例相同。
+- 最终异常链：先因 QML 告警抛出 `AssertionError`，再在 `TemporaryDirectory` 清理时抛出 `PermissionError: [WinError 32]`，文件为临时项目的 `.hrtoolkit/project-write.lock`。
+- 已确认根因：`tests/qt_presentation_probe.py` 只在全部断言成功后显式关闭控制器和项目；失败路径先退出临时目录上下文，项目仍持有 Windows 文件锁。该清理异常掩盖了原始失败，不是应用项目锁失效。
+- 修复：使用 `ExitStack` 注册控制器和 QML 引擎的清理，在移除临时目录之前、控制器仍存活时销毁 QML，再关闭控制器释放锁；恢复设置用的第二个控制器也在失败时清理。保留成功路径上的设置持久化检查。
+- 实际验证：临时 Python 3.12 / Qt 6.6 的原 UI 用例通过；本机 Python 3.13 / Qt 6.11 中在项目创建后注入断言失败，确认原始断言保留、`ProjectStore.close()` 被调用、临时项目目录移除；探针通过 Python 3.8 语法解析。
+- 未验证：Windows 文件锁的修复后实际执行结果和 Win7 实机；未执行全量测试、构建、打包或发布。
+- 防复发：GUI 探针创建项目、控制器或 QML 引擎后立即注册清理，不能把资源释放仅放在最终成功断言之后。

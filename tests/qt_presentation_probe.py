@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -50,9 +51,12 @@ def main():
     with tempfile.TemporaryDirectory() as temp:
         settings = Path(temp) / 'workspace-ui.json'
         settings.write_text(json.dumps({'release_notes_seen_version': __version__}), encoding='utf-8')
-        with patch.object(AppController, '_settings_path', return_value=settings):
+        with patch.object(AppController, '_settings_path', return_value=settings), ExitStack() as cleanup:
             controller = AppController()
+            cleanup.callback(controller.close)
             engine = QQmlApplicationEngine()
+            # 销毁 QML 时保留 controller，再释放项目锁；失败断言也必须走清理。
+            cleanup.callback(delete_qobject, engine)
             engine.rootContext().setContextProperty('controller', controller)
             engine.warnings.connect(lambda messages: errors.extend(item.toString() for item in messages))
             engine.load(QUrl.fromLocalFile(str(ROOT / 'hr_toolkit/gui_qt/qml/Main.qml')))
@@ -253,15 +257,14 @@ def main():
             controller._project_store.close()
             controller._project_store = None
             controller._project_path = None
-            controller.close()
-            delete_qobject(window); engine.deleteLater(); wait(20)
+            cleanup.close()
             second = AppController()
+            cleanup.callback(second.close)
             second.start()
             deadline = time.monotonic() + 8
             while second._startup_loading and time.monotonic() < deadline:
                 wait(20)
             assert second.presentation.theme == 'dark' and second.presentation.language == 'en_US'
-            second.close()
             print('presentation probe OK; tools, modes, dialogs, 5000 rows, persistence; switch max %.3fs' % max(timings))
 
 
