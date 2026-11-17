@@ -2082,53 +2082,63 @@ ApplicationWindow {
 
     Component {
         id: dateRangeFieldComponent
-        RowLayout {
+        ColumnLayout {
             spacing: 10
-            Text { Layout.preferredWidth: 145; wrapMode: Text.Wrap; text: Ui.text(field.label); color: root.textMain; font.pixelSize: 13; Layout.alignment: Qt.AlignTop }
-            ColumnLayout {
+            enabled: controller.selectionEnabled
+            RowLayout {
                 Layout.fillWidth: true
                 spacing: 6
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 7
-                    AppTextField {
-                        Layout.preferredWidth: 138
-                        text: field.startValue === undefined || field.startValue === null ? "" : String(field.startValue)
-                        placeholderText: Ui.text(field.startPlaceholder || "")
-                        onTextEdited: controller.setFieldValue(field.startId, text)
-                        onEditingFinished: controller.normalizeDateField(field.startId, text)
-                    }
-                    Text { text: Ui.text("至"); color: root.textMuted; font.pixelSize: 12 }
-                    AppTextField {
-                        Layout.preferredWidth: 138
-                        text: field.endValue === undefined || field.endValue === null ? "" : String(field.endValue)
-                        placeholderText: Ui.text(field.endPlaceholder || "")
-                        onTextEdited: controller.setFieldValue(field.endId, text)
-                        onEditingFinished: controller.normalizeDateField(field.endId, text)
-                    }
-                    Text { Layout.fillWidth: true; text: Ui.text(field.hint || ""); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+                Text { text: Ui.text(field.label); color: root.textMain; font.pixelSize: 13 }
+                Rectangle {
+                    implicitWidth: optionalDateLabel.implicitWidth + 12; implicitHeight: 20; radius: 3
+                    color: Qt.rgba(optionalDateLabel.color.r, optionalDateLabel.color.g, optionalDateLabel.color.b, 0.12)
+                    Text { id: optionalDateLabel; anchors.centerIn: parent; text: Ui.text("可选"); color: Ui.color("link1"); font.pixelSize: 11 }
                 }
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: 5
-                    Repeater {
-                        model: field.presets || []
-                        delegate: AppButton {
-                            text: modelData.label
-                            variant: "link"
-                            implicitWidth: Math.max(58, contentItem.implicitWidth + 12)
-                            implicitHeight: 28
-                            onClicked: controller.applyDatePreset(field.presetGroup, modelData.value)
-                        }
+                Item { Layout.fillWidth: true }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                AppDateField {
+                    Layout.preferredWidth: 154
+                    text: field.startValue === undefined || field.startValue === null ? "" : String(field.startValue)
+                    placeholderText: Ui.text(field.startPlaceholder || "")
+                    Accessible.name: Ui.text(field.label) + " " + Ui.text("开始日期")
+                    onTextEdited: controller.setFieldValue(field.startId, text)
+                    onEditingFinished: if (!choosingDate) controller.normalizeDateField(field.startId, text)
+                    onDatePicked: controller.normalizeDateField(field.startId, value)
+                }
+                Text { text: Ui.text("至"); color: root.textMuted; font.pixelSize: 12 }
+                AppDateField {
+                    Layout.preferredWidth: 154
+                    text: field.endValue === undefined || field.endValue === null ? "" : String(field.endValue)
+                    placeholderText: Ui.text(field.endPlaceholder || "")
+                    Accessible.name: Ui.text(field.label) + " " + Ui.text("结束日期")
+                    onTextEdited: controller.setFieldValue(field.endId, text)
+                    onEditingFinished: if (!choosingDate) controller.normalizeDateField(field.endId, text)
+                    onDatePicked: controller.normalizeDateField(field.endId, value)
+                }
+                Text { Layout.fillWidth: true; text: Ui.text(field.hint || ""); color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap }
+            }
+            Flow {
+                Layout.fillWidth: true
+                spacing: 5
+                Repeater {
+                    model: field.presets || []
+                    delegate: AppButton {
+                        text: modelData.label
+                        implicitWidth: Math.max(46, Math.ceil(contentItem.implicitWidth) + leftPadding + rightPadding + 2)
+                        implicitHeight: 28
+                        onClicked: controller.applyDatePreset(field.presetGroup, modelData.value)
                     }
                 }
-                Text {
-                    Layout.fillWidth: true
-                    readonly property var feedback: controller.selectionFeedback[field.presetGroup + "_range"] || ({})
-                    visible: !!feedback.text; text: Ui.text(feedback.text || "")
-                    textFormat: Text.PlainText; wrapMode: Text.Wrap
-                    color: Ui.color("error"); font.pixelSize: 12
-                }
+            }
+            Text {
+                Layout.fillWidth: true
+                readonly property var feedback: controller.selectionFeedback[field.presetGroup + "_range"] || ({})
+                visible: !!feedback.text; text: Ui.text(feedback.text || "")
+                textFormat: Text.PlainText; wrapMode: Text.Wrap
+                color: Ui.color("error"); font.pixelSize: 12
             }
         }
     }

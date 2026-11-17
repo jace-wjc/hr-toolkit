@@ -148,11 +148,11 @@ SPECS: tuple[ToolUiSpec, ...] = (
             {
                 "id": "week_range",
                 "kind": "date_range",
-                "label": "周报（可选）",
+                "label": "周报时间范围",
                 "startId": "week_start",
                 "endId": "week_end",
-                "startPlaceholder": "如 2026-06-02",
-                "endPlaceholder": "如 2026-06-30",
+                "startPlaceholder": "YYYY-MM-DD",
+                "endPlaceholder": "YYYY-MM-DD",
                 "hint": "两项均留空按整月统计",
                 "presetGroup": "week",
                 "presets": [
@@ -166,11 +166,11 @@ SPECS: tuple[ToolUiSpec, ...] = (
             {
                 "id": "month_range",
                 "kind": "date_range",
-                "label": "月报（可选）",
+                "label": "月报时间范围",
                 "startId": "month_start",
                 "endId": "month_end",
-                "startPlaceholder": "如 2026-06-01",
-                "endPlaceholder": "如 2026-06-30",
+                "startPlaceholder": "YYYY-MM-DD",
+                "endPlaceholder": "YYYY-MM-DD",
                 "hint": "两项均留空不筛选月报",
                 "presetGroup": "month",
                 "presets": [

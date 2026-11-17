@@ -462,7 +462,7 @@ class QtEntrypointTests(unittest.TestCase):
         qml = Path(__file__).resolve().parents[1] / "hr_toolkit" / "gui_qt" / "qml"
         source = (qml / "Main.qml").read_text(encoding="utf-8")
         self.assertEqual(source.count("PresetMenuButton { backend: controller;"), 2)
-        self.assertIn("onEditingFinished: controller.normalizeDateField(field.startId, text)", source)
+        self.assertIn("onEditingFinished: if (!choosingDate) controller.normalizeDateField(field.startId, text)", source)
         self.assertIn("controller.resultNoticeCategories", source)
         menu = (qml / "components" / "PresetMenuButton.qml").read_text(encoding="utf-8")
         self.assertIn("requestDeleteMaterialPreset(control.menuPreset)", menu)
