@@ -19,6 +19,7 @@ from typing import List, Optional, Sequence, Tuple, Union
 from openpyxl import load_workbook
 
 from hr_toolkit.common.excel_compat import ensure_xlsx_workbook
+from hr_toolkit.common.privacy import is_identity_number, mask_identity_numbers
 
 MAX_CONTEXT_ROWS = 500  # rows rendered into the prompt
 MAX_STATS_ROWS = 20000  # rows scanned for statistics
@@ -27,6 +28,11 @@ MAX_COLUMNS = 128
 MAX_CELL_TEXT_LENGTH = 80
 _HEADER_SCAN_ROWS = 10
 _NUMERIC_COLUMN_RATIO = 0.8
+_IDENTITY_HEADER = re.compile(
+    r"(?:身份证(?:件)?(?:号码?)?|证件(?:号码?|编号)|\bnational id|\bidentity number|\bid (?:number|no))"
+    r"(?=$|[\s.（(：:])",
+    re.I,
+)
 
 SUPPORTED_SUFFIXES = frozenset({".xlsx", ".xls"})
 
@@ -199,11 +205,12 @@ def _unique_headers(header_row: Sequence[str], sheet_name: str) -> List[str]:
 
 
 def _compute_stats(
-    headers: Sequence[str], rows: Sequence[Sequence[str]]
+    headers: Sequence[str], rows: Sequence[Sequence[str]], identity_columns: set[int],
 ) -> List[ColumnStats]:
     stats: List[ColumnStats] = []
-    width = len(headers)
     for position, header in enumerate(headers):
+        if position in identity_columns:
+            continue
         numbers: List[float] = []
         non_empty = 0
         for row in rows:
@@ -213,7 +220,7 @@ def _compute_stats(
             if value == "":
                 continue
             non_empty += 1
-            parsed = _to_number(value)
+            parsed = None if is_identity_number(value) else _to_number(value)
             if parsed is not None:
                 numbers.append(parsed)
         if non_empty < 3:
@@ -294,8 +301,16 @@ def _read_sheet(sheet, *, max_rows: int) -> SheetContext:
     normalized_rows = [
         (row + [""] * (width - len(row)))[:width] for row in data_rows
     ]
-    stats = _compute_stats(headers, normalized_rows)
+    identity_columns = {index for index, header in enumerate(headers) if _IDENTITY_HEADER.search(header)}
+    stats = _compute_stats(headers, normalized_rows, identity_columns)
     prompt_rows = _render_prompt_rows(normalized_rows, max_rows)
+    # Text IDs can keep a partial reference. Other values in these columns,
+    # including Excel numbers formatted in scientific notation, stay hidden.
+    for row in prompt_rows:
+        for index in identity_columns:
+            value = row[index]
+            if value:
+                row[index] = mask_identity_numbers(value) if is_identity_number(value) else "（已隐藏）"
     return SheetContext(
         name=sheet.title,
         # 报真实的表头行号：行号会写进提示词，模型好对照「第几行」回答
@@ -381,7 +396,7 @@ def render_workbook_markdown(context: WorkbookContext) -> str:
                 "（该表数据较多，已截断为首尾部分行；合计等统计基于全部数据，"
                 "请优先依据统计结果回答，避免根据截断行数下结论。）"
             )
-    return "\n".join(lines)
+    return mask_identity_numbers("\n".join(lines))
 
 
 ANALYSIS_PREAMBLE = (
@@ -390,7 +405,7 @@ ANALYSIS_PREAMBLE = (
     "回答要求：\n"
     "1. 使用系统指定的回答语言，直接给结论，再给依据；涉及金额和人数时明确写出数字。\n"
     "2. 对比多张表时，先总结相同点和差异点，再回答用户的具体问题。\n"
-    "3. 数据中可能存在身份证号等敏感信息，回答时只引用必要的业务字段。\n"
+    "3. 已识别的证件号已脱敏。不要仅凭脱敏值认定是同一人，回答时只引用必要的业务字段。\n"
     "4. 如果数据不足以回答，明确说明缺少什么，不要编造。\n"
 )
 

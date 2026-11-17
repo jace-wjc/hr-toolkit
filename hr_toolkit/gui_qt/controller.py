@@ -21,6 +21,7 @@ from hr_toolkit import __version__, runlog
 from hr_toolkit import update_diagnostics
 from hr_toolkit.common.paths import absolute_path_hint, path_text_error, user_app_data_dir, user_home_dir
 from hr_toolkit.common.inputs import ARCHIVE_FILE_DIALOG_PATTERN
+from hr_toolkit.common.privacy import mask_identity_numbers
 from hr_toolkit.app_update import (
     UpdateCancelledError,
     UpdateInfo,
@@ -980,14 +981,6 @@ class AppController(QObject):
         if tool_id == "insurance_ledger" and text.startswith("花名册身份证重复但姓名不同："):
             return "业务核对"
         return "其他提醒"
-
-    @staticmethod
-    def _mask_notice_identity_numbers(text: str) -> str:
-        return re.sub(
-            r"(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)",
-            lambda match: match[0][:4] + "*" * (len(match[0]) - 8) + match[0][-4:],
-            text,
-        )
 
     @constant_property(QObject)
     def resultNoticeModel(self):
@@ -4927,7 +4920,7 @@ class AppController(QObject):
         # Result notices, run logs and both copy actions share these display
         # values. Tool results and workbook contents retain their original data.
         warnings = [
-            self._mask_notice_identity_numbers(str(warning))
+            mask_identity_numbers(str(warning))
             for warning in (payload.get("warnings", []) if isinstance(payload, dict) else [])
         ]
         self._result_notice_rows = [
@@ -5812,11 +5805,13 @@ class AppController(QObject):
         from copy import deepcopy
         session.refresh_settings(deepcopy(self._ai_settings_obj()))
         self._ai_attach_status_phrases(attachment_rows)
+        api_content = (mask_identity_numbers(context_body) if context_body
+                       else session._context_message(question, sent_attachments))
         self._ai_chat_model.append(
             {
                 "role": "user",
                 "content": question if question else self._presentation.translate("请分析所附文件。", self._presentation.language),
-                "apiContent": context_body or session._context_message(question, sent_attachments),
+                "apiContent": api_content,
                 "html": "",
                 "streaming": False,
                 "time": datetime.now().strftime("%H:%M"),

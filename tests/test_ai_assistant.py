@@ -714,6 +714,28 @@ class ExcelContextTests(unittest.TestCase):
             self.assertEqual(stats["应发工资"].minimum, 1000)
             self.assertEqual(stats["应发工资"].count, 3)
 
+    def test_workbook_context_masks_identity_fields_without_changing_salary_statistics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "工资表.xlsx"
+            identity = "00000020000101000X"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["姓名", "证件号码", "应发工资", "备注"])
+            sheet.append(["测试甲", 1.23456789e17, 3000, f"旧号 {identity}"])
+            sheet.append(["测试乙", identity, 2000, ""])
+            sheet.append(["测试丙", "DEMO-PASSPORT", 1000, ""])
+            workbook.save(path)
+            workbook.close()
+
+            context = build_workbook_context(path)
+            markdown = render_workbook_markdown(context)
+            self.assertNotIn(identity, markdown)
+            self.assertNotIn("1.23456789e+17", markdown)
+            self.assertNotIn("DEMO-PASSPORT", markdown)
+            self.assertIn("旧号 0000**********000X", markdown)
+            self.assertIn("测试乙 | 0000**********000X | 2000", markdown)
+            self.assertEqual({stat.header: stat.total for stat in context.sheets[0].stats}, {"应发工资": 6000})
+
     def test_grouped_header_detection_and_real_row_number(self):
         """人事表常见结构：标题行 + 空行 + 分组表头 + 分组续行 + 数据。
 
@@ -1283,13 +1305,18 @@ class AiReliabilityRegressionTests(unittest.TestCase):
             image = Path(folder) / 'image.png'
             image.write_bytes(b'\x89PNG\r\n\x1a\nimage')
             session = self.session()
+            saved_body = 'saved spreadsheet rows 00000020000101000X'
+            masked_body = 'saved spreadsheet rows 0000**********000X'
+            session.load_history([{'role': 'user', 'content': 'earlier', 'apiContent': saved_body}])
             with patch('hr_toolkit.ai.assistant.stream_chat', return_value=iter(['answer'])) as send:
-                list(session.ask('question', [], context_body='saved spreadsheet rows',
+                list(session.ask('question', [], context_body=saved_body,
                                  image_rows=[{'kind': 'image', 'path': str(image), 'mime': 'image/png'}]))
-            content = send.call_args.args[0][-1]['content']
-            self.assertEqual(content[0]['text'], 'saved spreadsheet rows')
+            messages = send.call_args.args[0]
+            self.assertEqual(messages[1]['content'], masked_body)
+            content = messages[-1]['content']
+            self.assertEqual(content[0]['text'], masked_body)
             self.assertTrue(content[1]['image_url']['url'].startswith('data:image/png;base64,'))
-            self.assertEqual(session.last_context_body, 'saved spreadsheet rows')
+            self.assertEqual(session.last_context_body, masked_body)
 
     def test_whole_request_history_budget_drops_complete_old_turns(self):
         session = self.session()

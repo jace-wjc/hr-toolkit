@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
+from hr_toolkit.common.privacy import mask_identity_numbers
+
 from . import images as image_support
 from .client import ChatError, StreamControl, provider_credentials, provider_extra, stream_chat
 from .config import AiSettings, load_ai_settings
@@ -390,7 +392,7 @@ class AiAssistantSession:
 
     def _history_message(self, entry: Dict[str, Any]) -> Dict[str, Any]:
         """把一条历史记录还原成请求体里的消息；带图时从本地副本重新读盘。"""
-        content = str(entry.get("content") or "")
+        content = mask_identity_numbers(str(entry.get("content") or ""))
         parts: List[Dict[str, Any]] = []
         for desc in entry.get("images") or []:
             path = str((desc or {}).get("path") or "")
@@ -493,7 +495,10 @@ class AiAssistantSession:
         if not api_key:
             raise ChatError("尚未配置 API Key，请先打开助手设置。")
 
-        context_body = context_body if context_body is not None else self._context_message(text, batch)
+        if context_body is None:
+            context_body = self._context_message(text, batch)
+        else:
+            context_body = mask_identity_numbers(context_body)
         self.last_context_body = context_body
         restored_images = self._restore_images(image_rows)
         if len(restored_images) != sum(1 for row in image_rows if row.get("kind") == "image"):

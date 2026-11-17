@@ -61,6 +61,7 @@ ROUTES = {
     "hr_toolkit/gui_qt/qml/components/PresetMenuButton.qml": "material_preferences " + GUI,
     "hr_toolkit/common/template_mapping.py": "template_mapping header_aliases " + BUSINESS + " " + GUI,
     "hr_toolkit/common/paths.py": "paths app_update runlog runtime_checks " + STORE + " " + PROCESS,
+    "hr_toolkit/common/privacy.py": "ai_assistant qt_controller",
     "hr_toolkit/common/inputs.py": "inputs template_mapping " + BUSINESS + " " + STORE,
     "hr_toolkit/common/excel.py": "excel_helpers " + BUSINESS,
     "hr_toolkit/common/excel_compat.py": "excel_helpers pdf_backend_compat template_mapping " + BUSINESS,
