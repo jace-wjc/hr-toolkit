@@ -807,18 +807,55 @@ class AppUpdateTests(unittest.TestCase):
 
     def test_explicit_github_urls_are_rejected_without_network_access(self) -> None:
         for host in ("github.com", "api.github.com", "raw.githubusercontent.com", "release-assets.githubusercontent.com"):
-            with self.subTest(host=host), patch("hr_toolkit.app_update.urllib.request.urlopen") as network:
+            with self.subTest(host=host), patch("hr_toolkit.app_update.urllib.request.build_opener") as network:
                 with self.assertRaisesRegex(UpdateError, "不会访问 GitHub"):
                     fetch_update_manifest("https://" + host + "/latest.json")
                 network.assert_not_called()
 
+    def test_https_release_does_not_fetch_a_plain_http_manifest_attachment(self) -> None:
+        _manifest, release = self._gitee_uploaded_release()
+        attachment = release["assets"][0]
+        attachment["browser_download_url"] = attachment["browser_download_url"].replace("https:", "http:", 1)
+        with patch("hr_toolkit.app_update._fetch_json_object", return_value=release) as fetcher:
+            with self.assertRaisesRegex(UpdateError, "HTTPS 更新源不能"):
+                load_update_manifest(GITEE_LATEST_RELEASE_API_URL)
+            fetcher.assert_called_once_with(GITEE_LATEST_RELEASE_API_URL, timeout=10)
+
+    def test_https_manifest_rejects_http_package_and_fallback(self) -> None:
+        manifest = {"version": "0.2.1", "sha256": "f" * 64, "file_url": "safe.exe"}
+        for field in ("file_url", "fallback_url"):
+            with self.subTest(field=field), self.assertRaisesRegex(UpdateError, "HTTPS 更新源不能"):
+                parse_update_manifest(
+                    {**manifest, field: "http://example.test/setup.exe"},
+                    "https://example.test/latest.json", "windows",
+                )
+
+    def test_update_redirect_handler_allows_tls_cdn_but_rejects_downgrade_and_github(self) -> None:
+        from hr_toolkit.app_update import _UpdateRedirectHandler
+
+        handler = _UpdateRedirectHandler()
+        source = urllib.request.Request("https://gitee.com/release/setup.exe")
+        for url, error in (
+            ("http://cdn.example.test/setup.exe", "HTTPS 更新源不能"),
+            ("https://github.com/release/setup.exe", "不会访问 GitHub"),
+        ):
+            with self.subTest(url=url), self.assertRaisesRegex(UpdateError, error):
+                handler.redirect_request(source, None, 302, "Found", {}, url)
+        cdn = handler.redirect_request(source, None, 302, "Found", {}, "https://cdn.example.test/setup.exe")
+        self.assertEqual(cdn.full_url, "https://cdn.example.test/setup.exe")
+
     def test_https_manifest_uses_validating_certifi_context(self) -> None:
+        from hr_toolkit.app_update import _UpdateRedirectHandler
+
         response = io.BytesIO(b'{"version": "0.2.1"}')
-        with patch("hr_toolkit.app_update.urllib.request.urlopen", return_value=response) as urlopen:
+        with patch("hr_toolkit.app_update.urllib.request.build_opener") as builder:
+            builder.return_value.open.return_value = response
             manifest = fetch_update_manifest("https://example.test/latest.json")
 
         self.assertEqual(manifest["version"], "0.2.1")
-        context = urlopen.call_args.kwargs["context"]
+        handlers = builder.call_args.args
+        self.assertTrue(any(isinstance(handler, _UpdateRedirectHandler) for handler in handlers))
+        context = next(handler._context for handler in handlers if isinstance(handler, urllib.request.HTTPSHandler))
         self.assertIsInstance(context, ssl.SSLContext)
         self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(context.check_hostname)
@@ -826,18 +863,22 @@ class AppUpdateTests(unittest.TestCase):
 
     def test_legacy_http_manifest_does_not_receive_tls_context(self) -> None:
         response = io.BytesIO(b'{"version": "0.2.1"}')
-        with patch("hr_toolkit.app_update.urllib.request.urlopen", return_value=response) as urlopen:
+        with patch("hr_toolkit.app_update.urllib.request.build_opener") as builder, patch(
+            "hr_toolkit.app_update.create_https_context",
+        ) as create_context:
+            builder.return_value.open.return_value = response
             fetch_update_manifest("http://hr.seedlingintl.com/hr-toolkit/latest.json")
 
-        self.assertNotIn("context", urlopen.call_args.kwargs)
+        create_context.assert_not_called()
 
     def test_oversized_manifest_is_rejected_with_bounded_read(self) -> None:
         response = io.BytesIO(b'{"version":"0.2.1","padding":"xxxxxxxx"}')
         with (
             patch("hr_toolkit.app_update.UPDATE_MANIFEST_MAX_BYTES", 16),
-            patch("hr_toolkit.app_update.urllib.request.urlopen", return_value=response),
+            patch("hr_toolkit.app_update.urllib.request.build_opener") as builder,
             self.assertRaisesRegex(UpdateError, "配置文件过大"),
         ):
+            builder.return_value.open.return_value = response
             fetch_update_manifest("https://example.test/latest.json")
 
     def test_download_package_verifies_sha256(self) -> None:

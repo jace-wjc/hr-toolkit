@@ -2715,6 +2715,7 @@ MESSAGES = {
  '不支持的改名预览版本，请重新预览': 'Unsupported preview version. Generate a new preview.',
  '不支持的文件类型：{0}': 'Unsupported file type: {0}',
  '不支持的更新地址协议：{0}。': 'Unsupported update URL scheme: {0}.',
+ 'HTTPS 更新源不能跳转或引用非 HTTPS 地址。': 'An HTTPS update source cannot redirect to or reference a non-HTTPS address.',
  '不支持的资料库形式：{0}，可选值：{1}': 'Unsupported library layout: {0}; valid values: {1}',
  '不能写入项目隐藏管理目录。': 'Cannot write to the hidden project management folder.',
  '不能在另一个 HRToolkit 项目中创建子项目。': 'Cannot create a project inside another HR Toolkit project.',

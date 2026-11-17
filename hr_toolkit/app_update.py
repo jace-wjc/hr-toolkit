@@ -176,16 +176,34 @@ def create_https_context() -> ssl.SSLContext:
     return context
 
 
-def _open_url(request: urllib.request.Request, *, timeout: int):
-    if _is_github_url(request.full_url):
+def _update_url_scheme(url: str, *, allow_local_file: bool = False) -> str:
+    if _is_github_url(url):
         raise UpdateError("客户端更新仅使用 Gitee，不会访问 GitHub。")
-    scheme = urllib.parse.urlparse(request.full_url).scheme.lower()
-    if scheme not in {"https", "http", "file"}:
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in {"https", "http"} and not (allow_local_file and scheme == "file"):
         raise UpdateError(f"不支持的更新地址协议：{scheme or '空'}。")
-    kwargs: dict[str, Any] = {"timeout": timeout}
+    return scheme
+
+
+def _require_https_hop(source_url: str, target_url: str) -> None:
+    if (urllib.parse.urlparse(source_url).scheme.lower() == "https"
+            and urllib.parse.urlparse(target_url).scheme.lower() != "https"):
+        raise UpdateError("HTTPS 更新源不能跳转或引用非 HTTPS 地址。")
+
+
+class _UpdateRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _update_url_scheme(newurl)
+        _require_https_hop(req.full_url, newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_url(request: urllib.request.Request, *, timeout: int):
+    scheme = _update_url_scheme(request.full_url, allow_local_file=True)
+    handlers: list[urllib.request.BaseHandler] = [_UpdateRedirectHandler()]
     if scheme == "https":
-        kwargs["context"] = create_https_context()
-    return urllib.request.urlopen(request, **kwargs)
+        handlers.append(urllib.request.HTTPSHandler(context=create_https_context()))
+    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
 
 
 def update_check_enabled() -> bool:
@@ -280,6 +298,7 @@ def load_update_manifest(manifest_url: str, timeout: int = 10) -> tuple[dict[str
         is_gitee = urllib.parse.urlparse(manifest_url).hostname == "gitee.com"
         if is_gitee and _is_github_url(asset_url):
             raise UpdateError("Gitee 更新配置不能指向 GitHub。")
+        _require_https_hop(manifest_url, asset_url)
         diagnostics.event("stage", stage="manifest_fetch")
         manifest = _fetch_json_object(asset_url, timeout=timeout)
         if is_gitee:
@@ -592,6 +611,7 @@ def parse_update_manifest(manifest: dict[str, Any], manifest_url: str, platform:
             raise UpdateError(f"更新配置包含不支持的地址协议：{candidate_scheme or '空'}。")
         if candidate_scheme == "file" and manifest_scheme != "file":
             raise UpdateError("远程更新配置不能引用本机文件。")
+        _require_https_hop(manifest_url, candidate_url)
     notes = _normalize_notes(notes_value)
     return UpdateInfo(
         version=version,
@@ -641,6 +661,7 @@ def download_update_package(
         temp_path.unlink(missing_ok=True)
         final_path.unlink(missing_ok=True)
         try:
+            _require_https_hop(update.manifest_url, download_url)
             if stage_callback is not None:
                 stage_callback("downloading")
             with _open_url(request, timeout=60) as response:
@@ -757,6 +778,9 @@ def _load_ready_update(current_version: str, root: Path) -> tuple[UpdateInfo, Pa
         if data["platform"] != platform:
             return None
         info = UpdateInfo(**data["update"])
+        if not isinstance(info.manifest_url, str) or not isinstance(info.file_url, str):
+            return None
+        _require_https_hop(info.manifest_url, info.file_url)
         if platform == _WIN7_UPDATE_PLATFORM and info.platform != platform:
             # Older cache entries only stamped the host, not the selected lane.
             return None
@@ -776,7 +800,7 @@ def _load_ready_update(current_version: str, root: Path) -> tuple[UpdateInfo, Pa
         if sha256_file(package).lower() != info.sha256.lower():
             raise ValueError("cached package checksum mismatch")
         return info, package
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, UpdateError):
         # A partial/invalid record must never lock the tools or launch an EXE.
         return None
 
@@ -867,6 +891,7 @@ def resolve_download_url(update: UpdateInfo, timeout: int = 10) -> str:
             method="GET",
         )
         try:
+            _require_https_hop(update.manifest_url, download_url)
             with _open_url(request, timeout=timeout):
                 return download_url
         except Exception as exc:
