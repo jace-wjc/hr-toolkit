@@ -593,7 +593,7 @@ MSI、macOS DMG 和便携 ZIP 暂停发布，恢复范围见 [项目协作规则
 
 Win7 与 Python 3.8 均已停止官方维护，因此兼容分支只加载程序随包附带的可信 OCR 模型，不提供用户自定义 ONNX 模型入口；任何原生依赖升级都必须重新通过 PE 扫描和干净 Win7 虚拟机验收，现代分支不跟随该冻结版本降级。
 
-Win7 发布验收在干净的 Windows 7 SP1 x64 虚拟机中运行 `scripts/smoke_win7_installer.ps1 -InstallerPath <安装包> -ExpectedVersion <版本号>`。脚本覆盖静默安装、运行库检查、主程序与更新器启动、OCR、压缩包、项目存储及卸载。更新改动还需从上一版 Win7 安装包实际检查、下载、安装并重启，记录主路径和 WinHTTP 回退的结果。
+Win7 发布验收在干净的 Windows 7 SP1 x64 虚拟机中运行 `scripts/smoke_win7_installer.ps1 -InstallerPath <安装包> -ExpectedVersion <版本号>`。脚本覆盖静默安装、运行库检查、主程序与更新器启动、OCR、压缩包、项目存储及卸载；另以合成密钥检查安装版 DPAPI 迁移和恢复，并检查离线更新清单的平台选择。更新改动还需从上一版 Win7 安装包实际检查、下载、安装并重启，记录主路径和 WinHTTP 回退的结果。离线检查不代表在线升级已通过。
 
 **自动更新机制**：
 - Windows 客户端在检测到新版本后，按当前系统选择安装包。Win7 清单必须有专用节点、包地址和哈希。缺少平台来源的旧缓存需要重新检查更新。

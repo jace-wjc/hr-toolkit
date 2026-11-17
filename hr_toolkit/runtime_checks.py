@@ -183,6 +183,8 @@ def smoke_test() -> None:
         # macOS 上 tempfile 可能返回经过 /var -> /private/var 的系统链接；
         # 运行检查使用真实路径，不降低项目对链接路径的安全限制。
         resolved_temp_root = Path(temp_root).resolve()
+        _mark_smoke_stage("ai-key-storage")
+        ai_key_storage_smoke_test(resolved_temp_root / "ai-settings")
         _mark_smoke_stage("pdf-runtime")
         pdf_runtime_smoke_test(resolved_temp_root / "pdf-runtime")
         _mark_smoke_stage("archive-7z")
@@ -228,6 +230,32 @@ def smoke_test() -> None:
         bundle_root = Path(getattr(sys, "_MEIPASS", None) or current_executable_path().parent)
         if not (bundle_root / "README.md").is_file():
             raise RuntimeError("打包程序缺少 README.md。")
+
+
+def ai_key_storage_smoke_test(root: Path) -> None:
+    """Exercise real DPAPI migration inside an installed Windows application."""
+    from hr_toolkit.ai.config import load_ai_settings, save_ai_settings
+    from hr_toolkit.ai.key_storage import uses_dpapi
+
+    if not uses_dpapi():
+        return
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / "settings.json"
+    key = "hr-toolkit-synthetic-smoke-key"
+    endpoint = "https://example.invalid/v1/chat/completions"
+    target.write_text(json.dumps({"providers": {"minimax": {
+        "apiKey": key, "endpoint": endpoint,
+    }}}), encoding="utf-8")
+    settings = load_ai_settings(target)
+    if settings.problems() or settings.provider_config().api_key != key:
+        raise RuntimeError("Windows API Key 安全迁移检查失败。")
+    if key in target.read_text(encoding="utf-8"):
+        raise RuntimeError("Windows API Key 仍以明文保存。")
+    save_ai_settings(settings, target)
+    restored = load_ai_settings(target)
+    if (restored.problems() or restored.provider_config().api_key != key
+            or restored.provider_config().endpoint != endpoint):
+        raise RuntimeError("Windows API Key 保存与恢复检查失败。")
 
 
 def _smoke_test_archive_runtimes(root: Path) -> None:

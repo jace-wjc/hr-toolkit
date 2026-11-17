@@ -112,6 +112,9 @@ try {
     $app = Join-Path $payload "HRToolkit.exe"
     $expected = "HRToolkit $ExpectedVersion smoke-test OK"
     Invoke-InstalledSmoke -Executable $app -Argument "--smoke-test" -Expected $expected -TimeoutSeconds 180
+    # Offline manifest/platform parsing only; actual online upgrades still need
+    # the previous installer and the published release in the acceptance record.
+    Invoke-InstalledSmoke -Executable $app -Argument "--update-smoke-test" -Expected "HRToolkit $ExpectedVersion update-smoke-test OK; latest=$ExpectedVersion"
     # Require three consecutive native Qt launches; this is not a retry loop.
     for ($launch = 1; $launch -le 3; $launch++) {
         Invoke-InstalledSmoke -Executable $app -Argument "--qt-smoke-test" -Expected "HRToolkit Qt smoke-test OK"

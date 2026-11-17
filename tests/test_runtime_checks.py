@@ -25,6 +25,25 @@ from hr_toolkit.update_runner import main as update_runner_main
 
 
 class RuntimeChecksTest(unittest.TestCase):
+    def test_ai_key_storage_smoke_migrates_and_reloads_without_network(self):
+        from hr_toolkit.runtime_checks import ai_key_storage_smoke_test
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.ai.key_storage.uses_dpapi", return_value=True,
+        ), patch("hr_toolkit.ai.key_storage.protect_key", return_value="synthetic-ciphertext"), patch(
+            "hr_toolkit.ai.key_storage.unprotect_key", return_value="hr-toolkit-synthetic-smoke-key",
+        ), patch("urllib.request.build_opener") as network:
+            ai_key_storage_smoke_test(Path(temp))
+            network.assert_not_called()
+            self.assertNotIn("hr-toolkit-synthetic-smoke-key", (Path(temp) / "settings.json").read_text())
+
+    def test_ai_key_storage_smoke_reports_native_protection_failure(self):
+        from hr_toolkit.runtime_checks import ai_key_storage_smoke_test
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.ai.key_storage.uses_dpapi", return_value=True,
+        ), patch("hr_toolkit.ai.key_storage.protect_key", side_effect=OSError("DPAPI failure")):
+            with self.assertRaisesRegex(RuntimeError, "安全迁移检查失败"):
+                ai_key_storage_smoke_test(Path(temp))
+
     def test_version_command_is_headless_and_machine_verifiable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "version.txt"
