@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -19,12 +20,64 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from hr_toolkit.common.paths import user_app_data_dir
+from hr_toolkit.common.privacy import mask_identity_numbers
 
 CONVERSATIONS_FILENAME = "ai-conversations.json"
 CONVERSATION_LIMIT = 40
 MAX_HISTORY_BYTES = 16 * 1024 * 1024
 TITLE_MAX_CHARS = 22
 DEFAULT_TITLE = "新对话"
+
+
+def _private_text(value: str) -> str:
+    text = mask_identity_numbers(value)
+    # Old apiContent can contain numeric/scientific/passport values in an
+    # explicitly labelled identity column. Preserve other columns and prose.
+    lines, columns = [], set()
+    for line in text.splitlines(keepends=True):
+        if not line.lstrip().startswith("|"):
+            columns = set()
+            lines.append(line)
+            continue
+        cells = re.split(r"(?<!\\)\|", line)
+        found = {i for i, cell in enumerate(cells) if re.search(
+            r"身份证|证件(?:号码?|编号)|\b(?:national id|identity number|id (?:number|no))\b", cell, re.I,
+        )}
+        if found:
+            columns = found
+        elif columns and not all(re.fullmatch(r"[\s:\-]*", cell) for cell in cells):
+            for i in columns:
+                if i < len(cells) and cells[i].strip():
+                    cells[i] = " （已隐藏） "
+            line = "|".join(cells)
+        lines.append(line)
+    return "".join(lines)
+
+
+def _sanitize_history(payload: Dict[str, Any]) -> bool:
+    changed = False
+    def scrub(item, keys):
+        nonlocal changed
+        if not isinstance(item, dict):
+            return
+        for key in keys:
+            value = item.get(key)
+            if isinstance(value, str):
+                safe = _private_text(value)
+                if safe != value:
+                    item[key] = safe
+                    changed = True
+    for entry in payload.get("conversations", []):
+        if not isinstance(entry, dict):
+            continue
+        scrub(entry, ("title", "draft"))
+        messages = entry.get("messages")
+        for item in messages if isinstance(messages, list) else []:
+            scrub(item, ("content", "apiContent"))
+            parts = item.get("attachments") if isinstance(item, dict) else None
+            for part in parts if isinstance(parts, list) else []:
+                scrub(part, ("name", "summary"))
+    return changed
 
 
 @dataclass
@@ -126,6 +179,8 @@ class ConversationStore:
         self._limit = max(1, int(limit))
         self._unreadable = False
         self._corrupt = False
+        self.privacy_migration_pending = False
+        self._disk_image_paths: List[str] = []
         self._items: List[ConversationRecord] = self._read()
 
     # --------------------------------------------------------------- 读取
@@ -155,11 +210,21 @@ class ConversationStore:
         if not isinstance(entries, list):
             self._corrupt = True
             return []
+        if _sanitize_history(raw):
+            try:
+                _write_payload(self._path, raw)
+            except OSError:
+                # Mask the in-memory view even if the existing file is read-only.
+                self.privacy_migration_pending = True
         records: List[ConversationRecord] = []
         for entry in entries:
             record = _record_from_payload(entry)
             if record is not None:
                 records.append(record)
+                self._disk_image_paths.extend(
+                    part.get("path", "") for message in record.messages
+                    for part in message.get("attachments", []) if part.get("kind") == "image"
+                )
         records.sort(key=lambda item: item.updated_at, reverse=True)
         return records[: self._limit]
 
@@ -177,9 +242,18 @@ class ConversationStore:
         return None
 
     def retained_image_paths(self):
-        return [part.get("path", "") for record in self._items
+        return self._disk_image_paths + [part.get("path", "") for record in self._items
                 for message in record.messages for part in message.get("attachments", [])
                 if isinstance(part, dict) and part.get("kind") == "image"]
+
+    @property
+    def can_prune_images(self) -> bool:
+        if self._unreadable or self._corrupt or self.privacy_migration_pending:
+            return False
+        try:
+            return not any(self._path.parent.glob(self._path.name + ".corrupt-*"))
+        except OSError:
+            return False
 
     def latest(self) -> Optional[ConversationRecord]:
         return self._items[0] if self._items else None
@@ -231,7 +305,11 @@ class ConversationStore:
         for index, item in enumerate(self._items):
             if item.conversation_id == str(conversation_id):
                 del self._items[index]
-                self.save()
+                try:
+                    self.save()
+                except OSError:
+                    self._items.insert(index, item)
+                    raise
                 return True
         return False
 
@@ -241,29 +319,19 @@ class ConversationStore:
         if self._corrupt:
             backup = self._path.with_name(self._path.name + ".corrupt-" + uuid.uuid4().hex)
             shutil.copy2(self._path, backup)
-            self._corrupt = False
+            # Keep cache cleanup disabled: attachments referenced by this
+            # unreadable backup cannot be reconstructed automatically.
         payload = {"conversations": [item.as_payload() for item in self._items]}
-        serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-        if len(serialized.encode("utf-8")) > MAX_HISTORY_BYTES:
-            raise OSError("Conversation history exceeds the size limit")
-        target = self._path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        handle = tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=str(target.parent), prefix=".ai-chats-", delete=False
-        )
-        try:
-            with handle:
-                handle.write(serialized)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(handle.name, target)
-        except BaseException:
-            try:
-                os.unlink(handle.name)
-            except OSError:
-                pass
-            raise
-        return target
+        _sanitize_history(payload)
+        _write_payload(self._path, payload)
+        self._corrupt = False
+        self.privacy_migration_pending = False
+        self._disk_image_paths = [
+            part.get("path", "") for record in self._items for message in record.messages
+            for part in message.get("attachments", [])
+            if isinstance(part, dict) and part.get("kind") == "image"
+        ]
+        return self._path
 
     def _trim(self) -> None:
         if len(self._items) > self._limit:
@@ -272,6 +340,28 @@ class ConversationStore:
 
 def _new_id() -> str:
     return time.strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:6]
+
+
+def _write_payload(target: Path, payload: Dict[str, Any]) -> None:
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if len(serialized.encode("utf-8")) > MAX_HISTORY_BYTES:
+        raise OSError("Conversation history exceeds the size limit")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=str(target.parent), prefix=".ai-chats-", delete=False,
+    )
+    try:
+        with handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(handle.name, target)
+    except BaseException:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+        raise
 
 
 def _record_from_payload(entry: Any) -> Optional[ConversationRecord]:

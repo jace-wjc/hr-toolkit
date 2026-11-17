@@ -1274,6 +1274,82 @@ class ConversationHistoryTests(unittest.TestCase):
     def _store(self, temp, **kwargs):
         return ConversationStore(Path(temp) / "ai-conversations.json", **kwargs)
 
+    def test_legacy_history_migrates_sensitive_text_without_changing_paths_or_other_columns(self):
+        identifier = "11010519491231002X"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "ai-conversations.json"
+            raw = {"extra": 42, "conversations": [{"id": "old", "title": identifier,
+                "draft": identifier, "messages": [{"role": "user", "content": identifier,
+                "apiContent": "| 身份证号 | 金额 |\n| --- | --- |\n| 1.1010519491231e17 | 1234.56 |\n",
+                "attachments": [{"kind": "image", "name": identifier + ".png", "path": "/original/path.png"}]}]}]}
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            store = ConversationStore(path)
+            stored = json.loads(path.read_text())
+            self.assertNotIn(identifier, path.read_text())
+            self.assertNotIn("1.1010519491231e17", path.read_text())
+            self.assertIn("1234.56", path.read_text())
+            self.assertEqual(stored["extra"], 42)
+            self.assertEqual(store.latest().messages[0]["attachments"][0]["path"], "/original/path.png")
+            self.assertEqual(list(Path(temp).iterdir()), [path])
+
+    def test_failed_history_migration_keeps_original_and_masks_loaded_content(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "ai-conversations.json"
+            original = json.dumps({"conversations": [{"id": "old", "title": "11010519491231002X"}]})
+            path.write_text(original)
+            with patch("hr_toolkit.ai.history.os.replace", side_effect=OSError("read only")):
+                store = ConversationStore(path)
+            self.assertEqual(path.read_text(), original)
+            self.assertNotIn("11010519491231002X", store.latest().title)
+            self.assertTrue(store.privacy_migration_pending)
+            self.assertFalse(store.can_prune_images)
+            store.save()
+            self.assertFalse(store.privacy_migration_pending)
+            self.assertNotIn("11010519491231002X", path.read_text())
+
+    def test_new_history_is_sanitized_and_failed_delete_keeps_image_references(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = self._store(temp)
+            record = store.create("test")
+            record.messages = [{"role": "user", "content": "11010519491231002X",
+                                "attachments": [{"kind": "image", "path": "/cached.png"}]}]
+            store.upsert(record)
+            self.assertNotIn("11010519491231002X", store.path.read_text())
+            with patch("hr_toolkit.ai.history.os.replace", side_effect=OSError("read only")):
+                with self.assertRaises(OSError):
+                    store.remove(record.conversation_id)
+            self.assertIsNotNone(store.get(record.conversation_id))
+            self.assertIn("/cached.png", store.retained_image_paths())
+            store.remove(record.conversation_id)
+            self.assertNotIn("/cached.png", store.retained_image_paths())
+
+    def test_corrupt_history_backup_prevents_pruning_even_after_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "ai-conversations.json"
+            path.write_text("{incomplete")
+            store = ConversationStore(path)
+            self.assertFalse(store.can_prune_images)
+            store.create("new")
+            store.save()
+            self.assertEqual(len(list(Path(temp).glob("*.corrupt-*"))), 1)
+            self.assertFalse(ConversationStore(path).can_prune_images)
+
+    def test_prune_removes_only_unreferenced_app_images(self):
+        from hr_toolkit.ai.images import prune_image_cache, save_cached_image
+        import os
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            kept = save_cached_image(b"image1", directory=root)
+            orphan = save_cached_image(b"image2", directory=root)
+            unrelated = root / "user-photo.png"
+            unrelated.write_bytes(b"user data")
+            if os.name != "nt":
+                self.assertEqual(kept.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(prune_image_cache([kept], directory=root, limit=0), 1)
+            self.assertTrue(kept.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertFalse(orphan.exists())
+
     def test_create_get_remove(self):
         with tempfile.TemporaryDirectory() as temp:
             store = self._store(temp)

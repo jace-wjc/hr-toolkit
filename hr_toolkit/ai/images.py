@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import base64
 import os
+import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
@@ -127,9 +129,11 @@ def save_cached_image(data: bytes, suffix: str = ".png", *, directory: Optional[
     extension = suffix if str(suffix).startswith(".") else "." + str(suffix)
     name = "img-%s%s" % (uuid.uuid4().hex, extension)
     target = target_dir / name
-    temp = target_dir / (".partial-" + name)
+    handle = tempfile.NamedTemporaryFile("wb", dir=str(target_dir), prefix=".partial-", delete=False)
+    temp = Path(handle.name)
     try:
-        temp.write_bytes(blob)
+        with handle:
+            handle.write(blob)
         os.replace(temp, target)
     except BaseException:
         try:
@@ -151,7 +155,7 @@ def prune_image_cache(
     ``keep`` 里是仍在用的路径（例如当前对话引用的图），永不删除。
     """
     target_dir = Path(directory) if directory is not None else image_cache_dir()
-    if not target_dir.is_dir():
+    if target_dir.is_symlink() or not target_dir.is_dir():
         return 0
     protected = set()
     for item in keep or ():
@@ -162,7 +166,8 @@ def prune_image_cache(
     entries = []
     try:
         for child in target_dir.iterdir():
-            if not child.is_file() or child.name.startswith("."):
+            if (child.is_symlink() or not child.is_file()
+                    or not re.fullmatch(r"img-[0-9a-f]{32}\.[a-zA-Z0-9]+", child.name)):
                 continue
             try:
                 entries.append((child.stat().st_mtime, child))

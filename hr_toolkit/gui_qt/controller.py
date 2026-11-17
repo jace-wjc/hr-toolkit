@@ -5093,6 +5093,8 @@ class AppController(QObject):
             from hr_toolkit.ai.history import ConversationStore
 
             self._ai_conversation_store = ConversationStore()
+            if self._ai_conversation_store.privacy_migration_pending:
+                self.notificationRequested.emit("Sage", "旧对话已在界面脱敏，但无法更新历史文件，请检查磁盘权限后重试。", "warning")
         return self._ai_conversation_store
 
     def _ai_dark_theme(self) -> bool:
@@ -5192,14 +5194,15 @@ class AppController(QObject):
 
     def _ai_prune_image_cache(self) -> None:
         """清掉不再引用的粘贴图片：缓存目录不该无限长大。"""
-        if self._ai_session is None:
-            return
         try:
             from hr_toolkit.ai.images import prune_image_cache
 
-            retained = self._ai_session.retained_image_paths()
-            retained.extend(self._ai_store_obj().retained_image_paths())
-            prune_image_cache(retained)
+            store = self._ai_store_obj()
+            if not store.can_prune_images:
+                return
+            retained = self._ai_session.retained_image_paths() if self._ai_session is not None else []
+            retained.extend(store.retained_image_paths())
+            prune_image_cache(retained, limit=0)
         except Exception:
             return
 
@@ -5323,13 +5326,17 @@ class AppController(QObject):
         if self._ai_busy or self._ai_preparing:
             return
         target = str(conversation_id)
+        try:
+            self._ai_store_obj().remove(target)
+        except OSError:
+            self.notificationRequested.emit("Sage", "无法删除对话历史，请检查磁盘权限后重试。", "warning")
+            return
         if self._ai_conversation is not None and self._ai_conversation.conversation_id == target:
             self._ai_conversation = None
             self._ai_chat_model.clear()
             self._ai_attachment_model.clear()
             self._ai_draft = ""
             self._ai_session_obj().reset_conversation()
-        self._ai_store_obj().remove(target)
         self._ai_prune_image_cache()
         self._ai_refresh_history()
         self.aiChanged.emit()
