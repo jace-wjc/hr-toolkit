@@ -1283,12 +1283,21 @@ ApplicationWindow {
                                     }
                                 }
 
+                                RowLayout {
+                                    width: formColumn.width
+                                    visible: controller.currentTool === "data_statistics"
+                                    spacing: 12
+                                    Text { text: Ui.text("考勤设置"); color: root.textMain; font.pixelSize: 14; font.weight: Font.DemiBold }
+                                    Rectangle { Layout.fillWidth: true; height: 1; color: root.border }
+                                }
+
                                 Repeater {
                                     model: controller.currentTool === "material_collector" ? [] : root.formSnapshot.fields
                                     delegate: Loader {
                                         width: formColumn.width
                                         readonly property bool groupedAttendanceField: controller.currentTool === "data_statistics"
-                                            && (modelData.id === "remark_unit" || modelData.id === "include_business_trip" || modelData.id === "include_workday_business_trip")
+                                            && (modelData.id === "remark_unit" || modelData.id === "include_business_trip" || modelData.id === "include_workday_business_trip"
+                                                || modelData.id === "week_range" || modelData.id === "month_range")
                                         visible: modelData.visible && !groupedAttendanceField
                                         active: visible
                                         property var field: modelData
@@ -1356,6 +1365,22 @@ ApplicationWindow {
                                     }
                                     TextMetrics { id: businessTripMetrics; font: businessTrip.contentItem.font; text: Ui.text(businessTrip.text) }
                                     TextMetrics { id: workdayTripMetrics; font: workdayTrip.contentItem.font; text: Ui.text(workdayTrip.text) }
+                                }
+
+                                RowLayout {
+                                    width: formColumn.width
+                                    visible: controller.currentTool === "data_statistics"
+                                    spacing: 12
+                                    Text { text: Ui.text("周月报设置"); color: root.textMain; font.pixelSize: 14; font.weight: Font.DemiBold }
+                                    Rectangle { Layout.fillWidth: true; height: 1; color: root.border }
+                                }
+                                Repeater {
+                                    model: controller.currentTool === "data_statistics" ? [root.fieldById("week_range"), root.fieldById("month_range")] : []
+                                    delegate: Loader {
+                                        width: formColumn.width
+                                        property var field: modelData
+                                        sourceComponent: dateRangeFieldComponent
+                                    }
                                 }
 
                                 RowLayout {
