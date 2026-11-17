@@ -51,7 +51,8 @@ class ConversationRecord:
             "title": self.title,
             "updatedAt": self.updated_at,
             "messages": [dict(
-                {key: item[key] for key in ("role", "content", "time", "apiContent", "attachments") if key in item},
+                {key: item[key] for key in ("role", "content", "time", "apiContent", "apiDestination", "attachments")
+                 if key in item},
                 status=("stopped" if item.get("streaming") else item.get("status", "complete"))
             ) for item in self.messages],
             "draft": self.draft,
@@ -296,6 +297,7 @@ def _record_from_payload(entry: Any) -> Optional[ConversationRecord]:
                     "content": str(item.get("content") or ""),
                     "time": str(item.get("time") or ""),
                     "apiContent": str(item.get("apiContent") or ""),
+                    "apiDestination": str(item.get("apiDestination") or ""),
                     "attachments": [
                         {
                             "name": str(part.get("name") or ""),

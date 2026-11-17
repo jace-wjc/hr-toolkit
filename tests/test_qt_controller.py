@@ -833,12 +833,15 @@ class QtControllerTests(unittest.TestCase):
         controller._ai_sync_conversation.assert_not_called()
 
     def test_ai_restore_and_retry_keep_saved_attachment_context(self):
+        from hr_toolkit.ai.config import AiSettings
         from hr_toolkit.ai.history import ConversationRecord, ConversationStore
         with tempfile.TemporaryDirectory() as folder:
             controller = self._isolated_controller(folder)
+            controller._ai_settings = AiSettings()
             controller._ai_conversation_store = ConversationStore(Path(folder) / "history.json")
             record = ConversationRecord("chat", messages=[
                 {"role": "user", "content": "analyze", "apiContent": "saved table rows\nanalyze",
+                 "apiDestination": controller._ai_settings.context_destination(),
                  "attachments": [{"kind": "sheet", "name": "table.xlsx"}]},
                 {"role": "assistant", "content": "failed", "status": "error"}])
             with patch.object(controller, "_ai_prune_image_cache"):
@@ -850,17 +853,40 @@ class QtControllerTests(unittest.TestCase):
             self.assertEqual(begin.call_args.args[1][0]["name"], "table.xlsx")
 
     def test_ai_edit_keeps_context_and_conversation_identity(self):
+        from hr_toolkit.ai.config import AiSettings
         from hr_toolkit.ai.history import ConversationRecord
         controller = self.controller()
         self.addCleanup(controller.close)
+        controller._ai_settings = AiSettings()
         controller._ai_conversation = ConversationRecord("same-chat")
         controller._ai_chat_model.set_items([
-            {"role": "user", "content": "old", "apiContent": "saved rows\n用户的问题：old", "attachments": []},
+            {"role": "user", "content": "old", "apiContent": "saved rows\n用户的问题：old", "attachments": [],
+             "apiDestination": controller._ai_settings.context_destination()},
             {"role": "assistant", "content": "answer"}])
         with patch.object(controller, "_ai_begin_turn") as begin:
             controller.aiEditMessage(0, "new")
         self.assertEqual(controller._ai_conversation.conversation_id, "same-chat")
         self.assertEqual(begin.call_args.kwargs["context_body"], "saved rows\n用户的问题：new")
+
+    def test_ai_edit_and_regenerate_keep_history_when_saved_attachments_are_not_for_this_service(self):
+        from hr_toolkit.ai.config import AiSettings
+
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._ai_settings = AiSettings(active_provider="qwen")
+        for old_destination in (AiSettings().context_destination(), ""):
+            with self.subTest(legacy=not old_destination):
+                controller._ai_chat_model.set_items([
+                    {"role": "user", "content": "导出摘要", "apiContent": "表格摘要数据",
+                     "apiDestination": old_destination, "attachments": [{"kind": "sheet", "name": "table.xlsx"}]},
+                    {"role": "assistant", "content": "上次回复"},
+                ])
+                before = controller._ai_chat_model.items()
+                with patch.object(controller, "_ai_begin_turn") as begin:
+                    controller.aiRegenerate()
+                    controller.aiEditMessage(0, "继续分析")
+                    begin.assert_not_called()
+                self.assertEqual(controller._ai_chat_model.items(), before)
 
     def test_ai_restores_legacy_stop_notice_as_separate_status(self):
         from hr_toolkit.ai.history import ConversationRecord, ConversationStore

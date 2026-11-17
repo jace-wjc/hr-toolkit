@@ -240,6 +240,8 @@ MESSAGES = {
  '首个片段：{0}': 'first chunk: {0}',
  '列表里没有模型「{0}」。': 'Model {0} is not in the list.',
  '原图片附件已不可用，请重新附加图片后发送。': 'The original image attachment is unavailable. Attach it again before sending.',
+ '旧消息的附件未发给当前 AI 服务地址，请重新附加文件后发送。': 'The saved attachments were not sent to this AI service address. Attach the files again before sending.',
+ '本轮仅使用发送给当前 AI 服务地址的历史消息。': 'This request uses only history sent to the current AI service address.',
  'AI 服务地址发生重定向，请在设置中填写最终接口地址。': 'The endpoint redirects to another address. Enter the final API endpoint in Settings.',
  '图片过大，请先缩小图片后再附加。': 'This image is too large. Resize it before attaching.',
  '图片尺寸过大或无法识别，请先缩小图片后再附加。': 'The image dimensions are too large or unreadable. Resize it before attaching.',

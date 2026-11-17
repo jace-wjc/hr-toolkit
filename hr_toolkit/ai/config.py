@@ -8,6 +8,7 @@ without touching the real user profile.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -293,6 +294,12 @@ class AiSettings:
         key = provider_id or self.active_provider
         self.preset(key)  # validates the id first
         return self.providers.setdefault(key, ProviderConfig())
+
+    def context_destination(self) -> str:
+        """Identify a provider and resolved address without persisting the URL or key."""
+        preset = self.preset()
+        endpoint = self.provider_config().resolved_endpoint(preset)
+        return hashlib.sha256(f"{preset.provider_id}\0{endpoint}".encode("utf-8")).hexdigest()
 
     def is_ready(self, provider_id: Optional[str] = None) -> bool:
         try:

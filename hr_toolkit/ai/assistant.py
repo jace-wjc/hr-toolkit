@@ -119,7 +119,7 @@ class AiAssistantSession:
         self.settings = settings if settings is not None else load_ai_settings()
         self._opener = opener
         self._max_history = max(2, int(max_history))
-        self._history: List[Dict[str, str]] = []
+        self._history: List[Dict[str, Any]] = []
         self._attachments: List[Attachment] = []
         self._control = StreamControl()
         self.language = "zh_CN"
@@ -311,6 +311,7 @@ class AiAssistantSession:
                 {
                     "role": role,
                     "content": body,
+                    "apiDestination": str(item.get("apiDestination") or ""),
                     "images": self._restore_images(item.get("attachments")),
                 }
             )
@@ -336,10 +337,16 @@ class AiAssistantSession:
         self._attachments.clear()
 
     def _append_history(
-        self, role: str, content: str, images: Optional[Sequence[Dict[str, str]]] = None
+        self, role: str, content: str, images: Optional[Sequence[Dict[str, str]]] = None,
+        *, destination: Optional[str] = None,
     ) -> None:
         self._history.append(
-            {"role": role, "content": content, "images": list(images or [])}
+            {
+                "role": role,
+                "content": content,
+                "apiDestination": destination or self.settings.context_destination(),
+                "images": list(images or []),
+            }
         )
         if len(self._history) > self._max_history:
             del self._history[: len(self._history) - self._max_history]
@@ -420,7 +427,8 @@ class AiAssistantSession:
         }
 
     def _messages_for(
-        self, context_body: str, attachments: Sequence[Attachment] = (), *, extra_image_count=0
+        self, context_body: str, attachments: Sequence[Attachment] = (),
+        *, destination: str, extra_image_count=0,
     ) -> List[Dict[str, Any]]:
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT + "\nResponse language: "
@@ -431,7 +439,12 @@ class AiAssistantSession:
         ]
         # Bound the whole request, not just each attachment batch. Drop oldest
         # complete turns; never cut a workbook or silently omit a current image.
-        history = list(self._history)
+        # A prior reply can contain material from its request. Only reuse
+        # history sent to this exact service, including across app restarts.
+        history = []
+        for entry in self._history:
+            if entry.get("apiDestination") == destination and (history or entry["role"] == "user"):
+                history.append(entry)
         chars = len(context_body) + sum(len(str(entry.get("content") or "")) for entry in history)
         images = extra_image_count + sum(1 for item in attachments if item.is_image) + sum(len(entry.get("images") or []) for entry in history)
         while history and (chars > 120000 or images > image_support.MAX_IMAGES):
@@ -458,7 +471,9 @@ class AiAssistantSession:
     def build_messages(
         self, question: str, attachments: Sequence[Attachment] = ()
     ) -> List[Dict[str, Any]]:
-        return self._messages_for(self._context_message(question, attachments), attachments)
+        return self._messages_for(
+            self._context_message(question, attachments), attachments, destination=self.settings.context_destination(),
+        )
 
     # ------------------------------------------------------------------ ask
     def request_stop(self) -> None:
@@ -490,8 +505,10 @@ class AiAssistantSession:
             raise ChatError("问题过长，请缩短到 10000 字以内。")
         if not text and not batch:
             raise ValueError("请输入问题，或先附加要分析的表格。")
-        endpoint, api_key, model = provider_credentials(self.settings)
-        provider_id = self.settings.active_provider
+        settings = self.settings
+        endpoint, api_key, model = provider_credentials(settings)
+        provider_id = settings.active_provider
+        destination = settings.context_destination()
         if not api_key:
             raise ChatError("尚未配置 API Key，请先打开助手设置。")
 
@@ -503,7 +520,9 @@ class AiAssistantSession:
         restored_images = self._restore_images(image_rows)
         if len(restored_images) != sum(1 for row in image_rows if row.get("kind") == "image"):
             raise ChatError("原图片附件已不可用，请重新附加图片后发送。")
-        messages = self._messages_for(context_body, batch, extra_image_count=len(restored_images))
+        messages = self._messages_for(
+            context_body, batch, destination=destination, extra_image_count=len(restored_images),
+        )
         deltas: List[str] = []
         # 图片描述进历史：下一轮追问时从本地副本重新读图塞回上下文，
         # 同时历史文件里只留路径，不存 base64。
@@ -520,7 +539,7 @@ class AiAssistantSession:
                 endpoint=endpoint,
                 api_key=api_key,
                 model=model,
-                temperature=self.settings.temperature,
+                temperature=settings.temperature,
                 opener=self._opener,
                 extra=provider_extra(provider_id),
                 control=self._control,
@@ -532,11 +551,11 @@ class AiAssistantSession:
             completed = True
         finally:
             # 入历史的是「带表格正文」的那条消息：否则下一轮追问时模型看不见表格。
-            self._append_history("user", context_body, image_descriptors)
+            self._append_history("user", context_body, image_descriptors, destination=destination)
             reply = "".join(deltas)
             if reply and completed:
                 suffix = "\n（已停止生成）" if self.stopped else ""
-                self._append_history("assistant", reply + suffix)
+                self._append_history("assistant", reply + suffix, destination=destination)
 
     def refresh_settings(self, settings: Optional[AiSettings] = None) -> None:
         """Reload settings after the user saves new provider options."""

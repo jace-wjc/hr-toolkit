@@ -5377,6 +5377,17 @@ class AppController(QObject):
     def aiConversationTitle(self) -> str:
         return self._ai_conversation.title if self._ai_conversation else ""
 
+    def _ai_can_replay_saved_context(self, item) -> bool:
+        context = item.get("apiContent")
+        if not item.get("attachments") and (not context or context == item.get("content")):
+            return True
+        if item.get("apiDestination") == self._ai_settings_obj().context_destination():
+            return True
+        self.notificationRequested.emit(
+            "Sage", "旧消息的附件未发给当前 AI 服务地址，请重新附加文件后发送。", "warning",
+        )
+        return False
+
     @Slot(int, str)
     def aiEditMessage(self, row: int, text: str) -> None:
         """编辑并重发：从这条用户消息起截断，用新内容重新问一次。"""
@@ -5393,6 +5404,8 @@ class AppController(QObject):
             return
         if len(question) > 10000:
             self.notificationRequested.emit("Sage", "问题过长，请缩短到 10000 字以内。", "warning")
+            return
+        if not self._ai_can_replay_saved_context(item):
             return
         remaining = self._ai_chat_model.items()[:index]
         attachment_rows = item.get("attachments") or []
@@ -5804,6 +5817,10 @@ class AppController(QObject):
         # Snapshot settings: changing provider mid-response cannot mutate this request.
         from copy import deepcopy
         session.refresh_settings(deepcopy(self._ai_settings_obj()))
+        destination = session.settings.context_destination()
+        previous = self._ai_chat_model.item_at(len(self._ai_chat_model) - 1)
+        if previous is not None and previous.get("apiDestination") != destination:
+            self.notificationRequested.emit("Sage", "本轮仅使用发送给当前 AI 服务地址的历史消息。", "info")
         self._ai_attach_status_phrases(attachment_rows)
         api_content = (mask_identity_numbers(context_body) if context_body
                        else session._context_message(question, sent_attachments))
@@ -5812,6 +5829,7 @@ class AppController(QObject):
                 "role": "user",
                 "content": question if question else self._presentation.translate("请分析所附文件。", self._presentation.language),
                 "apiContent": api_content,
+                "apiDestination": destination,
                 "html": "",
                 "streaming": False,
                 "time": datetime.now().strftime("%H:%M"),
@@ -5822,6 +5840,7 @@ class AppController(QObject):
         self._ai_attachment_model.clear()
         self._ai_chat_model.append(
             {"role": "assistant", "content": "", "html": "", "streaming": True,
+             "apiDestination": destination,
              "time": datetime.now().strftime("%H:%M"), "attachments": []},
             maximum=200,
         )
@@ -5877,6 +5896,8 @@ class AppController(QObject):
         if last_row is None or question_row is None:
             return
         if last_row.get("role") != "assistant" or question_row.get("role") != "user":
+            return
+        if not self._ai_can_replay_saved_context(question_row):
             return
         question = str(question_row.get("content") or "")
         attachment_rows = question_row.get("attachments") or []

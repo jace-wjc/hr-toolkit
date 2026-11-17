@@ -1192,6 +1192,7 @@ class ConversationHistoryTests(unittest.TestCase):
                     "content": "分析",
                     "time": "10:01",
                     "apiContent": "分析\n表.xlsx 的表格",
+                    "apiDestination": AiSettings().context_destination(),
                     "attachments": [{"name": "表.xlsx", "summary": "1 个工作表"}],
                 },
                 {"role": "assistant", "content": "结论如下", "time": "10:01"},
@@ -1203,6 +1204,7 @@ class ConversationHistoryTests(unittest.TestCase):
             loaded = ConversationStore(store.path).get(record.conversation_id)
             self.assertEqual(len(loaded.messages), 2)
             self.assertEqual(loaded.messages[0]["apiContent"], "分析\n表.xlsx 的表格")
+            self.assertEqual(loaded.messages[0]["apiDestination"], AiSettings().context_destination())
             self.assertEqual(loaded.messages[0]["attachments"][0]["name"], "表.xlsx")
             self.assertEqual(loaded.messages[1]["role"], "assistant")
 
@@ -1307,7 +1309,8 @@ class AiReliabilityRegressionTests(unittest.TestCase):
             session = self.session()
             saved_body = 'saved spreadsheet rows 00000020000101000X'
             masked_body = 'saved spreadsheet rows 0000**********000X'
-            session.load_history([{'role': 'user', 'content': 'earlier', 'apiContent': saved_body}])
+            session.load_history([{'role': 'user', 'content': 'earlier', 'apiContent': saved_body,
+                                   'apiDestination': session.settings.context_destination()}])
             with patch('hr_toolkit.ai.assistant.stream_chat', return_value=iter(['answer'])) as send:
                 list(session.ask('question', [], context_body=saved_body,
                                  image_rows=[{'kind': 'image', 'path': str(image), 'mime': 'image/png'}]))
@@ -1320,10 +1323,11 @@ class AiReliabilityRegressionTests(unittest.TestCase):
 
     def test_whole_request_history_budget_drops_complete_old_turns(self):
         session = self.session()
-        session.load_history([{'role': 'user', 'content': 'x' * 70000},
-                              {'role': 'assistant', 'content': 'old'},
-                              {'role': 'user', 'content': 'recent'},
-                              {'role': 'assistant', 'content': 'recent answer'}])
+        destination = session.settings.context_destination()
+        session.load_history([{'role': 'user', 'content': 'x' * 70000, 'apiDestination': destination},
+                              {'role': 'assistant', 'content': 'old', 'apiDestination': destination},
+                              {'role': 'user', 'content': 'recent', 'apiDestination': destination},
+                              {'role': 'assistant', 'content': 'recent answer', 'apiDestination': destination}])
         session.language = 'en_US'
         messages = session.build_messages('z' * 60000)
         self.assertEqual(messages[1]['content'], 'recent')
@@ -1361,9 +1365,39 @@ class AiReliabilityRegressionTests(unittest.TestCase):
 
     def test_failed_answer_excluded_from_restored_model_context(self):
         session = self.session()
-        session.load_history([{'role': 'user', 'content': 'question'},
-                              {'role': 'assistant', 'content': 'network error', 'status': 'error'}])
-        self.assertNotIn('network error', str(session.build_messages('again')))
+        destination = session.settings.context_destination()
+        session.load_history([{'role': 'user', 'content': 'question', 'apiDestination': destination},
+                              {'role': 'assistant', 'content': 'network error', 'status': 'error',
+                               'apiDestination': destination}])
+        messages = session.build_messages('again')
+        self.assertEqual([message['content'] for message in messages[1:]], ['question', 'again'])
+
+    def test_history_tables_images_and_answers_stay_with_their_service_address(self):
+        session = self.session()
+        destination = session.settings.context_destination()
+        with tempfile.TemporaryDirectory() as folder:
+            image = Path(folder) / 'image.png'
+            image.write_bytes(b'\x89PNG\r\n\x1a\nimage')
+            session.load_history([
+                {'role': 'user', 'content': 'question', 'apiContent': 'saved sheet rows',
+                 'apiDestination': destination,
+                 'attachments': [{'kind': 'image', 'path': str(image), 'mime': 'image/png'}]},
+                {'role': 'assistant', 'content': 'sheet summary', 'apiDestination': destination},
+                {'role': 'user', 'content': 'legacy', 'apiContent': 'unbound old attachment'},
+            ])
+            messages = session.build_messages('continue')
+            self.assertEqual(messages[1]['content'][0]['text'], 'saved sheet rows')
+            self.assertEqual(messages[1]['content'][1]['type'], 'image_url')
+            self.assertEqual(messages[2]['content'], 'sheet summary')
+            self.assertNotIn('unbound old attachment', str(messages))
+
+            for other in (AiSettings(active_provider='qwen'), AiSettings(
+                providers={'minimax': ProviderConfig(endpoint='https://alternate.example.test')},
+            )):
+                session.refresh_settings(other)
+                with self.subTest(provider=other.active_provider):
+                    messages = session.build_messages('continue')
+                    self.assertEqual(messages[1:], [{'role': 'user', 'content': 'continue'}])
 
     def test_scan_limit_discloses_partial_totals(self):
         from unittest.mock import patch

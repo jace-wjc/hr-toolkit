@@ -286,7 +286,7 @@ class AiChatModel(ObjectListModel):
 
     def __init__(self, parent=None) -> None:
         super().__init__(
-            ("role", "content", "html", "blocks", "streaming", "time", "attachments", "apiContent", "status"),
+            ("role", "content", "html", "blocks", "streaming", "time", "attachments", "apiContent", "status", "apiDestination"),
             parent,
         )
         self.timeline = AiTimelineModel(self)
