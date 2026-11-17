@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover - 现代构建使用纯 Python pypdf
 from ..common.excel import SheetGrid
 from ..common.excel_compat import ensure_xlsx_workbook, is_supported_excel_file
 from ..common.filenames import safe_filename
+from ..common.paths import user_app_data_dir
 from .material_progress import MaterialProgress
 
 try:
@@ -353,7 +354,7 @@ def _get_ocr_engine():
         return _OCR_ENGINE
 
 
-# OCR 智能索引缓存：写入资料库根目录的隐藏 JSON 文件
+# 旧共享索引文件名只用于迁移；默认索引保存在当前用户的缓存目录。
 _OCR_CACHE_FILE_NAME = ".hr_material_index_cache.json"
 _OCR_CACHE_VERSION = 6
 _OCR_CACHE_TEXT_SNIPPET_MAX = 4096
@@ -672,6 +673,12 @@ def _ocr_cache_path_key(cache_path: Path) -> str:
     return os.path.abspath(os.fspath(cache_path))
 
 
+def _default_ocr_cache_path(library: Path) -> Path:
+    normalized = os.path.normcase(str(library.expanduser().resolve()))
+    identity = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return user_app_data_dir("data") / "HRToolkit" / "material-index" / (identity + ".json")
+
+
 def _ocr_cache_file_signature(stat_result: os.stat_result) -> tuple[int, int, int, int, int]:
     return (
         int(getattr(stat_result, "st_dev", 0) or 0),
@@ -870,8 +877,9 @@ def _save_ocr_cache(cache_path: Path, data: dict[str, Any]) -> bool:
         if cache_path.parent.is_symlink():
             _clear_ocr_memory_cache(cache_path)
             return False
-        with tmp_path.open("x", encoding="utf-8") as temp_file:
-            temporary_created = True
+        fd = os.open(str(tmp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        temporary_created = True
+        with os.fdopen(fd, "w", encoding="utf-8") as temp_file:
             # This is an internal machine cache rather than a user document.
             # Compact separators reduce repeated checkpoint I/O without
             # changing keys, values, migration, or atomic replacement.
@@ -5292,15 +5300,22 @@ def collect_employee_materials(
     cache_write_ok = True
     current_signature = ""
     legacy_pdf_cache_invalidated = 0
+    legacy_shared_cache = None
 
     if effective_use_ocr_cache:
         current_signature = _get_engine_signature()
         cache_path = (
             Path(ocr_cache_path).expanduser().resolve()
             if ocr_cache_path is not None
-            else (lib_path / _OCR_CACHE_FILE_NAME)
+            else _default_ocr_cache_path(lib_path)
         )
-        ocr_cache = _load_ocr_cache(cache_path)
+        legacy_path = lib_path / _OCR_CACHE_FILE_NAME
+        if (ocr_cache_path is None and not cache_path.exists()
+                and legacy_path.is_file() and not legacy_path.is_symlink()):
+            # Keep classifications and manual reviews, but never overwrite or
+            # remove a shared index that another user may still depend on.
+            legacy_shared_cache = legacy_path
+        ocr_cache = _load_ocr_cache(legacy_shared_cache or cache_path)
         legacy_pdf_cache_invalidated = _invalidate_legacy_pdf_cache_entries(ocr_cache)
         legacy_pdf_cache_invalidated += _invalidate_changed_pdf_backend_entries(ocr_cache)
         cache_stats["invalidated"] += legacy_pdf_cache_invalidated
@@ -5318,6 +5333,10 @@ def collect_employee_materials(
     matches: list[MaterialFileMatch] = []
     missing_records: dict[str, list[str]] = {}
     warnings: list[str] = []
+    if legacy_shared_cache is not None:
+        warnings.append("检测到旧共享 OCR 索引，本轮改存当前用户缓存目录；旧索引原件仍保留，请资料库管理员确认其访问权限及清理安排。")
+    if ocr_cache_path is not None and cache_path is not None and _is_path_nested(cache_path, lib_path):
+        warnings.append("已显式使用资料库内的 OCR 索引；其中包含姓名、相对路径和识别摘要，请限制共享访问范围。")
     folder_match_counts: dict[str, int] = {}
     employee_result_keys: list[str] = []
     review_candidates: list[_FlatIndexedFile] = []
@@ -5516,7 +5535,7 @@ def collect_employee_materials(
         if not _save_ocr_cache(cache_path, ocr_cache):
             if cache_write_ok:
                 warnings.append(
-                    f"OCR 缓存写入失败：{cache_path}（资料库目录可能为只读），本次未持久化识别结果。"
+                    f"OCR 缓存写入失败：{cache_path}（缓存目录可能为只读），本次未持久化识别结果。"
                 )
             cache_write_ok = False
             cache_skipped_reason = "资料库目录只读或无写入权限"

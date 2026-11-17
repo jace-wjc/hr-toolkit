@@ -37,6 +37,7 @@ from hr_toolkit.tools.material_collector import (
     collect_employee_materials,
     parse_employee_roster,
     _OCR_CACHE_FILE_NAME,
+    _default_ocr_cache_path,
     _build_doc_format_hint,
     _build_employee_key,
     _classify_material_type,
@@ -55,6 +56,20 @@ from hr_toolkit.tools.material_collector import (
     _scan_folder_index,
     _trim_cache_by_age_and_size,
 )
+
+
+def setUpModule():
+    # Production defaults now use the current user's cache directory. Keep all
+    # synthesized indexes in a temporary profile, including indirect calls.
+    temporary = tempfile.TemporaryDirectory(prefix="hr_material_test_profile_")
+    unittest.addModuleCleanup(temporary.cleanup)
+    from hr_toolkit.common.paths import user_app_data_dir
+    def test_profile(kind):
+        user_app_data_dir(kind)  # validate the real resolver's accepted kinds
+        return Path(temporary.name)
+    patcher = mock.patch("hr_toolkit.tools.material_collector.user_app_data_dir", side_effect=test_profile)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
 
 
 def _png_fixture(marker: str = "fixture") -> bytes:
@@ -399,7 +414,7 @@ class TestCollectAll(unittest.TestCase):
                 signature_mock.assert_not_called()
                 load_mock.assert_not_called()
                 save_mock.assert_not_called()
-                self.assertFalse((lib / _OCR_CACHE_FILE_NAME).exists())
+                self.assertFalse((_default_ocr_cache_path(lib)).exists())
                 self.assertFalse(result.ocr_cache_enabled)
                 self.assertEqual(result.ocr_cache_hits, 0)
                 self.assertEqual(result.ocr_cache_misses, 0)
@@ -1201,6 +1216,46 @@ class TestOCRCacheHelpers(unittest.TestCase):
 class TestOCRCacheIO(unittest.TestCase):
     """缓存读写与生命周期。"""
 
+    def test_default_cache_is_private_and_migrates_shared_cache_without_changing_original(self):
+        from hr_toolkit.tools import material_collector as mc
+        class Engine:
+            def __call__(self, _source):
+                return ([["姓名", "张三"], ["公民身份号码", "440111199001011234"]], None)
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(mc, "_OCR_ENGINE", Engine()), mock.patch.object(
+            mc, "_OCR_ATTEMPTED", True,
+        ):
+            root = Path(td)
+            library = root / "资料库"
+            person = library / "张三"
+            person.mkdir(parents=True)
+            (person / "a.png").write_bytes(_png_fixture())
+            first = collect_employee_materials(library, root / "out1", roster_source="张三", material_types=["身份证"])
+            local = Path(first.ocr_cache_path)
+            self.assertEqual(local, _default_ocr_cache_path(library))
+            self.assertFalse(_is_path_nested(local, library))
+            shared = library / _OCR_CACHE_FILE_NAME
+            self.assertFalse(shared.exists())
+            shutil.copyfile(local, shared)
+            local.unlink()
+            original = shared.read_bytes()
+            second = collect_employee_materials(library, root / "out2", roster_source="张三", material_types=["身份证"])
+            self.assertEqual(shared.read_bytes(), original)
+            self.assertTrue(local.exists())
+            self.assertGreater(second.ocr_cache_hits, 0)
+            self.assertEqual(first.matched_file_count, second.matched_file_count)
+            self.assertTrue(any("旧索引原件仍保留" in warning for warning in second.warnings))
+            self.assertNotEqual(_default_ocr_cache_path(root / "other"), local)
+
+    def test_cache_temp_file_is_private_before_json_is_written(self):
+        from hr_toolkit.tools import material_collector as mc
+        original_writer = mc._write_ocr_cache_json
+        def write(handle, data):
+            if os.name != "nt":
+                self.assertEqual(os.fstat(handle.fileno()).st_mode & 0o777, 0o600)
+            return original_writer(handle, data)
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(mc, "_write_ocr_cache_json", side_effect=write):
+            self.assertTrue(_save_ocr_cache(Path(td) / "index.json", {"entries": {}}))
+
     def test_folder_custom_material_rename_reclassifies_cached_ocr_text(self) -> None:
         """自定义名称改成图片真实标题后复用文字缓存，不重复 OCR。"""
         from hr_toolkit.tools import material_collector as mc
@@ -1244,7 +1299,7 @@ class TestOCRCacheIO(unittest.TestCase):
                 self.assertEqual(first.matched_file_count, 0)
                 self.assertEqual(first_ocr_calls, 1)
 
-                cache_path = library / _OCR_CACHE_FILE_NAME
+                cache_path = _default_ocr_cache_path(library)
                 cache = _load_ocr_cache(cache_path)
                 self.assertEqual(len(cache["entries"]), 1)
                 entry = next(iter(cache["entries"].values()))
@@ -1291,7 +1346,7 @@ class TestOCRCacheIO(unittest.TestCase):
             mc._OCR_ATTEMPTED = real_attempted
 
     def test_cache_written_after_successful_recognition(self) -> None:
-        """首次跑应创建 .hr_material_index_cache.json。"""
+        """首次运行应在用户缓存目录创建独立索引。"""
         with tempfile.TemporaryDirectory() as td:
             lib = Path(td) / "资料库"
             lib.mkdir()
@@ -1322,7 +1377,7 @@ class TestOCRCacheIO(unittest.TestCase):
                     material_types=["身份证"],
                 )
                 self.assertTrue(result.ocr_cache_enabled)
-                cache_file = lib / _OCR_CACHE_FILE_NAME
+                cache_file = _default_ocr_cache_path(lib)
                 self.assertTrue(cache_file.exists(), "缓存文件应自动创建")
                 self.assertGreater(result.matched_file_count, 0)
             finally:
@@ -1517,7 +1572,7 @@ class TestOCRCacheIO(unittest.TestCase):
                     material_types=["身份证"],
                 )
 
-                cache_path = lib / _OCR_CACHE_FILE_NAME
+                cache_path = _default_ocr_cache_path(lib)
                 self.assertTrue(cache_path.exists())
                 cache_data = _load_ocr_cache(cache_path)
                 self.assertGreater(len(cache_data.get("entries") or {}), 0)
@@ -1573,7 +1628,7 @@ class TestOCRCacheIO(unittest.TestCase):
                 )
                 self.assertFalse(result.ocr_cache_enabled)
                 self.assertIsNone(result.ocr_cache_path)
-                cache_file = lib / _OCR_CACHE_FILE_NAME
+                cache_file = _default_ocr_cache_path(lib)
                 self.assertFalse(cache_file.exists())
                 self.assertGreater(FakeEngine.call_count, 0)
         finally:
@@ -1669,7 +1724,7 @@ class TestOCRCacheIO(unittest.TestCase):
                     material_types=["身份证"],
                 )
 
-                cache_path = lib / _OCR_CACHE_FILE_NAME
+                cache_path = _default_ocr_cache_path(lib)
                 self.assertTrue(cache_path.exists())
                 raw_text = cache_path.read_text(encoding="utf-8")
                 # 身份证号原值不应出现
@@ -1927,7 +1982,7 @@ class TestFlatOCRMaterialLibrary(unittest.TestCase):
             self.assertEqual(first_calls, 100)
             self.assertEqual(first.matched_file_count, 1)
 
-            cache_path = library / _OCR_CACHE_FILE_NAME
+            cache_path = _default_ocr_cache_path(library)
             cache_data = _load_ocr_cache(cache_path)
             self.assertEqual(len(cache_data["paths"]), 100)
             self.assertEqual(len(cache_data["entries"]), 100)
@@ -2063,7 +2118,7 @@ class TestFlatOCRMaterialLibrary(unittest.TestCase):
                 library_mode=LIBRARY_MODE_FLAT_OCR,
             )
             first_calls = self.engine_type.call_count
-            cache_path = library / _OCR_CACHE_FILE_NAME
+            cache_path = _default_ocr_cache_path(library)
             cache = json.loads(cache_path.read_text(encoding="utf-8"))
             path_entry = cache["paths"]["000.png"]
             path_entry["source_ctime_ns"] = path_entry.pop("source_change_token")
@@ -2169,7 +2224,7 @@ class TestFlatOCRMaterialLibrary(unittest.TestCase):
             self.assertEqual(self.engine_type.call_count, first_calls)
             self.assertEqual(result.matched_file_count, 1)
             self.assertEqual(result.ocr_cache_hits, 1)
-            cache = _load_ocr_cache(library / _OCR_CACHE_FILE_NAME)
+            cache = _load_ocr_cache(_default_ocr_cache_path(library))
             self.assertEqual(set(cache["paths"]), {"新目录/new-random.png"})
 
     def test_collect_all_only_copies_files_identified_for_target(self) -> None:
@@ -2351,7 +2406,7 @@ class TestFlatOCRMaterialLibrary(unittest.TestCase):
                     material_types=["劳动合同"],
                     library_mode=LIBRARY_MODE_FLAT_OCR,
                 )
-            cache = _load_ocr_cache(library / _OCR_CACHE_FILE_NAME)
+            cache = _load_ocr_cache(_default_ocr_cache_path(library))
             self.assertEqual(cache["entries"], {})
 
             self.mc._OCR_ENGINE = working_engine
@@ -2436,7 +2491,7 @@ class TestFlatOCRMaterialLibrary(unittest.TestCase):
                 for path in library.glob("scan_*.png")
             }
             cache_payload = json.loads(
-                (library / _OCR_CACHE_FILE_NAME).read_text(encoding="utf-8")
+                (_default_ocr_cache_path(library)).read_text(encoding="utf-8")
             )
             cached_text_lengths = [
                 len(str(entry.get("ocr_text") or ""))
