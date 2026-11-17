@@ -981,6 +981,14 @@ class AppController(QObject):
             return "业务核对"
         return "其他提醒"
 
+    @staticmethod
+    def _mask_notice_identity_numbers(text: str) -> str:
+        return re.sub(
+            r"(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)",
+            lambda match: match[0][:4] + "*" * (len(match[0]) - 8) + match[0][-4:],
+            text,
+        )
+
     @constant_property(QObject)
     def resultNoticeModel(self):
         return self._result_notices
@@ -4916,8 +4924,16 @@ class AppController(QObject):
         self._result_files = self._result_output_paths(self._spec.tool_id, payload, self._last_result_dir)
         self._last_run_by_key[self._state_key()] = (datetime.now().strftime("%H:%M"), True)
         self.specChanged.emit()
-        warnings = list(payload.get("warnings", [])) if isinstance(payload, dict) else []
-        self._result_notice_rows = [{"text": str(warning), "category": self._notice_category(self._spec.tool_id, str(warning))} for warning in warnings]
+        # Result notices, run logs and both copy actions share these display
+        # values. Tool results and workbook contents retain their original data.
+        warnings = [
+            self._mask_notice_identity_numbers(str(warning))
+            for warning in (payload.get("warnings", []) if isinstance(payload, dict) else [])
+        ]
+        self._result_notice_rows = [
+            {"text": warning, "category": self._notice_category(self._spec.tool_id, warning)}
+            for warning in warnings
+        ]
         self._result_notice_groups.clear()
         self._result_notice_counts = {}
         for row in self._result_notice_rows:
@@ -4947,8 +4963,8 @@ class AppController(QObject):
             completion_message += f"\n另有 {len(warnings)} 条处理提醒/运行信息，可在结果提醒区查看全部。"
             self._append_log(f"共有 {len(warnings)} 条提醒。", "warning")
             for index, warning in enumerate(warnings):
-                if index < 30 or str(warning).startswith(("未处理工作表：", "用户已确认：")):
-                    self._append_log(str(warning), "warning")
+                if index < 30 or warning.startswith(("未处理工作表：", "用户已确认：")):
+                    self._append_log(warning, "warning")
         self._flush_logs()
         self.notificationRequested.emit("处理完成", completion_message, "success")
         self.refreshWorkspace()

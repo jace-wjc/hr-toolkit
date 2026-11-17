@@ -573,6 +573,39 @@ class QtControllerTests(unittest.TestCase):
         controller.setResultNoticeFilter("全部")
         self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], messages)
 
+    def test_result_notice_identity_numbers_are_masked_for_display_and_copy(self) -> None:
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller.selectTool("insurance_ledger")
+        controller.refreshWorkspace = lambda: None
+        controller.presentation.setLanguage("zh_CN")
+        identity, legacy_identity = "00000020000101000X", "000001000101001"
+        source_notices = [
+            f"花名册身份证重复但姓名不同：{identity}，已保留首次记录 测试人。",
+            f"花名册.xlsx 第 12 行：{legacy_identity}",
+        ]
+        expected = [
+            "花名册身份证重复但姓名不同：0000**********000X，已保留首次记录 测试人。",
+            "花名册.xlsx 第 12 行：0000*******1001",
+        ]
+        payload = {"warnings": list(source_notices)}
+
+        controller._apply_run_success(payload, tempfile.gettempdir(), 1, False)
+        self.assertEqual(payload["warnings"], source_notices)
+        self.assertEqual([row["text"] for row in controller.resultNoticeModel.items()], expected)
+        controller.setResultNoticeFilter("业务核对")
+        self.assertEqual(controller.resultNoticeModel.item_at(0)["text"], expected[0])
+
+        with patch("hr_toolkit.gui_qt.controller.QGuiApplication") as gui:
+            clipboard = gui.clipboard.return_value
+            controller.copyResultNotices()
+            clipboard.setText.assert_called_once_with("\n".join(expected))
+            controller.copyRunLogs()
+            copied_logs = clipboard.setText.call_args[0][0]
+            for raw, masked in zip(source_notices, expected):
+                self.assertNotIn(raw, copied_logs)
+                self.assertIn(masked, copied_logs)
+
     def test_date_editing_normalizes_valid_text_without_replacing_invalid_text(self) -> None:
         controller = self.controller()
         self.addCleanup(controller.close)
