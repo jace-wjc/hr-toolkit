@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -2158,14 +2159,22 @@ class QtControllerTests(unittest.TestCase):
             controller.close()
 
     def test_controller_file_dialog_directory_memory_persists_in_settings(self) -> None:
+        from hr_toolkit.gui_qt.compat import delete_qobject
+
+        destroyed = set()
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             settings_file = tmp_path / "workspace-ui.json"
             chosen_dir = tmp_path / "chosen"
             chosen_dir.mkdir()
 
-            with patch.object(AppController, "_settings_path", return_value=settings_file):
+            with patch.object(AppController, "_settings_path", return_value=settings_file), ExitStack() as cleanup:
                 controller = AppController()
+                controller.destroyed.connect(lambda *_args: destroyed.add("original"))
+                # 该用例需真实保存设置，不能用覆盖保存方法的 controller() 工厂。
+                # 在 QCoreApplication 和临时设置仍存活时关闭并销毁 Qt 对象树。
+                cleanup.callback(delete_qobject, controller)
+                cleanup.callback(controller.close)
                 controller._remember_file_dialog_path(chosen_dir)
 
                 self.assertTrue(settings_file.is_file())
@@ -2174,6 +2183,9 @@ class QtControllerTests(unittest.TestCase):
 
                 # New controller instance loads it on start()
                 controller2 = AppController()
+                controller2.destroyed.connect(lambda *_args: destroyed.add("restored"))
+                cleanup.callback(delete_qobject, controller2)
+                cleanup.callback(controller2.close)
                 controller2.start()
                 deadline = time.monotonic() + 3
                 while controller2._startup_loading and time.monotonic() < deadline:
@@ -2183,8 +2195,7 @@ class QtControllerTests(unittest.TestCase):
                 self.assertEqual(controller2._last_selected_dir, chosen_dir)
                 self.assertEqual(controller2._file_dialog_initial_dir(), str(chosen_dir))
 
-                controller.close()
-                controller2.close()
+            self.assertEqual(destroyed, {"original", "restored"})
 
     def test_controller_trash_read_only_protection_and_restore_selection(self) -> None:
         controller = self.controller()
