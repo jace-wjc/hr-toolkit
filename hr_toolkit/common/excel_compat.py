@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 import hashlib
+import io
 import os
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -300,7 +302,7 @@ def _convert_xls_to_xlsx(
         ):
             return
 
-    # 优先让 Excel/WPS/LibreOffice 在只读沙箱副本上保留格式、公式和结构。
+    # 本机转换器检查临时副本后保留格式、公式和结构；临时目录不是 OS 沙箱。
     # 普通调用保留兼容降级；要求保留格式的调用不允许退回纯数据模式。
     sandbox_dir = (temp_dir or output_path.parent) / "xls_sandbox"
     digest = hashlib.sha1(str(source).encode("utf-8")).hexdigest()[:8]
@@ -423,6 +425,7 @@ def _report_conversion_warning(
 
 
 def _convert_with_windows_com(source: Path, output_path: Path) -> None:
+    _assert_native_xls_safe(source)
     try:
         import pythoncom  # type: ignore[import-not-found]
         import win32com.client  # type: ignore[import-not-found]
@@ -446,6 +449,12 @@ def _convert_with_windows_com(source: Path, output_path: Path) -> None:
         if app is None:
             raise RuntimeError(f"未找到 Excel 或 WPS COM 组件：{last_error}")
         app.Visible = False
+        # Read back the settings: older WPS variants may ignore or reject them.
+        # ForceDisable alone does not cover XLM, hence the preflight above.
+        app.AutomationSecurity = 3
+        app.EnableEvents = False
+        if int(app.AutomationSecurity) != 3 or bool(app.EnableEvents):
+            raise RuntimeError("表格组件无法禁用宏和事件，已停止自动转换；请先另存为 .xlsx。")
         app.DisplayAlerts = False
         workbook = app.Workbooks.Open(
             str(source),
@@ -469,32 +478,95 @@ def _convert_with_windows_com(source: Path, output_path: Path) -> None:
 
 
 def _convert_with_libreoffice(source: Path, output_path: Path) -> None:
+    _assert_native_xls_safe(source)
     executable = _find_libreoffice()
     if executable is None:
         raise RuntimeError(_diagnose_missing_libreoffice())
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [
-            executable,
-            "--headless",
-            "--convert-to",
-            "xlsx",
-            "--outdir",
-            str(output_path.parent),
-            str(source),
-        ],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=_build_conversion_env(),
-        timeout=300,
-    )
+    # An independent profile avoids reusing an open office session's trusted
+    # locations and macro settings. It is removed after conversion, even on error.
+    with tempfile.TemporaryDirectory(prefix="hr_toolkit_soffice_") as profile:
+        user_dir = Path(profile) / "user"
+        user_dir.mkdir()
+        (user_dir / "registrymodifications.xcu").write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<oor:items xmlns:oor="http://openoffice.org/2001/registry">'
+            '<item oor:path="/org.openoffice.Office.Common/Security/Scripting">'
+            '<prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop>'
+            '<prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop>'
+            '</item></oor:items>', encoding="utf-8",
+        )
+        result = subprocess.run(
+            [executable, "-env:UserInstallation=" + Path(profile).resolve().as_uri(),
+             "--headless", "--convert-to", "xlsx", "--outdir",
+             str(output_path.parent), str(source)],
+            check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=_build_conversion_env(), timeout=300,
+        )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "").strip() or f"退出码 {result.returncode}")
     converted = output_path.parent / f"{source.stem}.xlsx"
     if converted.exists() and converted != output_path:
         shutil.move(str(converted), str(output_path))
+
+
+def _assert_native_xls_safe(source: Path) -> None:
+    """Reject macros/encrypted/unknown BIFF before starting a native converter.
+
+    This is a conservative admission check, not a general malware scanner.
+    Pure-data xlrd reads do not execute macros and do not need this restriction.
+    """
+    message = "无法确认此 .xls 可安全自动转换，请在可信表格软件中禁用宏并另存为 .xlsx。"
+    try:
+        from xlrd.compdoc import CompDoc
+
+        if source.stat().st_size > 128 * 1024 * 1024:
+            raise ValueError("native preflight size limit")
+        container = CompDoc(source.read_bytes(), logfile=io.StringIO())
+        for entry in container.dirlist:
+            if entry.etype and entry.name.upper() in {"VBA", "_VBA_PROJECT_CUR", "_VBA_PROJECT", "PROJECT"}:
+                raise ValueError("VBA storage")
+        stream = container.get_named_stream("Workbook") or container.get_named_stream("Book")
+        if not stream:
+            raise ValueError("missing BIFF stream")
+        _check_biff_native_safety(stream)
+    except Exception as exc:
+        raise RuntimeError(message) from exc
+
+
+def _check_biff_native_safety(stream: bytes) -> None:
+    """Check BIFF5/8 globals and every declared sheet BOF, including hidden ones."""
+    if len(stream) < 8:
+        raise ValueError("short BIFF header")
+    record, length, version, kind = struct.unpack_from("<HHHH", stream)
+    if record != 0x0809 or version not in (0x0500, 0x0600) or kind != 0x0005:
+        raise ValueError("unsupported BIFF version")
+    offset, sheets = 0, 0
+    while offset + 4 <= len(stream):
+        record, length = struct.unpack_from("<HH", stream, offset)
+        start, end = offset + 4, offset + 4 + length
+        if end > len(stream):
+            raise ValueError("truncated BIFF record")
+        if record in (0x002F, 0x00D3):  # FILEPASS / OBPROJ
+            raise ValueError("encrypted workbook or VBA project")
+        if record == 0x0085:  # BOUNDSHEET: offset, visibility, sheet type
+            if length < 7 or stream[start + 5] not in (0, 2):
+                raise ValueError("macro or unknown sheet")
+            position = struct.unpack_from("<I", stream, start)[0]
+            if position < end or position + 8 > len(stream):
+                raise ValueError("invalid sheet offset")
+            bof, size, sheet_version, sheet_kind = struct.unpack_from("<HHHH", stream, position)
+            expected_kind = 0x0010 if stream[start + 5] == 0 else 0x0020
+            if (bof != 0x0809 or size < 4 or position + 4 + size > len(stream)
+                    or sheet_version != version or sheet_kind != expected_kind):
+                raise ValueError("unexpected sheet BOF")
+            sheets += 1
+        if record == 0x000A:
+            if not sheets:
+                raise ValueError("no sheets")
+            return
+        offset = end
+    raise ValueError("missing workbook EOF")
 
 
 def _find_libreoffice() -> str | None:

@@ -5,9 +5,11 @@ import sys
 import unittest
 import shutil
 import tempfile
+import struct
+import types
 from copy import deepcopy
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
@@ -39,6 +41,115 @@ from hr_toolkit.common.resources import open_template_resource
 
 
 class ExcelHelperTest(unittest.TestCase):
+    def test_native_preflight_rejects_xlm_vba_encryption_and_truncation(self):
+        from hr_toolkit.common.excel_compat import _check_biff_native_safety
+
+        def record(kind, body=b""):
+            return struct.pack("<HH", kind, len(body)) + body
+
+        bof = record(0x809, struct.pack("<HH", 0x600, 5))
+        eof = record(0xA)
+        for sheet_type, sheet_kind in ((0, 0x10), (2, 0x20), (1, 0x40), (6, 6), (0, 0x40)):
+            # Hidden sheet flag must not exempt a macro sheet from inspection.
+            boundsheet = record(0x85, struct.pack("<IBBB", 23, 2, sheet_type, 1))
+            stream = bof + boundsheet + eof + record(0x809, struct.pack("<HH", 0x600, sheet_kind)) + eof
+            with self.subTest(sheet_type=sheet_type, sheet_kind=sheet_kind):
+                if sheet_type in (0, 2) and sheet_kind in (0x10, 0x20):
+                    _check_biff_native_safety(stream)
+                else:
+                    with self.assertRaises(ValueError):
+                        _check_biff_native_safety(stream)
+        for unsafe in (bof + record(0x2F), bof + record(0xD3), stream[:15], b"<html>table</html>"):
+            with self.assertRaises(ValueError):
+                _check_biff_native_safety(unsafe)
+
+    def test_native_converter_does_not_launch_for_uninspectable_file(self):
+        from hr_toolkit.common.excel_compat import _convert_with_libreoffice, _convert_with_windows_com
+
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.common.excel_compat.subprocess.run",
+        ) as run:
+            source = Path(temp) / "unsafe.xls"
+            source.write_bytes(b"not an inspectable workbook")
+            for converter in (_convert_with_libreoffice, _convert_with_windows_com):
+                with self.assertRaisesRegex(RuntimeError, "安全自动转换"):
+                    converter(source, Path(temp) / "out.xlsx")
+            run.assert_not_called()
+
+    def test_com_disables_macros_and_events_before_opening_and_always_quits(self):
+        from hr_toolkit.common.excel_compat import _convert_with_windows_com
+
+        app = Mock()
+        def opened(*args, **kwargs):
+            self.assertEqual(app.AutomationSecurity, 3)
+            self.assertIs(app.EnableEvents, False)
+            self.assertEqual(kwargs["UpdateLinks"], 0)
+            self.assertTrue(kwargs["ReadOnly"])
+            return Mock()
+        app.Workbooks.Open.side_effect = opened
+        pythoncom = Mock()
+        client = types.ModuleType("win32com.client")
+        client.DispatchEx = Mock(return_value=app)
+        win32com = types.ModuleType("win32com")
+        win32com.client = client
+        with patch.dict(sys.modules, {"pythoncom": pythoncom, "win32com": win32com, "win32com.client": client}), patch(
+            "hr_toolkit.common.excel_compat._assert_native_xls_safe",
+        ):
+            _convert_with_windows_com(Path("safe.xls"), Path("out.xlsx"))
+        app.Workbooks.Open.assert_called_once()
+        app.Quit.assert_called_once()
+        pythoncom.CoUninitialize.assert_called_once()
+
+    def test_com_refuses_ignored_safety_settings_before_opening(self):
+        from hr_toolkit.common.excel_compat import _convert_with_windows_com
+
+        class UnsafeApp:
+            Workbooks = Mock()
+            Quit = Mock()
+            @property
+            def AutomationSecurity(self):
+                return 1
+            @AutomationSecurity.setter
+            def AutomationSecurity(self, _value):
+                pass
+        app = UnsafeApp()
+        client = types.ModuleType("win32com.client")
+        client.DispatchEx = Mock(return_value=app)
+        win32com = types.ModuleType("win32com")
+        win32com.client = client
+        with patch.dict(sys.modules, {"pythoncom": Mock(), "win32com": win32com, "win32com.client": client}), patch(
+            "hr_toolkit.common.excel_compat._assert_native_xls_safe",
+        ):
+            with self.assertRaisesRegex(RuntimeError, "无法禁用宏和事件"):
+                _convert_with_windows_com(Path("safe.xls"), Path("out.xlsx"))
+        app.Workbooks.Open.assert_not_called()
+        app.Quit.assert_called_once()
+
+    def test_libreoffice_uses_isolated_macro_disabled_profile_then_cleans_it(self):
+        from hr_toolkit.common.excel_compat import _convert_with_libreoffice
+        from urllib.parse import unquote, urlparse
+        from urllib.request import url2pathname
+
+        profiles = []
+        def run(arguments, **kwargs):
+            profile_uri = next(arg.split("=", 1)[1] for arg in arguments if arg.startswith("-env:UserInstallation="))
+            profile = Path(url2pathname(unquote(urlparse(profile_uri).path)))
+            profiles.append(profile)
+            root = ElementTree.fromstring((profile / "user/registrymodifications.xcu").read_text())
+            values = {prop.get("{http://openoffice.org/2001/registry}name"): prop.findtext("value")
+                      for prop in root.iter("prop")}
+            self.assertEqual(values["DisableMacrosExecution"], "true")
+            self.assertEqual(values["MacroSecurityLevel"], "3")
+            return types.SimpleNamespace(returncode=0)
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.common.excel_compat._assert_native_xls_safe",
+        ), patch("hr_toolkit.common.excel_compat._find_libreoffice", return_value="soffice"), patch(
+            "hr_toolkit.common.excel_compat.subprocess.run", side_effect=run,
+        ):
+            _convert_with_libreoffice(Path(temp) / "safe.xls", Path(temp) / "out.xlsx")
+        self.assertEqual(len(profiles), 1)
+        self.assertFalse(profiles[0].exists())
+
     def test_strict_formatting_does_not_reuse_a_degraded_conversion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
