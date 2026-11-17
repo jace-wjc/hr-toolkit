@@ -150,3 +150,15 @@
 - 修复：`hr_toolkit/ai/history.py` 的两处引用收集将空附件按空序列处理。`tests/test_ai_assistant.py` 的历史用例补入一条无附件回复，与带图消息一起保存，覆盖重新读取、图片引用保留和删除失败回滚。
 - 实际验证：两个修改的 Python 文件通过 Python 3.8 语法解析及本机 Python 3.13 字节码编译，`git diff --check` 通过。原 Qt 用例和完整发布校验待复验。
 - 防复发：新增历史字段消费者时，核对 Qt 模型生成的 `None` 与旧数据中的字段缺失，并用带附件和无附件消息混合验证保存、读取与图片引用。
+
+## 2026-11-17：Win7 兼容栈控制器测试在清理阶段卡住
+
+- CI：[44101355386](https://github.com/jace-wjc/hr-toolkit/actions/runs/44101355386)，提交 `4d40127ec3dee0b737454b98f83a8594eaae83ca`，失败 job 为 Windows 7 compatibility stack on Python 3.8（`134101987366`）。Python 3.9、Python 3.12 和现代 Windows 检查均通过。
+- 最终结果：`tests.test_ai_assistant` 的 113 项已通过。控制器模块停在 `test_ai_edit_and_regenerate_keep_history_when_saved_attachments_are_not_for_this_service`，每 60 秒输出相同线程栈，300 秒后出现 `TIMEOUT: tests.test_qt_controller; stopping its process tree` 并退出 1，后续 Qt 入口模块未执行。
+- 堆栈定位：核对 CPython 3.8.10 源码，主线程 `unittest/case.py:681` 对应 `self.doCleanups()`，后台线程 `threading.py:874` 对应释放 `_target`、`_args` 和 `_kwargs`。后台工作函数已经返回，卡点位于测试与线程释放引用的阶段。
+- 已确认缺陷：前面的附件准备和连接测试只等待模拟函数内部的 `Event`，没有等待真实线程退出。事件发生后线程仍要发出 Qt 信号并释放闭包中的控制器引用，可能与后续测试清理同时发生。`controller.close()` 只执行关闭操作，不能证明这些线程已结束。
+- 归因边界：现有 Python 堆栈未包含原生 Qt/PySide 锁的调用栈，不能据此确认具体锁或认定这是唯一原因。此次修复消除上述可确认的线程收尾缺口，Win7 结果需在修复后复验。
+- 修复范围：仅调整 `tests/test_qt_controller.py` 的上述两个异步用例。记录实际启动的线程，在控制器仍被主线程持有、模拟接口和临时目录仍有效时等待退出，单线程等待上限 5 秒，仍存活则明确失败。附件用例在断言失败时也释放等待事件。原异步执行、取消及设置断言继续保留。
+- 实际验证：经用户当次授权，在本机 Python 3.13.0 / PySide6 6.11.2 下依次运行附件准备、关闭时取消展示更新、连接测试、跨服务附件编辑与重试四个相关用例，4 项通过，结束后没有遗留 AI 工作线程。在两个异步用例中分别注入断言失败，均保留原始失败并确认线程已经等待退出。配置路径使用临时目录。
+- 语法与范围检查：修改文件通过 Python 3.8 语法解析和 Python 3.13 字节码编译，差异检查通过。Win7 / Qt 5、修复后的远程 CI 及完整模块尚未复验。
+- 防复发：后台函数中的“进入”或“收到结果”事件不代表线程已完全结束。测试释放 Qt 控制器或退出临时目录前，必须等待自己启动的真实线程退出，失败路径同样执行，并保留明确的超时失败。

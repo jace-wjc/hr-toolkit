@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import json
 import os
 from pathlib import Path
@@ -61,6 +61,26 @@ class QtControllerTests(unittest.TestCase):
         # alive in Python/Qt references until after the next test has started.
         self.addCleanup(lambda controller=value: controller.presentation.setLanguage("en_US"))
         return value
+
+    @contextmanager
+    def joined_worker_threads(self):
+        """Wait for real workers before test cleanup can release their controller."""
+        workers = []
+        original_start = threading.Thread.start
+
+        def start(worker):
+            original_start(worker)
+            workers.append(worker)
+
+        with patch.object(threading.Thread, "start", start):
+            try:
+                yield
+            finally:
+                # A notification inside the worker does not cover its final
+                # Qt signal or the release of its closure's controller reference.
+                for worker in workers:
+                    worker.join(timeout=5)
+                    self.assertFalse(worker.is_alive(), f"Worker did not exit: {worker.name}")
 
     def test_ai_timeline_keeps_canonical_messages_and_updates_only_changed_blocks(self):
         from hr_toolkit.gui_qt.models import AiChatModel
@@ -941,17 +961,20 @@ class QtControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "table.xlsx"
             path.touch()
-            with patch("hr_toolkit.ai.assistant.AiAssistantSession.add_attachment", parse):
-                controller.aiAttachPaths([str(path)])
-                self.assertTrue(entered.wait(1))
-                self.assertTrue(controller.aiPreparing)
-                generation = controller._ai_attachment_generation
-                controller.aiStopGenerating()
-                release.set()
-                controller._apply_ai_attachments(generation, [object()], [])
-                self.assertFalse(controller.aiBusy)
-                self.assertEqual(controller.aiAttachmentModel.rowCount(), 0)
-                self.assertNotEqual(worker_ids[0], threading.get_ident())
+            with patch("hr_toolkit.ai.assistant.AiAssistantSession.add_attachment", parse), self.joined_worker_threads():
+                try:
+                    controller.aiAttachPaths([str(path)])
+                    self.assertTrue(entered.wait(1))
+                    self.assertTrue(controller.aiPreparing)
+                    generation = controller._ai_attachment_generation
+                    controller.aiStopGenerating()
+                    release.set()
+                    controller._apply_ai_attachments(generation, [object()], [])
+                    self.assertFalse(controller.aiBusy)
+                    self.assertEqual(controller.aiAttachmentModel.rowCount(), 0)
+                    self.assertNotEqual(worker_ids[0], threading.get_ident())
+                finally:
+                    release.set()
 
     def test_ai_connection_test_uses_unsaved_fields_without_persisting(self):
         from hr_toolkit.ai.config import AiSettings
@@ -959,14 +982,14 @@ class QtControllerTests(unittest.TestCase):
         self.addCleanup(controller.close)
         controller._ai_settings = AiSettings()
         captured = []
-        finished = threading.Event()
+        entered = threading.Event()
         def check(settings):
             captured.append(settings)
-            finished.set()
+            entered.set()
             return "OK"
-        with patch("hr_toolkit.ai.client.test_connection", check):
+        with patch("hr_toolkit.ai.client.test_connection", check), self.joined_worker_threads():
             controller.aiTestConnection("deepseek", "test-only", "custom-model", "https://example.com/v1")
-            self.assertTrue(finished.wait(1))
+            self.assertTrue(entered.wait(1))
         self.assertEqual(captured[0].active_provider, "deepseek")
         self.assertEqual(captured[0].provider_config().model, "custom-model")
         self.assertEqual(captured[0].provider_config().api_key, "test-only")
