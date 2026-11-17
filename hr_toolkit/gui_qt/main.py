@@ -145,11 +145,11 @@ def main() -> int:
     resize_backdrop = WindowsResizeBackdrop.install(root_window)
     resize_helpers_closed = False
 
-    def refresh_resize_backdrop() -> None:
+    def refresh_resize_backdrop(color) -> None:
         nonlocal resize_backdrop
         if resize_helpers_closed:
             return
-        color = root_window.color()
+        # colorChanged supplies QColor even when PySide wraps the root as QWindow.
         resize_backdrop.close()
         resize_backdrop = WindowsResizeBackdrop.install(
             root_window, (color.red(), color.green(), color.blue())

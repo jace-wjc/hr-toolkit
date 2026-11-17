@@ -106,3 +106,14 @@
 - 实际验证：临时 Python 3.12 / Qt 6.6 的原 UI 用例通过；本机 Python 3.13 / Qt 6.11 中在项目创建后注入断言失败，确认原始断言保留、`ProjectStore.close()` 被调用、临时项目目录移除；探针通过 Python 3.8 语法解析。
 - 未验证：Windows 文件锁的修复后实际执行结果和 Win7 实机；未执行全量测试、构建、打包或发布。
 - 防复发：GUI 探针创建项目、控制器或 QML 引擎后立即注册清理，不能把资源释放仅放在最终成功断言之后。
+
+## 2026-11-17：本地启动回归——窗口颜色回调依赖具体包装类
+
+- 来源：用户本地执行 `python -m hr_toolkit` 的日志，并非已定位到某次 CI run 的失败；用户未提供提交号。本地在 `e1d32af` 基线上复现。
+- 报错：`gui_qt/main.py` 的 `refresh_resize_backdrop` 调用 `root_window.color()`，抛出 `AttributeError: 'PySide6.QtGui.QWindow' object has no attribute 'color'`。
+- 根因：未预先导入 QtQuick Python 绑定的启动路径将 QML 根窗口包装成 `QWindow`；窗口的 `colorChanged` 信号仍存在，但 Python 包装类没有 `QQuickWindow.color()` 方法。原探针预先导入 QtQuick，或未切换主题，因此未覆盖该回调。
+- 修复：直接使用 `colorChanged` 信号传入的 `QColor`；Qt 5.15 和 Qt 6 均使用此信号签名，不增加依赖、强制类型转换或全局异常屏蔽。
+- 回归：新增 `tests/qt_resize_backdrop_probe.py`，不预加载 QtQuick，调用生产启动入口并切换深浅主题，检查背景色传递、旧背景资源释放及退出清理；同时捕获 Qt 回调异常，避免进程仍退出 0 时漏报。
+- 实际验证：该探针修复前复现用户同一异常，修复后通过；非 Windows 与 headless 平台的两个相关用例也通过，共 3 项。修改的 Python 文件通过 Python 3.8 语法解析。
+- 未验证：用户另一台 Mac 的具体环境、修复后的远程 CI、真实 Windows GDI 和 Win7 实机；未执行全量测试、构建、打包或发布。
+- 防复发：验证 Qt 启动时保留生产导入顺序并实际触发信号；不能只凭窗口出现或进程退出 0 判断回调无异常。

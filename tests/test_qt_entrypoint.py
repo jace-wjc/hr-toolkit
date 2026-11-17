@@ -291,6 +291,18 @@ class QtEntrypointTests(unittest.TestCase):
         self.assertFalse(backdrop.active)
         self.assertEqual(_windows_colorref(0xF7, 0xF5, 0xF1), 0xF1F5F7)
 
+    def test_resize_backdrop_tracks_theme_without_quick_window_wrapper(self) -> None:
+        self._qt_compat_or_skip()
+        probe = Path(__file__).with_name("qt_resize_backdrop_probe.py")
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", str(probe)],
+            cwd=str(probe.resolve().parents[1]),
+            env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software", "HR_TOOLKIT_SKIP_UPDATE": "1"},
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("resize backdrop: cold startup, theme colors and cleanup OK", completed.stdout)
+
     def test_windows_resize_backdrop_ignores_headless_qt_platforms(self) -> None:
         class HeadlessWindow:
             def winId(self):
