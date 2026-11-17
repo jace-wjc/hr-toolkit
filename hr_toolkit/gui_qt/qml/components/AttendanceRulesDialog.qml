@@ -16,17 +16,27 @@ AppDialog {
     property int editAssignmentIndex: -1
     property bool working: backend ? backend.busy : false
     property int unresolved: rows.filter(function(row) { return !!row.problem }).length
+    property int selectedCount: Object.keys(selected).length
+    property int otherUnresolved: rows.filter(function(row) { return !!row.problem && !selected[row.id] }).length
+    property bool advanced: false
+    property var suggestedRule: backend ? backend.suggestAttendanceRule(company.value.trim(), location.value.trim(), JSON.stringify(config)) : ({})
+    property int selectedMonths: customRule.checked && monthOptions[batchMonths.currentIndex]
+        ? monthOptions[batchMonths.currentIndex] : Number(suggestedRule.valid_months || 0)
+    property int selectedHours: customRule.checked && hourOptions[batchHours.currentIndex]
+        ? hourOptions[batchHours.currentIndex] : Number(suggestedRule.hours_per_day || 0)
+    property bool selectionReady: selectedCount > 0 && !!company.value.trim() && !!location.value.trim()
+        && selectedMonths > 0 && selectedHours > 0
     property var monthOptions: [0, 3, 6, 12]
     property var hourOptions: [0, 7, 8]
     property var shownRows: buildRows()
-    title: Ui.text(pending ? "确认考勤公司、驻地和规则" : "考勤识别规则")
+    title: Ui.text(pending ? "补充考勤人员信息" : "考勤识别规则")
     width: Math.min(parent ? parent.width - 24 : 960, 960)
-    height: Math.min(parent ? parent.height - 24 : 790, 790)
+    height: Math.min(parent ? parent.height - 24 : 790, pending && page === "assign" ? 730 : 790)
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
-    acceptText: pending ? "确认并继续处理" : "保存设置"
+    acceptText: pending ? (selectedCount ? "使用以上设置并继续" : "确认并继续处理") : "保存设置"
     rejectText: "返回"
-    acceptButtonEnabled: !working && (!pending || unresolved === 0)
+    acceptButtonEnabled: !working && (!pending || (selectedCount ? selectionReady && otherUnresolved === 0 : unresolved === 0))
 
     function copy(value) { return JSON.parse(JSON.stringify(value)) }
     function initialize(value, isPending) {
@@ -40,31 +50,30 @@ AppDialog {
         editRule(-1)
         search.text = ""
         viewMode.currentIndex = 0
-        company.editText = ""
-        location.selectedRawValue = ""
-        location.editText = ""
+        company.value = ""
+        location.value = ""
         keyword.text = ""
         customRule.checked = false
+        batchMonths.currentIndex = 0
+        batchHours.currentIndex = 0
+        advanced = false
         remember.checked = true
         page = pending ? "assign" : "rules"
+        // Select a single unresolved group, but never guess its company/location.
+        var groups = buildRows(), needsInput = groups.filter(function(group) { return group.problem })
+        if (pending && needsInput.length === 1) selectRows(needsInput[0].ids, true)
         open()
     }
     function showData(value) { initialize(value, true) }
     function showSettings(value) { initialize(value, false) }
-    function locationLabel(value) { return value === "公司默认" ? Ui.text("公司默认") : value }
-    function locationValue(combo) {
-        var value = combo.editText.trim(), index = combo.currentIndex
-        // Translate the reserved option's label, never a stored location name.
-        if (combo.selectedRawValue && value === locationLabel(combo.selectedRawValue)) return combo.selectedRawValue
-        return index >= 0 && index < combo.rawValues.length && value === locationLabel(combo.rawValues[index])
-            ? combo.rawValues[index] : value
-    }
+    function locationLabel(value) { return value === "公司默认" ? Ui.text("按公司默认规则") : value }
     function assignmentLabel(item) {
         var suffix = " / 全组人员", label = String(item.label || "")
         return !item.name && label.slice(-suffix.length) === suffix
             ? label.slice(0, -suffix.length) + " / " + Ui.text("全组人员") : label
     }
     function ruleText(row) {
+        if (!row.company && !row.location) return Ui.text("待补充：所属公司、工作地点")
         if (row.problem) return (row.company || Ui.text("未指定公司")) + " / "
             + (locationLabel(row.location) || Ui.text("未指定驻地")) + ": " + Ui.text(row.problem)
         return (row.company || Ui.text("未指定公司")) + " / " + (locationLabel(row.location) || Ui.text("旧表已确认"))
@@ -96,6 +105,37 @@ AppDialog {
         var value = copy(selected)
         ids.forEach(function(id) { if (checked) value[id] = true; else delete value[id] })
         selected = value
+        fillSelection()
+    }
+    function fillSelection() {
+        var items = rows.filter(function(row) { return !!selected[row.id] })
+        company.value = items.length && items.every(function(row) { return row.company === items[0].company }) ? items[0].company : ""
+        location.value = items.length && items.every(function(row) { return row.location === items[0].location }) ? items[0].location : ""
+        keyword.text = ""
+        customRule.checked = false
+        batchMonths.currentIndex = 0
+        batchHours.currentIndex = 0
+        errorText = ""
+        // Preserve an existing individual rule when editing an assigned group.
+        if (items.length && items.every(function(row) {
+            return !row.problem && row.valid_months === items[0].valid_months && row.hours_per_day === items[0].hours_per_day
+        })) {
+            var matched = backend.suggestAttendanceRule(company.value, location.value, JSON.stringify(config))
+            if (items[0].valid_months !== matched.valid_months || items[0].hours_per_day !== matched.hours_per_day) {
+                customRule.checked = true
+                batchMonths.currentIndex = Math.max(0, monthOptions.indexOf(Number(items[0].valid_months)))
+                batchHours.currentIndex = Math.max(0, hourOptions.indexOf(Number(items[0].hours_per_day)))
+                advanced = true
+            }
+        }
+    }
+    function selectionHint() {
+        if (!selectedCount && !unresolved) return "当前人员均已匹配规则，可继续处理。"
+        if (!selectedCount) return "先勾选上方要设置的人员。这里只修改勾选人员的规则，不改变统计名单。"
+        if (!company.value.trim()) return "请选择所属公司；列表没有时，可直接填写公司名称。"
+        if (!location.value.trim()) return "请选择实际办公城市；确认使用公司统一规则时，可选择“按公司默认规则”。"
+        if (!selectedMonths || !selectedHours) return "还缺少有效期或每天工时。展开“更多设置”手动填写，或到“公司/驻地规则”中维护。"
+        return "将使用：加班有效期 " + selectedMonths + " 个月，每天 " + selectedHours + " 小时。"
     }
     function checkConfig(value, choices) {
         var response = backend.previewAttendanceRules(JSON.stringify({config: value, pending: pending, selections: choices || ({})}))
@@ -107,18 +147,20 @@ AppDialog {
     }
     function applySelection() {
         var ids = Object.keys(selected)
-        if (!ids.length) { errorText = "请先勾选要设置的文件组或人员。"; return }
-        var choice = {company: company.editText.trim(), location: locationValue(location), keyword: keyword.text.trim(),
+        if (!selectionReady) { errorText = selectionHint(); return false }
+        var choice = {company: company.value.trim(), location: location.value.trim(), keyword: keyword.text.trim(),
             valid_months: customRule.checked ? monthOptions[batchMonths.currentIndex] : 0,
             hours_per_day: customRule.checked ? hourOptions[batchHours.currentIndex] : 0}
-        if (!choice.company || !choice.location) { errorText = "请选择或填写公司和驻地。"; return }
         var choices = {}
         ids.forEach(function(id) { choices[id] = choice })
-        if (checkConfig(config, choices)) selected = ({})
+        if (!checkConfig(config, choices)) return false
+        selected = ({})
+        return true
     }
     function names(field) {
-        var values = field === "location" ? ["南昌", "深圳", "北京", "公司默认"] : []
+        var values = field === "location" ? ["公司默认"] : []
         config.rules.forEach(function(rule) { if (rule[field] && values.indexOf(rule[field]) < 0) values.push(rule[field]) })
+        config.assignments.forEach(function(item) { if (item[field] && values.indexOf(item[field]) < 0) values.push(item[field]) })
         rows.forEach(function(row) { if (row[field] && values.indexOf(row[field]) < 0) values.push(row[field]) })
         return values
     }
@@ -141,9 +183,7 @@ AppDialog {
         editAssignmentIndex = index
         var item = config.assignments[index]
         savedCompany.text = item.company
-        savedLocation.selectedRawValue = item.location
-        savedLocation.currentIndex = savedLocation.rawValues.indexOf(item.location)
-        savedLocation.editText = locationLabel(item.location)
+        savedLocation.value = item.location
         savedKeyword.text = item.keyword
         savedMonths.currentIndex = Math.max(0, monthOptions.indexOf(Number(item.valid_months || 0)))
         savedHours.currentIndex = Math.max(0, hourOptions.indexOf(Number(item.hours_per_day || 0)))
@@ -151,7 +191,7 @@ AppDialog {
     function saveAssignment() {
         var value = copy(config), item = value.assignments[editAssignmentIndex]
         item.company = savedCompany.text.trim()
-        item.location = locationValue(savedLocation)
+        item.location = savedLocation.value.trim()
         item.keyword = savedKeyword.text.trim()
         item.source = item.keyword ? "" : (item.original_source || item.source)
         item.valid_months = monthOptions[savedMonths.currentIndex]
@@ -160,6 +200,11 @@ AppDialog {
     }
     onRejected: if (pending) backend.cancelAttendanceRuleReview()
     onAccepted: {
+        // Direct confirmation uses the same preview and backend validation as Apply.
+        if (pending && selectedCount && !applySelection()) {
+            Qt.callLater(function() { dialog.open() })
+            return
+        }
         var error = backend.saveAttendanceRules(JSON.stringify({config: config, pending: pending, remember: remember.checked}))
         if (error) { errorText = error; Qt.callLater(function() { dialog.open() }) }
     }
@@ -168,81 +213,167 @@ AppDialog {
         spacing: 10
         RowLayout {
             Layout.fillWidth: true
-            AppButton { text: "本次分配"; visible: dialog.pending; variant: dialog.page === "assign" ? "primary" : "secondary"; onClicked: dialog.page = "assign" }
+            AppButton { text: "本次人员"; visible: dialog.pending; variant: dialog.page === "assign" ? "primary" : "secondary"; onClicked: dialog.page = "assign" }
             AppButton { text: "公司/驻地规则"; variant: dialog.page === "rules" ? "primary" : "secondary"; onClicked: dialog.page = "rules" }
-            AppButton { text: "已记住的归属"; variant: dialog.page === "saved" ? "primary" : "secondary"; onClicked: dialog.page = "saved" }
+            AppButton { text: "已保存的选择"; variant: dialog.page === "saved" ? "primary" : "secondary"; onClicked: dialog.page = "saved" }
         }
         StackLayout {
             Layout.fillWidth: true; Layout.fillHeight: true
             currentIndex: dialog.page === "assign" ? 0 : dialog.page === "rules" ? 1 : 2
-            ColumnLayout {
-                spacing: 8
-                Text { Layout.fillWidth: true; text: Ui.text("先勾选资料，再批量指定公司和驻地。组内有例外时切换“按人员”；识别不清的人员会标出原因。"); wrapMode: Text.Wrap; color: Ui.color("muted"); font.pixelSize: 12 }
-                RowLayout {
-                    Layout.fillWidth: true
-                    AppTextField { id: search; Layout.fillWidth: true; placeholderText: Ui.text("搜索文件、公司或人员") }
-                    AppComboBox { id: viewMode; model: ["按文件分组", "按人员"]; Layout.preferredWidth: 140 }
-                    AppButton { text: "全选当前列表"; variant: "link"; onClicked: dialog.shownRows.forEach(function(row) { dialog.selectRows(row.ids, true) }) }
-                    AppButton { text: "清除选择"; variant: "link"; onClicked: dialog.selected = ({}) }
-                }
-                ListView {
-                    Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 80
-                    clip: true; spacing: 5; model: dialog.shownRows
-                    ScrollBar.vertical: ScrollBar {}
-                    delegate: Rectangle {
-                        width: ListView.view.width; height: 76
-                        color: modelData.problem ? Ui.color("input") : Ui.color("surface")
-                        border.color: modelData.problem ? Ui.color("warning") : Ui.color("border"); radius: 6
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 8; spacing: 8
-                            AppCheckBox { checked: dialog.allSelected(modelData.ids); enabled: !dialog.working; onClicked: dialog.selectRows(modelData.ids, checked) }
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 3
-                                Text { Layout.fillWidth: true; text: modelData.title + Ui.text("（" + modelData.ids.length + " 人，" + (modelData.kind === "history" ? "历史汇总" : "本次考勤") + "）"); textFormat: Text.PlainText; elide: Text.ElideMiddle; color: Ui.color("text"); font.pixelSize: 13 }
-                                Text { Layout.fillWidth: true; text: modelData.rules.length === 1 ? modelData.rules[0] : Ui.text("组内人员规则不同，请切换“按人员”查看"); textFormat: Text.PlainText; elide: Text.ElideRight; color: modelData.problem ? Ui.color("warning") : Ui.color("muted"); font.pixelSize: 12 }
-                                Text { Layout.fillWidth: true; text: modelData.labels.slice(0, 5).join(Ui.language === "en_US" ? ", " : "、") + (modelData.labels.length > 5 ? Ui.text("等") : ""); textFormat: Text.PlainText; elide: Text.ElideRight; color: Ui.color("muted"); font.pixelSize: 11 }
+            ScrollView {
+                id: assignmentScroll
+                clip: true
+                contentWidth: availableWidth
+                contentHeight: assignmentForm.implicitHeight
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ColumnLayout {
+                    id: assignmentForm
+                    width: assignmentScroll.availableWidth
+                    spacing: 10
+                    Text {
+                        Layout.fillWidth: true; wrapMode: Text.Wrap
+                        text: Ui.text(dialog.unresolved
+                            ? "部分人员缺少公司、工作地点，或尚未匹配加班规则。人员名单只决定统计谁，这里补充加班/调休的计算依据。"
+                            : "本次人员的规则已确认。可以直接继续处理；需要修改时，勾选对应人员后调整。")
+                        color: Ui.color("text"); font.pixelSize: 13
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: Ui.text("1. 选择要设置的人员"); color: Ui.color("text"); font.pixelSize: 13; font.weight: Font.DemiBold }
+                        Item { Layout.fillWidth: true }
+                        Text { text: Ui.text("已勾选 " + dialog.selectedCount + " 条人员记录"); color: Ui.color("muted"); font.pixelSize: 12 }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        AppTextField { id: search; Layout.fillWidth: true; placeholderText: Ui.text("搜索文件、公司或人员") }
+                        AppComboBox { id: viewMode; model: ["按文件分组", "按人员"]; Layout.preferredWidth: 140 }
+                        AppButton { text: "全选当前列表"; variant: "link"; onClicked: {
+                            var ids = []
+                            dialog.shownRows.forEach(function(row) { ids = ids.concat(row.ids) })
+                            dialog.selectRows(ids, true)
+                        } }
+                        AppButton { text: "清除选择"; variant: "link"; onClicked: { dialog.selected = ({}); dialog.fillSelection() } }
+                    }
+                    ListView {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Math.max(80, Math.min(210, dialog.shownRows.length * 81))
+                        clip: true; spacing: 5; model: dialog.shownRows
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Rectangle {
+                            width: ListView.view.width; height: 76
+                            color: dialog.allSelected(modelData.ids) ? Ui.color("selection") : Ui.color("input")
+                            border.color: dialog.allSelected(modelData.ids) ? Ui.color("accent") : modelData.problem ? Ui.color("warning") : Ui.color("border"); radius: 6
+                            MouseArea {
+                                anchors.fill: parent; enabled: !dialog.working
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: dialog.selectRows(modelData.ids, !dialog.allSelected(modelData.ids))
+                            }
+                            RowLayout {
+                                anchors.fill: parent; anchors.margins: 8; spacing: 8
+                                AppCheckBox { checked: dialog.allSelected(modelData.ids); enabled: !dialog.working; onClicked: dialog.selectRows(modelData.ids, checked) }
+                                ColumnLayout {
+                                    Layout.fillWidth: true; spacing: 3
+                                    Text { Layout.fillWidth: true; text: modelData.title + Ui.text("（" + modelData.ids.length + " 人，" + (modelData.kind === "history" ? "历史汇总" : "本次考勤") + "）"); textFormat: Text.PlainText; elide: Text.ElideMiddle; color: Ui.color("text"); font.pixelSize: 13 }
+                                    Text {
+                                        Layout.fillWidth: true; textFormat: Text.PlainText; elide: Text.ElideRight; font.pixelSize: 12
+                                        property bool drafted: dialog.allSelected(modelData.ids) && dialog.selectionReady
+                                        text: drafted ? Ui.text("将应用") + ": " + company.value + " / " + dialog.locationLabel(location.value)
+                                            : modelData.rules.length === 1 ? modelData.rules[0] : Ui.text("组内人员规则不同，请切换“按人员”查看")
+                                        color: drafted ? Ui.color("accent") : modelData.problem ? Ui.color("warning") : Ui.color("muted")
+                                    }
+                                    Text { Layout.fillWidth: true; text: modelData.labels.slice(0, 5).join(Ui.language === "en_US" ? ", " : "、") + (modelData.labels.length > 5 ? Ui.text("等") : ""); textFormat: Text.PlainText; elide: Text.ElideRight; color: Ui.color("muted"); font.pixelSize: 11 }
+                                }
                             }
                         }
                     }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text { text: Ui.text("公司"); color: Ui.color("text") }
-                    ComboBox {
-                        id: company; implicitHeight: 36; font.pixelSize: 13
-                        Layout.fillWidth: true; editable: true; model: dialog.names("company"); currentIndex: -1
-                        palette.text: Ui.color("text"); palette.base: Ui.color("input")
-                        palette.button: Ui.color("input"); palette.buttonText: Ui.color("text")
+                    Text {
+                        Layout.fillWidth: true; wrapMode: Text.Wrap
+                        text: Ui.text("同一文件的人员属于不同公司或工作地点时，切换“按人员”分别设置。")
+                        color: Ui.color("muted"); font.pixelSize: 11
                     }
-                    Text { text: Ui.text("驻地"); color: Ui.color("text") }
-                    ComboBox {
-                        id: location; implicitHeight: 36; font.pixelSize: 13
-                        property var rawValues: dialog.names("location")
-                        property string selectedRawValue: ""
-                        Layout.fillWidth: true; editable: true; model: rawValues.map(dialog.locationLabel); currentIndex: -1
-                        onActivated: selectedRawValue = rawValues[index]
-                        palette.text: Ui.color("text"); palette.base: Ui.color("input")
-                        palette.button: Ui.color("input"); palette.buttonText: Ui.color("text")
+                    Text { text: Ui.text("2. 选择所属公司和工作地点"); color: Ui.color("text"); font.pixelSize: 13; font.weight: Font.DemiBold }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: width < 620 ? 1 : 2
+                        columnSpacing: 12; rowSpacing: 8
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Text { text: Ui.text("所属公司"); color: Ui.color("text"); font.pixelSize: 12 }
+                            AttendanceChoiceField {
+                                id: company; Layout.fillWidth: true
+                                choices: dialog.names("company")
+                                placeholderText: Ui.text("选择或填写员工所属公司")
+                                enabled: !dialog.working && dialog.selectedCount > 0
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Text { text: Ui.text("工作地点"); color: Ui.color("text"); font.pixelSize: 12 }
+                            AttendanceChoiceField {
+                                id: location; Layout.fillWidth: true
+                                choices: dialog.names("location")
+                                optionLabels: ({"公司默认": "按公司默认规则"})
+                                placeholderText: Ui.text("选择或填写实际办公城市")
+                                enabled: !dialog.working && dialog.selectedCount > 0
+                            }
+                        }
                     }
+                    Text {
+                        Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: Ui.color("muted")
+                        text: Ui.text("工作地点按实际办公城市选择；只有确认使用公司统一规则时，才选“按公司默认规则”。")
+                    }
+                    Text { text: Ui.text("3. 核对将使用的规则"); color: Ui.color("text"); font.pixelSize: 13; font.weight: Font.DemiBold }
+                    Text {
+                        Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 13
+                        text: Ui.text(dialog.selectionHint())
+                        color: dialog.selectionReady ? Ui.color("accent") : Ui.color("muted")
+                    }
+                    AppButton {
+                        text: dialog.advanced ? "收起更多设置" : "更多设置（单独规则、下次识别）"
+                        variant: "link"; enabled: !dialog.working
+                        onClicked: dialog.advanced = !dialog.advanced
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true; visible: dialog.advanced; spacing: 8
+                        AppCheckBox { id: customRule; text: "手动设置有效期和每天工时"; enabled: !dialog.working && dialog.selectedCount > 0 }
+                        GridLayout {
+                            Layout.fillWidth: true
+                            visible: customRule.checked
+                            columns: width < 620 ? 1 : 2
+                            AppComboBox { id: batchMonths; model: ["有效期自动匹配", "3 个月", "6 个月", "12 个月"]; Layout.fillWidth: true }
+                            AppComboBox { id: batchHours; model: ["工时自动匹配", "7 小时/天", "8 小时/天"]; Layout.fillWidth: true }
+                        }
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: Ui.color("muted")
+                            text: Ui.text("有效期用于历史加班结转；每天工时用于加班和调休的天数换算。请按人事确认的规则填写。")
+                        }
+                        AppTextField {
+                            id: keyword; Layout.fillWidth: true
+                            placeholderText: Ui.text("文件名固定关键词（可选）；留空只记住当前文件")
+                        }
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: Ui.color("muted")
+                            text: Ui.text("下个月文件名会变化时，可填写不变的关键词；以后文件名包含该词、人员来源信息也相同时，才会使用这次选择。")
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: dialog.otherUnresolved > 0 && dialog.selectedCount > 0
+                        AppButton { text: "应用到这组人员"; enabled: !dialog.working && dialog.selectionReady; onClicked: dialog.applySelection() }
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: Ui.color("muted")
+                            text: Ui.text("其他还有 " + dialog.otherUnresolved + " 条待确认，请先应用，再选择下一组。")
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
+                        text: Ui.text(dialog.selectedCount
+                            ? (dialog.selectionReady && !dialog.otherUnresolved ? "信息已填完整，可点击“使用以上设置并继续”。" : "请按上面的步骤补齐信息；填完整后即可继续。")
+                            : (dialog.unresolved ? "还有 " + dialog.unresolved + " 条人员记录待确认。" : "当前人员均已匹配规则，可继续处理。"))
+                        color: dialog.selectionReady && !dialog.otherUnresolved ? Ui.color("accent") : dialog.unresolved ? Ui.color("warning") : Ui.color("muted")
+                    }
+                    AppCheckBox { id: remember; text: "记住本次选择（可在“已保存的选择”中修改或删除）"; checked: true }
                 }
-                Text {
-                    Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: Ui.color("muted")
-                    property var suggested: backend ? backend.suggestAttendanceRule(company.editText, dialog.locationValue(location), JSON.stringify(dialog.config)) : ({})
-                    text: Ui.text(suggested.valid_months && suggested.hours_per_day ? "匹配规则：" + suggested.valid_months + " 个月，" + suggested.hours_per_day + " 小时/天。驻地按公司安排时，可明确选择“公司默认”。" : "未能完整匹配规则，可在“公司/驻地规则”中维护，或勾选下方的单独指定。")
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    AppCheckBox { id: customRule; text: "为选中人员单独指定" }
-                    AppComboBox { id: batchMonths; visible: customRule.checked; model: ["有效期自动匹配", "3 个月", "6 个月", "12 个月"]; Layout.fillWidth: true }
-                    AppComboBox { id: batchHours; visible: customRule.checked; model: ["工时自动匹配", "7 小时/天", "8 小时/天"]; Layout.fillWidth: true }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    AppTextField { id: keyword; Layout.fillWidth: true; placeholderText: Ui.text("文件名固定关键词（可选）：如“几维日报”；留空仅记住当前文件") }
-                    AppButton { text: "应用到选中人员"; variant: "primary"; enabled: !dialog.working; onClicked: dialog.applySelection() }
-                }
-                Text { Layout.fillWidth: true; text: Ui.text(dialog.unresolved ? "还有 " + dialog.unresolved + " 条人员记录待确认。" : "当前人员均已匹配规则，可继续处理。"); color: dialog.unresolved ? Ui.color("warning") : Ui.color("muted"); font.pixelSize: 12 }
-                AppCheckBox { id: remember; text: "记住这次分配，下次自动应用（可修改或删除）"; checked: true }
             }
             ColumnLayout {
                 spacing: 8
@@ -293,15 +424,11 @@ AppDialog {
                     RowLayout {
                         Layout.fillWidth: true
                         AppTextField { id: savedCompany; Layout.fillWidth: true; placeholderText: Ui.text("公司") }
-                        ComboBox {
-                            id: savedLocation; implicitHeight: 36; font.pixelSize: 13
-                            property var rawValues: dialog.names("location")
-                            property string selectedRawValue: ""
-                            Layout.fillWidth: true; editable: true; model: rawValues.map(dialog.locationLabel); currentIndex: -1
-                            onActivated: selectedRawValue = rawValues[index]
-                            Accessible.name: Ui.text("驻地或公司默认")
-                            palette.text: Ui.color("text"); palette.base: Ui.color("input")
-                            palette.button: Ui.color("input"); palette.buttonText: Ui.color("text")
+                        AttendanceChoiceField {
+                            id: savedLocation; Layout.fillWidth: true
+                            choices: dialog.names("location")
+                            optionLabels: ({"公司默认": "按公司默认规则"})
+                            placeholderText: Ui.text("选择工作地点或按公司默认规则")
                         }
                         AppTextField { id: savedKeyword; Layout.fillWidth: true; placeholderText: Ui.text("文件名关键词；留空限定原文件") }
                     }

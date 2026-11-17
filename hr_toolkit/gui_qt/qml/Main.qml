@@ -1959,7 +1959,7 @@ ApplicationWindow {
             Text {
                 visible: overtimeRules.automatic
                 Layout.fillWidth: true
-                text: Ui.text("可同时上传多家公司的资料，按各自规则计算。无法识别时，可按文件批量指定公司和驻地，并记住选择；个别人员可单独调整。")
+                text: Ui.text("人员名单用于限定统计范围；公司和工作地点用于匹配加班/调休规则。资料缺少信息时，处理前会提示补充，可按文件批量设置并记住选择。")
                 color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap
             }
             RowLayout {
