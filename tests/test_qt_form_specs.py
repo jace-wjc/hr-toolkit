@@ -17,16 +17,19 @@ from hr_toolkit.gui_qt.form_specs import (
 class QtFormSpecTests(unittest.TestCase):
     def test_attendance_overtime_rules_validate_and_pass_person_overrides(self) -> None:
         call = self.invocation("data_statistics")
+        self.assertTrue(call.kwargs["attendance_auto_rules"])
         self.assertEqual((call.kwargs["overtime_valid_months"], call.kwargs["overtime_hours_per_day"]), (3, 7))
         overrides = [{"people": "张三", "valid_months": 12, "hours_per_day": 8}]
         call = self.invocation("data_statistics", values={"overtime_valid_months": 6, "overtime_hours_per_day": 8,
+                                                        "attendance_auto_rules": False,
                                                         "overtime_rule_overrides": overrides})
+        self.assertFalse(call.kwargs["attendance_auto_rules"])
         self.assertEqual(call.kwargs["overtime_rule_overrides"], overrides)
         self.assertEqual((call.kwargs["overtime_valid_months"], call.kwargs["overtime_hours_per_day"]), (6, 8))
         for values in ({"overtime_valid_months": 0}, {"overtime_hours_per_day": 0},
                        {"overtime_rule_overrides": [{"people": "", "valid_months": 3, "hours_per_day": 7}]}):
             with self.subTest(values=values), self.assertRaises(FormValidationError) as caught:
-                self.invocation("data_statistics", values=values)
+                self.invocation("data_statistics", values={"attendance_auto_rules": False, **values})
             self.assertEqual(caught.exception.field, "overtime_rules")
 
     def test_attendance_history_is_optional_and_separate_from_staff_list(self) -> None:

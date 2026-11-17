@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 from openpyxl.comments import Comment
 from openpyxl.packaging.custom import StringProperty
 from hr_toolkit.common.template_mapping import (
-    file_template_source, template_source,
+    file_template_source, template_source, source_identity,
     template_tool, choose_sheet, map_sheet, assigned_role, active,
     request_selection, ignored_sheet, request_sheet_selection, current_sheet_choices, unused_sheet_notices, TemplateSelectionRequired,
 )
@@ -64,6 +64,7 @@ class AttendanceOvertimeRules:
 
     def __init__(self, valid_months=3, hours_per_day=7, overrides=None):
         self.default = self._validated(valid_months, hours_per_day)
+        self.person_rules = {}
         self.overrides = {}
         self.matches = {}
         if overrides is not None and not isinstance(overrides, list):
@@ -98,7 +99,7 @@ class AttendanceOvertimeRules:
         if len(tokens) > 1:
             raise ValueError(f"{' / '.join(key)} 匹配了多条例外规则，请只保留一条。")
         if not tokens:
-            return self.default
+            return self.person_rules.get(key, self.default)
         token = next(iter(tokens))
         self.matches[token].add(key)
         if len(self.matches[token]) > 1:
@@ -148,6 +149,10 @@ class AttendanceSourceRow:
     overtime_input_value: float | None = None
     overtime_valid_months: int = 3
     hours_per_day: int = STANDARD_HOURS_PER_DAY
+    source_company: str = ""
+    work_location: str = ""
+    source_sheet: str = ""
+    source_identity: str = ""
 
 
 @dataclass
@@ -175,6 +180,7 @@ class AttendancePersonSummary:
     overtime_valid_months: int = 3
     hours_per_day: int = STANDARD_HOURS_PER_DAY
     overtime_review_notes: list[str] = field(default_factory=list)
+    work_location: str = ""
 
 
 @dataclass
@@ -260,6 +266,7 @@ class DataStatisticsResult:
     remark_unit: str = REMARK_UNIT_DAY
     warnings: list[str] = field(default_factory=list)
     existing_summary_path: Path | None = None
+    attendance_rule_summary: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -286,6 +293,7 @@ class DataStatisticsResult:
             "month_range_end": None if self.month_range_end is None else self.month_range_end.isoformat(),
             "remark_unit": self.remark_unit,
             "warnings": self.warnings,
+            "attendance_rule_summary": self.attendance_rule_summary,
         }
 
 
@@ -302,6 +310,9 @@ def generate_data_statistics_reports(
     overtime_valid_months: int = 3,
     overtime_hours_per_day: int = STANDARD_HOURS_PER_DAY,
     overtime_rule_overrides: list[dict[str, Any]] | None = None,
+    attendance_auto_rules: bool = False,
+    attendance_rules_config: dict[str, Any] | None = None,
+    attendance_review_rules: bool = False,
     week_start: date | str | None = None,
     week_end: date | str | None = None,
     month_start: date | str | None = None,
@@ -359,6 +370,8 @@ def generate_data_statistics_reports(
             if file_attendance or file_weekly or file_monthly:
                 used_files.append(str(file_path))
             attendance_rows.extend(file_attendance)
+            for row in file_attendance:
+                row.source_identity = source_identity(file_path)
             weekly_records.extend(file_weekly)
             monthly_records.extend(file_monthly)
 
@@ -369,6 +382,16 @@ def generate_data_statistics_reports(
             raise ValueError(message)
 
         _check_cancelled(cancelled)
+        history_assignments, rule_summary = {}, []
+        if attendance_review_rules and not attendance_rows:
+            raise ValueError("未找到考勤数据，周月报无需分配加班规则。")
+        if attendance_auto_rules and attendance_rows:
+            history_assignments, rule_summary = _prepare_attendance_rule_assignments(
+                attendance_rows, history_path, temp_dir, overtime_rules, attendance_rules_config,
+                review=attendance_review_rules,
+                expected_names={person.name for person in expected_reporters} if staff_path else None,
+                cancelled=cancelled,
+            )
         for row in attendance_rows:
             row.overtime_valid_months, row.hours_per_day = overtime_rules.for_person((row.company, row.department, row.name))
             if row.hours_per_day != STANDARD_HOURS_PER_DAY:
@@ -401,6 +424,7 @@ def generate_data_statistics_reports(
                 history_period=history_period, rest_mode=history_rest_mode,
                 deducted_people=history_deducted_people,
                 overtime_rules=overtime_rules,
+                history_assignments=history_assignments,
                 cancelled=cancelled,
             )
         warnings.extend(overtime_rules.unused_warnings())
@@ -435,6 +459,7 @@ def generate_data_statistics_reports(
             month_range_end=None if month_range is None else month_range[1],
             remark_unit=remark_unit,
             warnings=warnings,
+            attendance_rule_summary=rule_summary,
         )
         if dry_run:
             return result
@@ -611,10 +636,78 @@ def _history_overtime_rules(workbook):
             if len(key) != 3 or not all(isinstance(part, str) for part in key) or key in result:
                 raise ValueError
             months, hours = AttendanceOvertimeRules._validated(item["valid_months"], item["hours_per_day"])
-            result[key] = dict(valid_months=months, hours_per_day=hours)
+            result[key] = dict(valid_months=months, hours_per_day=hours, location=str(item.get("location") or ""))
         return result
     except (ValueError, TypeError, KeyError):
         raise ValueError("历史汇总记录的加班工时规则无效，请核对所选文件。") from None
+
+
+def _prepare_attendance_rule_assignments(rows, history_path, temp_dir, overtime_rules, config,
+                                        *, review=False, expected_names=None, cancelled=None):
+    from hr_toolkit.attendance_rules import clean_config, record_id, resolve_records
+
+    config = clean_config(config)
+    records = {}
+    row_ids = []
+    for row in rows:
+        if expected_names is not None and row.name not in expected_names:
+            row_ids.append(None)
+            continue
+        record = dict(source=row.source_identity, file=row.source_file, sheet=row.source_sheet,
+                      raw_company=row.source_company, raw_location=row.work_location,
+                      name=row.name, department=row.department, kind="current")
+        identity = record_id(record)
+        records[identity] = record
+        row_ids.append(identity)
+    if history_path:
+        workbook = load_workbook(ensure_xlsx_workbook(history_path, temp_dir), read_only=True, data_only=False)
+        try:
+            with template_source(history_path):
+                ws = _select_history_sheet(workbook, history_path.name)
+            header_row, _, positions = _history_headers(ws)
+            saved = _history_overtime_rules(workbook)
+            for values in ws.iter_rows(min_row=header_row + 1, values_only=True):
+                _check_cancelled(cancelled)
+                name = _cell_text(values[positions["姓名"]])
+                if not name or expected_names is not None and name not in expected_names:
+                    continue
+                company, department = _cell_text(values[positions["公司"]]), _cell_text(values[positions["部门（片区）"]])
+                previous = saved.get((company, department, name))
+                record = dict(source=source_identity(history_path), file=history_path.name, sheet=ws.title,
+                              raw_company=company, raw_location=(previous or {}).get("location", ""),
+                              name=name, department=department, kind="history", saved_rule=previous)
+                records[record_id(record)] = record
+        finally:
+            workbook.close()
+    resolved = resolve_records(list(records.values()), config)
+    if review and not resolved:
+        raise ValueError("没有纳入本次统计的考勤人员，请核对原始资料和人员名单。")
+    if resolved and (review or any(item["problem"] for item in resolved)):
+        raise TemplateSelectionRequired({
+            "tool": "data_statistics", "kind": "attendance_rules",
+            "message": "请确认各组资料的公司、驻地和加班规则，可按文件批量指定，也可调整个别人员。",
+            "records": list(records.values()), "rows": resolved, "config": config,
+        })
+    assignments = {item["id"]: item for item in resolved}
+    for row, identity in zip(rows, row_ids):
+        if identity is None:
+            continue
+        selected = assignments[identity]
+        row.company, row.work_location = selected["company"], selected["location"]
+        overtime_rules.person_rules[(row.company, row.department, row.name)] = selected["valid_months"], selected["hours_per_day"]
+    history_assignments = {}
+    groups = {}
+    for item in resolved:
+        key = (item["company"], item["department"], item["name"])
+        overtime_rules.person_rules[key] = item["valid_months"], item["hours_per_day"]
+        if item["kind"] == "history":
+            history_assignments[(item["raw_company"], item["department"], item["name"])] = item
+        else:
+            group = item["company"], item["location"], item["valid_months"], item["hours_per_day"]
+            groups.setdefault(group, set()).add(key)
+    summary = [f"{company} / {location}：{len(people)} 人，有效期 {months} 个月，{hours} 小时/天"
+               for (company, location, months, hours), people in groups.items()]
+    return history_assignments, summary
 
 
 def _expire_overtime(balances, period, valid_months, key, hours_per_day, warnings):
@@ -651,6 +744,7 @@ def _carry_forward_attendance_overtime(
     rest_mode: str | None = None,
     deducted_people: str = "",
     overtime_rules: AttendanceOvertimeRules | None = None,
+    history_assignments: dict | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> str:
     """Settle the historical period, expire unused hours, then carry balances without debt."""
@@ -725,7 +819,9 @@ def _carry_forward_attendance_overtime(
             name = _cell_text(raw[positions["姓名"]])
             if not name:
                 continue
-            key = (_cell_text(raw[positions["公司"]]), _cell_text(raw[positions["部门（片区）"]]), name)
+            original_key = (_cell_text(raw[positions["公司"]]), _cell_text(raw[positions["部门（片区）"]]), name)
+            assigned = (history_assignments or {}).get(original_key, {})
+            key = (assigned.get("company", original_key[0]), original_key[1], name)
             matching_tokens = manual_tokens.intersection({name, "/".join(key)})
             for token in matching_tokens:
                 manual_matches[token].add(key)
@@ -735,7 +831,7 @@ def _carry_forward_attendance_overtime(
                 raise ValueError(f"历史考勤汇总中 {name} 的公司、部门、姓名重复，请先核对。")
             seen.add(key)
             valid_months, hours_per_day = rules.for_person(key)
-            old_hours_per_day = recorded_hours.get(key, hours_per_day)
+            old_hours_per_day = recorded_hours.get(original_key, assigned.get("source_hours_per_day") or hours_per_day)
             carried = {}
             for column, period, by_hour in overtime_columns:
                 if same_period and period == current_period:
@@ -767,7 +863,8 @@ def _carry_forward_attendance_overtime(
                 if name in current_names:
                     raise ValueError(f"{name} 的历史与本次考勤公司或部门不一致，请核对后再合并。")
                 target = AttendancePersonSummary(company=key[0], department=key[1], name=name,
-                    overtime_valid_months=valid_months, hours_per_day=hours_per_day, period_overtime_hours={})
+                    overtime_valid_months=valid_months, hours_per_day=hours_per_day, period_overtime_hours={},
+                    work_location=assigned.get("location", ""))
                 summaries.append(target)
                 history_only += 1
             target.overtime_review_notes.extend(note for note in notes if note not in target.overtime_review_notes)
@@ -1266,6 +1363,10 @@ def _read_attendance_sheet(
             continue
         department_text = _cell_text(_val(row_index, dept_col))
         company, department = _company_department_from_text(department_text)
+        company_text = _cell_text(_header_value_any(grid, row_index, headers, ("公司", "公司名称", "所属公司", "单位")))
+        location_text = _cell_text(_header_value_any(grid, row_index, headers, ("工作地", "驻地", "工作地点", "办公地点", "工作城市")))
+        if company_text:
+            company = company_text
         rest_raw = _number(_val(row_index, rest_col))
         overtime_raw = _number(_val(row_index, overtime_col))
         paid_details = _paid_leave_details(row_index)
@@ -1280,6 +1381,9 @@ def _read_attendance_sheet(
                 name=name,
                 company=company,
                 department=department,
+                source_company=company_text,
+                work_location=location_text,
+                source_sheet=grid.title,
                 day=day,
                 personal_leave_days=_to_days(_number(_val(row_index, personal_col))),
                 sick_leave_days=_to_days(_number(_val(row_index, sick_col))),
@@ -1411,6 +1515,9 @@ def _read_summary_attendance_sheet(
                 name=name,
                 company=company,
                 department=department,
+                source_company=company_text,
+                work_location=_cell_text(_header_value_any(grid, row_index, headers, ("工作地", "驻地", "工作地点", "办公地点", "工作城市"))),
+                source_sheet=grid.title,
                 day=default_date,
                 is_summary_row=True,
                 personal_leave_days=_to_days(_number(_first_not_none(row_index, personal_cols))),
@@ -1649,6 +1756,7 @@ def _summarize_attendance(
         summary = summaries.setdefault(key, AttendancePersonSummary(company=row.company, department=row.department, name=row.name))
         summary.hours_per_day = row.hours_per_day
         summary.overtime_valid_months = row.overtime_valid_months
+        summary.work_location = row.work_location
         summary.personal_leave_days += row.personal_leave_days
         summary.sick_leave_days += row.sick_leave_days
         summary.paid_leave_days += row.paid_leave_days
@@ -2302,7 +2410,7 @@ def _write_output_workbook(
         if attendance_summaries:
             workbook.custom_doc_props.append(StringProperty(name=_ATTENDANCE_RULES_PROPERTY, value=json.dumps([
                 {"person": [item.company, item.department, item.name], "valid_months": item.overtime_valid_months,
-                 "hours_per_day": item.hours_per_day} for item in attendance_summaries
+                 "hours_per_day": item.hours_per_day, "location": item.work_location} for item in attendance_summaries
             ], ensure_ascii=False)))
         _check_cancelled(cancelled)
         workbook.save(output_file)

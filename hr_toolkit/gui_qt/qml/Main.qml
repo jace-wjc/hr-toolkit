@@ -1914,6 +1914,7 @@ ApplicationWindow {
             id: overtimeRules
             spacing: 6
             property var rules: JSON.parse(JSON.stringify(field.rulesValue || []))
+            readonly property bool automatic: field.autoValue !== false
 
             function saveRules() {
                 controller.setFieldValue("overtime_rule_overrides", JSON.stringify(rules))
@@ -1940,6 +1941,32 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 spacing: 10
                 Text { Layout.preferredWidth: 145; text: Ui.text("加班/调休规则"); color: root.textMain; font.pixelSize: 13 }
+                AppComboBox {
+                    Layout.fillWidth: true
+                    model: ["按公司和驻地自动匹配", "统一设置，可添加人员例外"]
+                    currentIndex: overtimeRules.automatic ? 0 : 1
+                    enabled: controller.selectionEnabled
+                    onActivated: controller.setFieldValue("attendance_auto_rules", index === 0)
+                }
+            }
+            RowLayout {
+                visible: overtimeRules.automatic
+                Layout.fillWidth: true
+                AppButton { text: "查看本次分配"; variant: "link"; enabled: controller.selectionEnabled; onClicked: controller.reviewAttendanceRules() }
+                AppButton { text: "管理识别规则"; variant: "link"; enabled: controller.selectionEnabled; onClicked: attendanceRulesDialog.showSettings(controller.attendanceRuleSettings()) }
+                Item { Layout.fillWidth: true }
+            }
+            Text {
+                visible: overtimeRules.automatic
+                Layout.fillWidth: true
+                text: Ui.text("可同时上传多家公司的资料，按各自规则计算。无法识别时，可按文件批量指定公司和驻地，并记住选择；个别人员可单独调整。")
+                color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap
+            }
+            RowLayout {
+                visible: !overtimeRules.automatic
+                Layout.fillWidth: true
+                spacing: 10
+                Item { Layout.preferredWidth: 145 }
                 Text { text: Ui.text("有效期"); color: root.textMain; font.pixelSize: 12 }
                 AppComboBox {
                     id: defaultExpiry
@@ -1959,12 +1986,13 @@ ApplicationWindow {
                 }
             }
             Text {
+                visible: !overtimeRules.automatic
                 Layout.fillWidth: true
                 text: Ui.text("默认南昌：3 个月、7 小时/天。有效期截至月底，未到期可跨年；深圳选 8 小时/天。几维驻南昌仍按南昌规则，其他人员可单独设置。有效期用于历史余额结转。")
                 color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap
             }
             Repeater {
-                model: overtimeRules.rules
+                model: overtimeRules.automatic ? [] : overtimeRules.rules
                 delegate: ColumnLayout {
                     id: overtimeRuleRow
                     readonly property int ruleIndex: index
@@ -2002,7 +2030,7 @@ ApplicationWindow {
                     }
                 }
             }
-            AppButton { text: "添加人员例外"; variant: "link"; enabled: controller.selectionEnabled; onClicked: overtimeRules.addRule() }
+            AppButton { visible: !overtimeRules.automatic; text: "添加人员例外"; variant: "link"; enabled: controller.selectionEnabled; onClicked: overtimeRules.addRule() }
             Text {
                 Layout.fillWidth: true
                 property var feedback: controller.selectionFeedback.overtime_rules || ({})
@@ -3090,6 +3118,7 @@ ApplicationWindow {
     NameRulesDialog { id: nameRulesDialog; backend: controller; anchors.centerIn: parent }
     RegionCodeDialog { id: regionCodeDialog; backend: controller; anchors.centerIn: parent }
     TemplateChoiceDialog { id: templateChoiceDialog; backend: controller }
+    AttendanceRulesDialog { id: attendanceRulesDialog; backend: controller; parent: Overlay.overlay }
     RenameReviewDialog { backend: controller.renameReview }
 
     Connections {
@@ -3098,7 +3127,11 @@ ApplicationWindow {
         function onSalaryMappingClosed() { templateChoiceDialog.dismissSalary() }
         function onTemplateRulesRequested() { templateChoiceDialog.showRules(controller.templateRuleSections) }
         function onNameConfirmationRequested() { nameRulesDialog.showConfirmation() }
-        function onTemplateSelectionRequested() { templateChoiceDialog.showData(controller.templateSelectionData) }
+        function onTemplateSelectionRequested() {
+            var data = controller.templateSelectionData
+            if (data.kind === "attendance_rules") attendanceRulesDialog.showData(data)
+            else templateChoiceDialog.showData(data)
+        }
         function onNotificationRequested(title, message, level) { notificationDialog.showMessage(title, message, level) }
         function onUpdatePromptRequested(prompt) { updatePromptDialog.showPrompt(prompt) }
         function onReleaseNotesRequested(details) { releaseNotesDialog.showNotes(details) }

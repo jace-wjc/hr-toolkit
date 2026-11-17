@@ -285,6 +285,11 @@ class AppController(QObject):
         self._salary_header_profiles: dict[str, dict[str, Any]] = {}
         self._header_name_rules: dict[str, dict[str, Any]] = {}
         self._company_aliases = ""
+        from hr_toolkit.attendance_rules import clean_config
+        self._attendance_rules_config = clean_config()
+        self._attendance_rules_session = None
+        self._attendance_rules_session_inputs = ""
+        self._attendance_review_requested = False
         self._name_rules: list[dict[str, str]] = []
         self._name_pending: list[dict[str, Any]] = []
         self._name_reviewed: list[dict[str, str]] = []
@@ -616,6 +621,7 @@ class AppController(QObject):
                 field["monthValue"] = values.get("overtime_valid_months", 3)
                 field["hourValue"] = values.get("overtime_hours_per_day", 7)
                 field["rulesValue"] = values.get("overtime_rule_overrides", [])
+                field["autoValue"] = bool(values.get("attendance_auto_rules", True))
             else:
                 field["value"] = values.get(field["id"], field.get("default", ""))
             field["visible"] = self._field_visible(field["id"], values)
@@ -1070,6 +1076,8 @@ class AppController(QObject):
             self._selection_message("history_options", "")
         elif field_id in {"overtime_valid_months", "overtime_hours_per_day", "overtime_rule_overrides"}:
             self._selection_message("overtime_rules", "")
+        elif field_id == "attendance_auto_rules":
+            self._bump_form_revision()
 
     @Slot(str, str)
     def normalizeDateField(self, field_id: str, text: str) -> None:
@@ -2220,6 +2228,11 @@ class AppController(QObject):
         )
         salary_profiles = state.get("salary_header_profiles")
         header_rules = state.get("header_name_rules")
+        try:
+            from hr_toolkit.attendance_rules import clean_config
+            self._attendance_rules_config = clean_config(state.get("attendance_company_location_rules"))
+        except ValueError as exc:
+            self._append_log("考勤公司/驻地规则未加载：" + str(exc), "warning")
         from hr_toolkit.tools.personnel_reconcile import clean_name_rules, parse_company_aliases
         try:
             aliases = str(state.get("reconcile_company_aliases") or "")
@@ -2306,6 +2319,7 @@ class AppController(QObject):
                 "salary_header_profiles": self._salary_header_profiles,
                 "header_name_rules": self._header_name_rules,
                 "reconcile_company_aliases": self._company_aliases,
+                "attendance_company_location_rules": self._attendance_rules_config,
                 "reconcile_name_rules": self._name_rules,
                 "release_notes_seen_version": self._release_notes_seen_version,
                 "theme": self._presentation.theme,
@@ -3899,7 +3913,7 @@ class AppController(QObject):
             self.updateChanged.emit()
 
     @Slot()
-    def runOrCancel(self) -> None:
+    def runOrCancel(self, *, attendance_review: bool = False) -> None:
         if self._busy:
             if self._stop_requested:
                 return
@@ -3931,6 +3945,7 @@ class AppController(QObject):
             return
         if not self._template_continuing:
             self._reset_template_session()
+            self._attendance_review_requested = attendance_review
         if not self._name_continuing and not self._template_continuing:
             self._name_reviewed = []
             self._name_pending = []
@@ -4093,6 +4108,88 @@ class AppController(QObject):
     def _reset_template_session(self):
         self._template_session_rules = None
         self._template_session_snapshot = ""
+        self._attendance_rules_session = None
+        self._attendance_rules_session_inputs = ""
+
+    @Slot(result="QVariantMap")
+    def attendanceRuleSettings(self):
+        return json.loads(json.dumps(self._attendance_rules_config, ensure_ascii=False))
+
+    @Slot()
+    def reviewAttendanceRules(self):
+        if self._spec.tool_id != "data_statistics" or not self.selectionEnabled:
+            return
+        self._form_states[self._state_key()]["attendance_auto_rules"] = True
+        self._bump_form_revision()
+        self.runOrCancel(attendance_review=True)
+
+    @Slot()
+    def cancelAttendanceRuleReview(self):
+        self._attendance_review_requested = False
+        if self._template_issue.get("kind") == "attendance_rules":
+            self._template_issue = {}
+
+    @Slot(str, str, str, result="QVariantMap")
+    def suggestAttendanceRule(self, company: str, location: str, config_text: str):
+        from hr_toolkit.attendance_rules import clean_config, match_rule
+        try:
+            months, hours = match_rule(clean_config(json.loads(config_text)), company, location)
+            return {"valid_months": months, "hours_per_day": hours}
+        except (ValueError, TypeError):
+            return {"valid_months": 0, "hours_per_day": 0}
+
+    @Slot(str, result="QVariantMap")
+    def previewAttendanceRules(self, text: str):
+        from hr_toolkit.attendance_rules import assign_records, clean_config, resolve_records
+        try:
+            payload = json.loads(text)
+            config = clean_config(payload.get("config"))
+            records = []
+            if payload.get("pending"):
+                self._check_attendance_rule_context()
+                records = self._template_issue["records"]
+                config = assign_records(config, records, payload.get("selections", {}))
+            return {"config": config, "rows": resolve_records(records, config), "error": ""}
+        except (ValueError, TypeError, KeyError) as exc:
+            return {"error": str(exc)}
+
+    def _check_attendance_rule_context(self):
+        if (self._busy or self._spec.tool_id != "data_statistics"
+                or self._template_issue.get("kind") != "attendance_rules"
+                or self._template_issue_project != str(self._project_path)
+                or self._template_input_snapshot != self._template_current_inputs()):
+            raise ValueError("资料、项目或处理状态已变化，请返回主界面重新查看分配。")
+
+    @Slot(str, result=str)
+    def saveAttendanceRules(self, text: str) -> str:
+        from hr_toolkit.attendance_rules import clean_config, resolve_records
+        try:
+            if not self.selectionEnabled:
+                raise ValueError("请等待当前处理结束后再保存。")
+            payload = json.loads(text)
+            config = clean_config(payload.get("config"))
+            pending = bool(payload.get("pending"))
+            if pending:
+                self._check_attendance_rule_context()
+                rows = resolve_records(self._template_issue["records"], config)
+                if any(row["problem"] for row in rows):
+                    raise ValueError("还有人员的公司、驻地或规则未确认，请先处理标记的项目。")
+            if not pending or payload.get("remember", True):
+                previous = self._attendance_rules_config
+                self._attendance_rules_config = config
+                if not self._save_workspace_preferences():
+                    self._attendance_rules_config = previous
+                    raise ValueError("考勤识别规则未能保存，请重试。")
+            self._attendance_rules_session = config if pending else None
+            self._attendance_rules_session_inputs = self._template_current_inputs() if pending else ""
+            if pending:
+                self._attendance_review_requested = False
+                self._template_issue = {}
+                self._append_log("已确认公司、驻地及加班规则，继续处理。", "info")
+                QTimer.singleShot(0, self._continue_template_run)
+            return ""
+        except (ValueError, TypeError, KeyError) as exc:
+            return str(exc)
 
     @Slot(str, result=bool)
     def deleteTemplateProfile(self, key):
@@ -4680,6 +4777,13 @@ class AppController(QObject):
         store = self._project_store
         if store is None:
             return
+        if invocation.tool_id == "data_statistics" and invocation.kwargs.get("attendance_auto_rules"):
+            config = self._attendance_rules_config
+            if self._attendance_rules_session_inputs == self._template_current_inputs() and self._attendance_rules_session is not None:
+                config = self._attendance_rules_session
+            invocation = replace(invocation, kwargs={**invocation.kwargs,
+                "attendance_rules_config": json.loads(json.dumps(config, ensure_ascii=False)),
+                "attendance_review_rules": self._attendance_review_requested})
         if invocation.tool_id == "personnel_reconcile":
             self._name_input_snapshot = self._template_current_inputs()
             invocation = replace(invocation, kwargs={**invocation.kwargs,
@@ -4800,6 +4904,7 @@ class AppController(QObject):
 
     @Slot(object, str, float, bool)
     def _apply_run_success(self, payload, result_dir: str, elapsed: float, isolated: bool) -> None:
+        self._attendance_review_requested = False
         self._reset_template_session()
         self._drain_run_progress()
         self._flush_material_progress()
@@ -4823,6 +4928,9 @@ class AppController(QObject):
         self._notify_last_result_changed(force=True)
         mode_text = "独立进程" if isolated else "后台线程"
         self._append_log(f"处理完成，用时 {elapsed:.1f} 秒（{mode_text}）。", "success")
+        if isinstance(payload, dict):
+            for assignment in payload.get("attendance_rule_summary", []):
+                self._append_log("考勤规则：" + str(assignment), "info")
         completion_message = "结果已安全保存到当前项目。"
         if isinstance(payload, dict) and payload.get("rename_ledger"):
             completion_message = (f"已改名 {payload['operation_count']} 项，排除 {payload['excluded_count']} 项，"
@@ -4875,7 +4983,8 @@ class AppController(QObject):
                 issue, _ = json.JSONDecoder().raw_decode(message.split(ERROR_PREFIX, 1)[1])
                 if issue.get("tool") == self._spec.tool_id:
                     self._template_issue = issue
-                    self._append_log("需要确认模板对应关系：" + issue.get("message", ""), "warning")
+                    label = "需要确认考勤规则：" if issue.get("kind") == "attendance_rules" else "需要确认模板对应关系："
+                    self._append_log(label + issue.get("message", ""), "warning")
                     self._flush_logs()
                     self.templateSelectionRequested.emit()
                     self.refreshWorkspace()
@@ -4883,6 +4992,7 @@ class AppController(QObject):
             except (ValueError, TypeError, AttributeError):
                 pass
         self._append_log(f"处理失败：{message}", "error")
+        self._attendance_review_requested = False
         self._reset_template_session()
         self._flush_logs()
         self.notificationRequested.emit("处理失败", message, "error")
@@ -4890,6 +5000,7 @@ class AppController(QObject):
 
     @Slot()
     def _apply_run_stopped(self) -> None:
+        self._attendance_review_requested = False
         self._reset_template_session()
         self._drain_run_progress()
         self._flush_material_progress()

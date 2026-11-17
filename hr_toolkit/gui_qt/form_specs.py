@@ -352,7 +352,7 @@ def default_values(spec: ToolUiSpec) -> dict[str, Any]:
             values.update(history_period="", history_rest_mode="", history_deducted_people="")
             continue
         if field.get("kind") == "overtime_rules":
-            values.update(overtime_valid_months=3, overtime_hours_per_day=7, overtime_rule_overrides=[])
+            values.update(overtime_valid_months=3, overtime_hours_per_day=7, overtime_rule_overrides=[], attendance_auto_rules=True)
             continue
         if field.get("kind") == "date_range":
             values[str(field["startId"])] = field.get("startDefault", "")
@@ -494,13 +494,14 @@ def build_invocation(
         from hr_toolkit.tools.data_statistics import AttendanceOvertimeRules
         months = values.get("overtime_valid_months", 3)
         hours = values.get("overtime_hours_per_day", 7)
-        overrides = values.get("overtime_rule_overrides", [])
+        auto_rules = bool(values.get("attendance_auto_rules", True))
+        overrides = [] if auto_rules else values.get("overtime_rule_overrides", [])
         try:
             rules = AttendanceOvertimeRules(months, hours, overrides)
         except ValueError as exc:
             raise FormValidationError("加班调休规则有误", str(exc), "overtime_rules") from exc
         kwargs.update(overtime_valid_months=rules.default[0], overtime_hours_per_day=rules.default[1],
-                      overtime_rule_overrides=overrides)
+                      overtime_rule_overrides=overrides, attendance_auto_rules=auto_rules)
         history_text = str(values.get("existing_summary_path") or "").strip()
         if history_text:
             history_path = Path(history_text).expanduser()

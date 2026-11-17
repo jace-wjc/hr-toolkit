@@ -28,6 +28,51 @@ from hr_toolkit.tools.data_statistics import (
 
 
 class DataStatisticsTest(unittest.TestCase):
+    def test_auto_company_rules_keep_same_name_companies_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "9月日报.xlsx"
+            book = Workbook()
+            ws = book.active
+            ws.title = "日结果"
+            ws.append(["姓名", "公司", "驻地", "部门名称", "日期", "漏打卡次数", "应出勤小时数", "调休", "加班计调休时长"])
+            ws.append(["张三", "几维", "南昌", "运营部", datetime(2026, 9, 1), 0, 7, 3.5, 7])
+            ws.append(["张三", "唐人", "深圳", "运营部", datetime(2026, 9, 1), 0, 8, 4, 8])
+            book.save(source)
+            book.close()
+            before = source.read_bytes()
+            result = generate_data_statistics_reports(source, root / "out", attendance_auto_rules=True)
+            book = load_workbook(result.output_file)
+            try:
+                ws = book["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                values = {ws.cell(row, columns["公司"]).value:
+                          (ws.cell(row, columns["调休（天）"]).value, ws.cell(row, columns["9月份加班天数"]).value)
+                          for row in range(3, ws.max_row + 1) if ws.cell(row, columns["姓名"]).value == "张三"}
+                self.assertEqual(values, {"几维": (0.5, 1), "唐人": (0.5, 1)})
+                self.assertEqual(len(result.attendance_rule_summary), 2)
+            finally:
+                book.close()
+            self.assertEqual(source.read_bytes(), before)
+
+    def test_auto_company_confirmation_precedes_output_and_can_be_remembered(self) -> None:
+        from hr_toolkit.attendance_rules import assign_records, record_id
+        from hr_toolkit.common.template_mapping import TemplateSelectionRequired
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "9月日报.xlsx"
+            _write_attendance_file(source, month=9)
+            with self.assertRaises(TemplateSelectionRequired) as caught:
+                generate_data_statistics_reports(source, root / "out", attendance_auto_rules=True)
+            self.assertFalse((root / "out").exists())
+            issue = caught.exception.payload
+            self.assertEqual(issue["kind"], "attendance_rules")
+            config = assign_records(issue["config"], issue["records"], {
+                record_id(row): {"company": "总部", "location": "南昌"} for row in issue["records"]})
+            result = generate_data_statistics_reports(source, root / "out", attendance_auto_rules=True,
+                                                      attendance_rules_config=config)
+            self.assertTrue(result.output_file.exists())
+
     def test_hr_september_example_accepts_named_history_sheet_and_keeps_current_rest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
