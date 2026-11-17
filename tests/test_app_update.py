@@ -371,6 +371,35 @@ class AppUpdateTests(unittest.TestCase):
                 (root / "ready.json").write_text(json.dumps(record))
                 self.assertIsNone(app_update.load_ready_update("1.0.0"))
 
+    def test_win7_cache_requires_the_manifest_selected_platform(self) -> None:
+        from hr_toolkit import app_update
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = b"test installer"
+            package = root / "package-test" / "win7.exe"
+            package.parent.mkdir()
+            package.write_bytes(data)
+            update = parse_update_manifest(
+                {"version": "2.0.0", "platforms": {"windows-x64-win7": {
+                    "file_url": "win7.exe", "sha256": sha256_file(package),
+                }}},
+                "https://example.test/latest.json", "windows-x64-win7",
+            )
+            record_path = root / "ready.json"
+            record = {"platform": "windows-x64-win7", "package": str(package.relative_to(root)),
+                      "update": dict(vars(update))}
+            with patch.object(app_update, "update_cache_dir", return_value=root), patch.object(
+                app_update, "platform_key", return_value="windows-x64-win7",
+            ):
+                record_path.write_text(json.dumps(record), encoding="utf-8")
+                restored = app_update.load_ready_update("1.0.0")
+                self.assertIsNotNone(restored)
+                self.assertEqual(restored[1], package)
+                del record["update"]["platform"]
+                record_path.write_text(json.dumps(record), encoding="utf-8")
+                self.assertIsNone(app_update.load_ready_update("1.0.0"))
+
     def test_macos_without_platform_entry_has_no_update(self) -> None:
         manifest = {"version": "9.0.0", "platforms": {"windows": {"version": "9.0.0"}}}
         with patch("hr_toolkit.app_update.load_update_manifest", return_value=(manifest, "https://gitee.com/latest.json")):
@@ -534,6 +563,23 @@ class AppUpdateTests(unittest.TestCase):
                 "https://example.test/latest.json",
                 "windows-x64-win7",
             )
+
+    def test_win7_update_requires_an_explicit_asset_and_its_own_hash(self) -> None:
+        root = {"version": "0.6.0", "file_url": "modern.exe", "sha256": "a" * 64}
+        url = "https://example.test/latest.json"
+        for manifest in (
+            root,
+            {**root, "platforms": {"windows-x64-win7": {"sha256": "b" * 64}}},
+            {**root, "platforms": {"windows-x64-win7": {"file_url": "win7.exe"}}},
+        ):
+            with self.subTest(manifest=manifest), self.assertRaisesRegex(UpdateError, "windows-x64-win7"):
+                parse_update_manifest(manifest, url, "windows-x64-win7")
+
+        self.assertEqual(parse_update_manifest(root, url, "windows").file_url, "https://example.test/modern.exe")
+        manifest = {**root, "platforms": {"windows-win7": {"url": "win7.exe", "sha256": "b" * 64}}}
+        win7 = parse_update_manifest(manifest, url, "windows-x64-win7")
+        self.assertEqual(win7.file_url, "https://example.test/win7.exe")
+        self.assertEqual(win7.sha256, "b" * 64)
 
     def test_runtime_downloads_keep_only_gitee_from_release_metadata(self) -> None:
         update = parse_update_manifest(
@@ -712,6 +758,21 @@ class AppUpdateTests(unittest.TestCase):
         with patch("hr_toolkit.app_update._fetch_json_object", side_effect=[release, manifest]):
             with self.assertRaisesRegex(UpdateError, "没有 windows-x64-win7 平台"):
                 check_for_update("0.7.8", GITEE_LATEST_RELEASE_API_URL, "windows-x64-win7")
+
+    def test_gitee_rejects_a_modern_asset_under_the_win7_entry(self) -> None:
+        for explicit in (False, True):
+            manifest, release = self._gitee_uploaded_release()
+            modern = manifest["platforms"]["windows-x64-modern"]
+            manifest["file_url"] = modern["file_url"]
+            win7 = manifest["platforms"]["windows-x64-win7"]
+            win7.pop("file_url")
+            if explicit:
+                win7["file_url"] = modern["file_url"]
+            with self.subTest(explicit=explicit), patch(
+                "hr_toolkit.app_update._fetch_json_object", side_effect=[release, manifest],
+            ):
+                with self.assertRaisesRegex(UpdateError, "没有 windows-x64-win7 平台"):
+                    check_for_update("0.7.8", GITEE_LATEST_RELEASE_API_URL, "windows-x64-win7")
 
     def test_gitee_rejects_wrong_release_or_foreign_attachment(self) -> None:
         for mutation in ("tag", "foreign", "other-version"):

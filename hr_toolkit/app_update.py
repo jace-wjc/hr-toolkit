@@ -33,6 +33,9 @@ DEFAULT_UPDATE_MANIFEST_URLS = (
 )
 # 保留单地址常量，兼容已有调用；默认值现在是国内 Gitee 源。
 DEFAULT_UPDATE_MANIFEST_URL = DEFAULT_UPDATE_MANIFEST_URLS[0]
+_WIN7_UPDATE_PLATFORM = "windows-x64-win7"
+_WIN7_UPDATE_ALIASES = (_WIN7_UPDATE_PLATFORM, "windows-win7")
+_WIN7_SETUP_SUFFIX = "win7_x64-setup.exe"
 UPDATE_URL_ENV = "HR_TOOLKIT_UPDATE_URL"
 SKIP_UPDATE_ENV = "HR_TOOLKIT_SKIP_UPDATE"
 FORCE_UPDATE_ENV = "HR_TOOLKIT_FORCE_UPDATE_CHECK"
@@ -125,6 +128,7 @@ class UpdateInfo:
     manifest_url: str
     update_mode: str = "auto"
     fallback_urls: tuple[str, ...] = ()
+    platform: str = ""
 
     @property
     def download_urls(self) -> tuple[str, ...]:
@@ -315,12 +319,13 @@ def _bind_gitee_release_assets(
         ):
             available[name] = url
 
-    def resolve(payload: dict[str, Any]) -> dict[str, Any] | None:
-        original_url = str(
-            payload.get("file_url") or payload.get("url")
-            or manifest.get("file_url") or manifest.get("url") or ""
-        )
-        filename = urllib.parse.unquote(urllib.parse.urlparse(original_url).path.rsplit("/", 1)[-1])
+    def resolve(payload: dict[str, Any], key: str = "") -> dict[str, Any] | None:
+        original_url = payload.get("file_url") or payload.get("url")
+        if key not in _WIN7_UPDATE_ALIASES and not original_url:
+            original_url = manifest.get("file_url") or manifest.get("url")
+        filename = urllib.parse.unquote(urllib.parse.urlparse(str(original_url or "")).path.rsplit("/", 1)[-1])
+        if key in _WIN7_UPDATE_ALIASES and filename != f"HRToolkit_{tag[1:]}_{_WIN7_SETUP_SUFFIX}":
+            return None
         url = available.get(filename)
         if not url:
             return None
@@ -338,7 +343,7 @@ def _bind_gitee_release_assets(
         platforms = {}
         for key, payload in manifest["platforms"].items():
             if isinstance(payload, dict):
-                resolved = resolve(payload)
+                resolved = resolve(payload, key)
                 if resolved is not None:
                     platforms[key] = resolved
         result["platforms"] = platforms
@@ -354,7 +359,7 @@ def _bind_gitee_release_assets(
 @diagnostics.operation("copy_link")
 def latest_installer_download(platform: str) -> tuple[str, str]:
     """Find a published installer afresh, independently of the installed version."""
-    suffixes = {"win7": "win7_x64-setup.exe", "windows": "x64-setup.exe"}
+    suffixes = {"win7": _WIN7_SETUP_SUFFIX, "windows": "x64-setup.exe"}
     if platform not in suffixes:
         raise UpdateError("请选择 Windows 7 或 Windows 10 / 11。")
     diagnostics.event("configuration", source="default_release_api", count=1)
@@ -549,6 +554,8 @@ def _try_windows_release_request(url, headers, timeout):
 
 
 def parse_update_manifest(manifest: dict[str, Any], manifest_url: str, platform: str) -> UpdateInfo:
+    if platform in _WIN7_UPDATE_ALIASES:
+        platform = _WIN7_UPDATE_PLATFORM
     platform_payload = _platform_payload(manifest, platform)
     version = _manifest_version_from_payload(platform_payload, manifest)
     file_url = str(
@@ -595,6 +602,7 @@ def parse_update_manifest(manifest: dict[str, Any], manifest_url: str, platform:
         manifest_url=manifest_url,
         update_mode=update_mode,
         fallback_urls=tuple(url for url in fallback_urls if url != file_url),
+        platform=platform,
     )
 
 
@@ -745,9 +753,13 @@ def _load_ready_update(current_version: str, root: Path) -> tuple[UpdateInfo, Pa
         if record.is_symlink() or record.stat().st_size > UPDATE_MANIFEST_MAX_BYTES:
             raise ValueError("invalid update record")
         data = json.loads(record.read_text(encoding="utf-8"))
-        if data["platform"] != platform_key():
+        platform = platform_key()
+        if data["platform"] != platform:
             return None
         info = UpdateInfo(**data["update"])
+        if platform == _WIN7_UPDATE_PLATFORM and info.platform != platform:
+            # Older cache entries only stamped the host, not the selected lane.
+            return None
         if not is_newer_version(info.version, current_version):
             record.unlink(missing_ok=True)
             return None
@@ -770,6 +782,9 @@ def _load_ready_update(current_version: str, root: Path) -> tuple[UpdateInfo, Pa
 
 
 def download_cached_update(update: UpdateInfo, current_version: str, **kwargs) -> Path:
+    platform = platform_key()
+    if platform == _WIN7_UPDATE_PLATFORM and update.platform != platform:
+        raise UpdateError("Win7 更新缺少已核对的专用安装包，请重新检查更新。")
     root = update_cache_dir()
     root.mkdir(parents=True, exist_ok=True)
     with _update_cache_lock(root) as acquired:
@@ -781,7 +796,7 @@ def download_cached_update(update: UpdateInfo, current_version: str, **kwargs) -
         _cleanup_update_cache(root, max_age_days=3)
         destination = Path(tempfile.mkdtemp(prefix="package-", dir=str(root)))
         package = download_update_package(update, dest_dir=destination, **kwargs)
-        record = {"platform": platform_key(), "package": str(package.relative_to(root)), "update": asdict(update)}
+        record = {"platform": platform, "package": str(package.relative_to(root)), "update": asdict(update)}
         # Only verified packages become restart-ready; retain existing ready data
         # if a new download or metadata write fails.
         temporary = destination / "ready.json.tmp"
@@ -1147,13 +1162,16 @@ def _windows_platform_key() -> str:
     # Python 3.12 requires Windows 8.1 or newer. Keep Windows 7 SP1 and
     # Windows 8/Server 2012 on the frozen Python 3.8 compatibility lane.
     if (6, 1) <= major_minor < (6, 3):
-        return "windows-x64-win7"
+        return _WIN7_UPDATE_PLATFORM
     return "windows-x64-modern"
 
 
 def _platform_payload(manifest: dict[str, Any], platform: str) -> dict[str, Any]:
     platforms = manifest.get("platforms")
+    win7 = platform in _WIN7_UPDATE_ALIASES
     if not isinstance(platforms, dict):
+        if win7:
+            raise _PlatformUnavailableError(f"更新配置中没有 {platform} 平台的安装包。")
         return manifest
     if platform == "macos":
         machine = platform_module.machine().strip().lower()
@@ -1164,10 +1182,10 @@ def _platform_payload(manifest: dict[str, Any], platform: str) -> dict[str, Any]
         else:
             architecture_aliases = ()
         aliases = architecture_aliases + ("macos", "darwin", "mac")
-    elif platform == "windows-x64-win7":
+    elif win7:
         # Win7 兼容包绝不能退回通用 windows 项，否则会重新下载 Python 3.12
         # 现代包并在下次启动时触发 KERNEL32.dll 入口点错误。
-        aliases = ("windows-x64-win7", "windows-win7")
+        aliases = _WIN7_UPDATE_ALIASES
     elif platform == "windows-x64-modern":
         aliases = ("windows-x64-modern", "windows", "win", "win32")
     else:
@@ -1180,6 +1198,13 @@ def _platform_payload(manifest: dict[str, Any], platform: str) -> dict[str, Any]
         if isinstance(payload, dict):
             merged = dict(manifest)
             merged.pop("platforms", None)
+            if win7:
+                if not str(payload.get("file_url") or payload.get("url") or "").strip():
+                    continue
+                if not str(payload.get("sha256") or "").strip():
+                    continue
+                for field in ("file_url", "url", "sha256", "fallback_urls", "fallback_url"):
+                    merged.pop(field, None)
             merged.update(payload)
             return merged
     raise _PlatformUnavailableError(f"更新配置中没有 {platform} 平台的安装包。")
