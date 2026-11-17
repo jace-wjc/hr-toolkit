@@ -103,6 +103,7 @@ ROUTES = {
     "hr_toolkit/gui_qt/image_input.py": "ai_assistant qt_controller qt_entrypoint",
     "hr_toolkit/ai/__init__.py": "ai_assistant qt_controller qt_entrypoint",
     "hr_toolkit/ai/config.py": "ai_assistant qt_controller qt_entrypoint",
+    "hr_toolkit/ai/key_storage.py": "ai_assistant qt_controller qt_entrypoint",
     "hr_toolkit/ai/client.py": "ai_assistant qt_controller qt_entrypoint",
     "hr_toolkit/ai/excel_context.py": "ai_assistant qt_controller qt_entrypoint",
     "hr_toolkit/ai/assistant.py": "ai_assistant qt_controller qt_entrypoint",

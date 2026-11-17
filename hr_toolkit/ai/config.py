@@ -1,9 +1,8 @@
 """AI assistant settings: provider presets, API keys and persistence.
 
-Keys are stored only in the per-user settings file next to ``workspace-ui.json``
-and are never written to run logs or crash reports. All persistence helpers are
-side-effect free apart from the explicit save call so they can be unit tested
-without touching the real user profile.
+Windows keys use per-user DPAPI in the settings file next to workspace-ui.json.
+Loading legacy Windows settings atomically migrates plaintext keys. Other source
+platforms keep the existing owner-only file policy. Tests use explicit paths.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from hr_toolkit.common.paths import user_app_data_dir
+from . import key_storage
 
 SETTINGS_FILENAME = "ai-assistant.json"
 DEFAULT_PROVIDER = "minimax"
@@ -215,6 +215,8 @@ class ProviderConfig:
     # 用户自己在模型菜单里增删的那份列表。为空表示「还没动过」，
     # 此时菜单显示预置候选；一旦增删过就以这份列表为准（见 model_choices）。
     models: List[str] = field(default_factory=list)
+    protected_api_key: str = field(default="", repr=False)
+    key_storage_error: str = ""
 
     def resolved_endpoint(self, preset: ProviderPreset) -> str:
         return normalize_chat_endpoint(preset.provider_id, self.endpoint or preset.endpoint)
@@ -282,6 +284,7 @@ class AiSettings:
     active_provider: str = DEFAULT_PROVIDER
     temperature: float = DEFAULT_TEMPERATURE
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
+    storage_error: str = ""
 
     def preset(self, provider_id: Optional[str] = None) -> ProviderPreset:
         key = provider_id or self.active_provider
@@ -315,6 +318,8 @@ class AiSettings:
             config = self.provider_config()
         except AiConfigError as exc:
             return [str(exc)]
+        if self.storage_error or config.key_storage_error:
+            issues.append(self.storage_error or config.key_storage_error)
         if not normalize_api_key(config.api_key):
             issues.append(
                 f"尚未配置 {self.preset().label} 的 API Key，请先在设置中填写。"
@@ -411,6 +416,11 @@ def load_ai_settings(path: Optional[Path] = None) -> AiSettings:
         return AiSettings()
 
     settings = AiSettings()
+    if key_storage.uses_dpapi():
+        try:
+            _migrate_plaintext_keys(raw, target)
+        except (OSError, ValueError):
+            settings.storage_error = "旧 API Key 安全迁移失败，原配置已保留，请重新保存设置。"
     active = str(raw.get("activeProvider") or DEFAULT_PROVIDER).strip()
     if active in PROVIDER_PRESETS:
         settings.active_provider = active
@@ -428,7 +438,15 @@ def load_ai_settings(path: Optional[Path] = None) -> AiSettings:
                 continue
             config = ProviderConfig()
             try:
-                config.api_key = normalize_api_key(entry.get("apiKey"))
+                protected = entry.get("apiKeyProtected")
+                if protected:
+                    config.protected_api_key = protected
+                    try:
+                        config.api_key = normalize_api_key(key_storage.unprotect_key(protected))
+                    except (OSError, ValueError):
+                        config.key_storage_error = "无法读取受保护的 API Key，请在原 Windows 账户使用或重新填写。"
+                else:
+                    config.api_key = normalize_api_key(entry.get("apiKey"))
                 model = str(entry.get("model") or "").strip()
                 if model:
                     config.model = validate_model(model)
@@ -477,17 +495,58 @@ def save_ai_settings(settings: AiSettings, path: Optional[Path] = None) -> Path:
     for provider_id, config in settings.providers.items():
         if provider_id not in PROVIDER_PRESETS:
             continue
-        providers_payload[provider_id] = {
-            "apiKey": config.api_key,
+        entry = {
             "model": config.model,
             "endpoint": config.endpoint,
             "models": list(config.models),
         }
+        key = normalize_api_key(config.api_key)
+        if key and key_storage.uses_dpapi():
+            entry["apiKeyProtected"] = key_storage.protect_key(key)
+        elif not key and config.protected_api_key and config.key_storage_error:
+            # A settings copy from another account must not lose its encrypted
+            # credentials when the user switches a model or provider.
+            entry["apiKeyProtected"] = config.protected_api_key
+        else:
+            entry["apiKey"] = key
+        providers_payload[provider_id] = entry
     payload = {
         "activeProvider": settings.active_provider,
         "temperature": settings.temperature,
         "providers": providers_payload,
     }
+    _write_settings_payload(payload, target)
+    settings.storage_error = ""
+    for config in settings.providers.values():
+        if config.api_key:
+            config.key_storage_error = ""
+    return target
+
+
+def _migrate_plaintext_keys(payload: Dict[str, Any], target: Path) -> None:
+    providers = payload.get("providers")
+    if not isinstance(providers, dict):
+        return
+    # Work on a copy: failed protection or replacement leaves both the original
+    # file and in-memory parsing input intact. Do not create plaintext backups.
+    from copy import deepcopy
+    migrated = deepcopy(payload)
+    changed = False
+    for entry in migrated["providers"].values():
+        if not isinstance(entry, dict) or not entry.get("apiKey"):
+            continue
+        key = normalize_api_key(entry["apiKey"])
+        if key and not entry.get("apiKeyProtected"):
+            entry["apiKeyProtected"] = key_storage.protect_key(key)
+        entry.pop("apiKey", None)
+        changed = True
+    if changed:
+        _write_settings_payload(migrated, target)
+        payload.clear()
+        payload.update(migrated)
+
+
+def _write_settings_payload(payload: Dict[str, Any], target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=str(target.parent), prefix=".ai-assistant-", delete=False
@@ -505,4 +564,3 @@ def save_ai_settings(settings: AiSettings, path: Optional[Path] = None) -> Path:
         except OSError:
             pass
         raise
-    return target

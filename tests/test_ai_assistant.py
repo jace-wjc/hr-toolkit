@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import urllib.error
 from datetime import datetime
 from pathlib import Path
@@ -103,6 +105,87 @@ class StatusPhraseTests(unittest.TestCase):
 
 
 class AiConfigTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows DPAPI native check")
+    def test_native_dpapi_roundtrip_and_tamper_rejection(self):
+        import base64
+        from hr_toolkit.ai.key_storage import protect_key, unprotect_key
+
+        protected = protect_key("synthetic-key-123")
+        self.assertEqual(unprotect_key(protected), "synthetic-key-123")
+        damaged = bytearray(base64.b64decode(protected))
+        damaged[-1] ^= 1
+        with self.assertRaises(OSError):
+            unprotect_key(base64.b64encode(damaged).decode("ascii"))
+
+    def test_windows_save_never_persists_plaintext_and_roundtrips(self):
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.ai.key_storage.uses_dpapi", return_value=True,
+        ), patch("hr_toolkit.ai.key_storage.protect_key", return_value="protected-blob"), patch(
+            "hr_toolkit.ai.key_storage.unprotect_key", return_value="secret-test-key",
+        ):
+            path = Path(temp) / "settings.json"
+            settings = AiSettings(providers={"minimax": ProviderConfig(api_key="secret-test-key")})
+            save_ai_settings(settings, path)
+            self.assertNotIn("secret-test-key", path.read_text())
+            self.assertEqual(load_ai_settings(path).provider_config().api_key, "secret-test-key")
+
+    def test_windows_legacy_key_migration_keeps_endpoint_and_unknown_fields(self):
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.ai.key_storage.uses_dpapi", return_value=True,
+        ), patch("hr_toolkit.ai.key_storage.protect_key", return_value="protected-blob"), patch(
+            "hr_toolkit.ai.key_storage.unprotect_key", return_value="legacy-test-key",
+        ):
+            path = Path(temp) / "settings.json"
+            path.write_text(json.dumps({"extra": 42, "providers": {"minimax": {
+                "apiKey": "legacy-test-key", "endpoint": "http://legacy.test/v1", "extra": "kept",
+            }}}))
+            loaded = load_ai_settings(path)
+            self.assertEqual(loaded.provider_config().endpoint, "http://legacy.test/v1")
+            raw = json.loads(path.read_text())
+            self.assertEqual(raw["extra"], 42)
+            self.assertEqual(raw["providers"]["minimax"]["extra"], "kept")
+            self.assertNotIn("apiKey", raw["providers"]["minimax"])
+            self.assertEqual(list(Path(temp).iterdir()), [path])
+
+    def test_failed_migration_preserves_original_file_without_backup(self):
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.ai.key_storage.uses_dpapi", return_value=True,
+        ), patch("hr_toolkit.ai.key_storage.protect_key", return_value="protected-blob"), patch(
+            "hr_toolkit.ai.config.os.replace", side_effect=OSError("read only"),
+        ):
+            path = Path(temp) / "settings.json"
+            original = json.dumps({"providers": {"minimax": {"apiKey": "legacy-test-key"}}})
+            path.write_text(original)
+            loaded = load_ai_settings(path)
+            self.assertEqual(path.read_text(), original)
+            self.assertIn("安全迁移失败", loaded.problems()[0])
+            self.assertEqual(list(Path(temp).iterdir()), [path])
+
+    def test_unreadable_protected_key_is_retained_without_switching_endpoint(self):
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.ai.key_storage.unprotect_key", side_effect=OSError("different account"),
+        ):
+            path = Path(temp) / "settings.json"
+            path.write_text(json.dumps({"providers": {"minimax": {
+                "apiKeyProtected": "locked-blob", "endpoint": "https://custom.test/v1",
+            }}}))
+            loaded = load_ai_settings(path)
+            self.assertFalse(loaded.is_ready())
+            self.assertIn("无法读取", loaded.problems()[0])
+            self.assertEqual(loaded.provider_config().endpoint, "https://custom.test/v1")
+            save_ai_settings(loaded, path)
+            self.assertEqual(json.loads(path.read_text())["providers"]["minimax"]["apiKeyProtected"], "locked-blob")
+
+    def test_dpapi_failure_does_not_fall_back_to_plaintext(self):
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "hr_toolkit.ai.key_storage.uses_dpapi", return_value=True,
+        ), patch("hr_toolkit.ai.key_storage.protect_key", side_effect=OSError("unavailable")):
+            path = Path(temp) / "settings.json"
+            settings = AiSettings(providers={"minimax": ProviderConfig(api_key="secret-test-key")})
+            with self.assertRaises(OSError):
+                save_ai_settings(settings, path)
+            self.assertFalse(path.exists())
+
     def test_roundtrip_persists_provider_overrides(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "ai-assistant.json"

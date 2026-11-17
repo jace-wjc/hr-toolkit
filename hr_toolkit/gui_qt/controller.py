@@ -5690,6 +5690,10 @@ class AppController(QObject):
             from hr_toolkit.ai.config import normalize_api_key, validate_endpoint, validate_model
 
             config.api_key = normalize_api_key(api_key)
+            # Explicit replacement/clear is distinct from preserving a locked
+            # DPAPI credential during unrelated model/provider changes.
+            config.protected_api_key = ""
+            config.key_storage_error = ""
             config.model = validate_model(str(model or "").strip() or preset.default_model)
             endpoint_text = str(endpoint or "").strip()
             config.endpoint = validate_endpoint(endpoint_text) if endpoint_text else ""
