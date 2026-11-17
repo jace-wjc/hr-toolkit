@@ -1311,10 +1311,15 @@ class ConversationHistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             store = self._store(temp)
             record = store.create("test")
-            record.messages = [{"role": "user", "content": "11010519491231002X",
-                                "attachments": [{"kind": "image", "path": "/cached.png"}]}]
+            record.messages = [
+                {"role": "user", "content": "11010519491231002X",
+                 "attachments": [{"kind": "image", "path": "/cached.png"}]},
+                # Missing attachment roles in the Qt model become None.
+                {"role": "assistant", "content": "分析结果", "attachments": None},
+            ]
             store.upsert(record)
             self.assertNotIn("11010519491231002X", store.path.read_text())
+            self.assertEqual(ConversationStore(store.path).latest().messages[1]["attachments"], [])
             with patch("hr_toolkit.ai.history.os.replace", side_effect=OSError("read only")):
                 with self.assertRaises(OSError):
                     store.remove(record.conversation_id)

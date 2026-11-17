@@ -243,7 +243,7 @@ class ConversationStore:
 
     def retained_image_paths(self):
         return self._disk_image_paths + [part.get("path", "") for record in self._items
-                for message in record.messages for part in message.get("attachments", [])
+                for message in record.messages for part in (message.get("attachments") or ())
                 if isinstance(part, dict) and part.get("kind") == "image"]
 
     @property
@@ -328,7 +328,7 @@ class ConversationStore:
         self.privacy_migration_pending = False
         self._disk_image_paths = [
             part.get("path", "") for record in self._items for message in record.messages
-            for part in message.get("attachments", [])
+            for part in (message.get("attachments") or ())
             if isinstance(part, dict) and part.get("kind") == "image"
         ]
         return self._path
