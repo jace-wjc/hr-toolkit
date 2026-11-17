@@ -132,6 +132,7 @@ def catalog(tool):
         reports = {name: (name,) for name in ("汇报编号", "汇报人", "汇报时间", "汇报人部门")}
         return {"attendance": _role("每日考勤", ("姓名", "日期", "漏打卡次数", "应出勤小时数"), fields),
                 "attendance_summary": _role("按人汇总的考勤", ("姓名",), summary),
+                "attendance_history": _role("历史考勤汇总", (), {}, ("考勤统计",)),
                 "weekly": _role("周报", ("汇报编号", "汇报时间", "汇报人"), reports),
                 "monthly": _role("月报", ("汇报编号", "汇报时间", "汇报人"), reports),
                 "staff": _role("应汇报人员名单", ("姓名",), {

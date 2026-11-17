@@ -28,6 +28,140 @@ from hr_toolkit.tools.data_statistics import (
 
 
 class DataStatisticsTest(unittest.TestCase):
+    def test_hr_september_example_accepts_named_history_sheet_and_keeps_current_rest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            history, source = root / "总部2026年8月考勤.xlsx", root / "9月日报.xlsx"
+            book = Workbook()
+            ws = book.active
+            ws.title = "总部"
+            ws.append(["8月份考勤异动"])
+            ws.append(["序号", "公司", "部门（片区）", "姓名", "事假（天）", "病假（天）", "带薪休假（天）", "调休（天）",
+                       "5月份加班天数", "6月份加班天数", "7月份加班天数", "8月份加班天数", "备注"])
+            ws.append([1, "总部", "xx部", "张三", 0, 0, 0, 2, 0, 2, 0, 1.5, "8月备注"])
+            ws.append([2, "总部", "xx部", "李四", 0, 0, 0, 2, 0, 4, 0, 1, "8月备注"])
+            book.save(history)
+            book.close()
+            _write_attendance_file(source, month=9)
+            book = load_workbook(source)
+            ws = book.active
+            ws.delete_rows(2, ws.max_row - 1)
+            for name, day, rest, overtime in (("张三", 9, 0, 3.5), ("张三", 12, 3.5, 0), ("李四", 17, 7, 0)):
+                row = [0] * 31
+                row[0:4] = [name, "xx部", "否", datetime(2026, 9, day)]
+                row[6:8] = [7, 7]
+                row[26:28] = [rest, overtime]
+                row[28:31] = ["", "", ""]
+                ws.append(row)
+            book.save(source)
+            book.close()
+            original = history.read_bytes()
+            result = generate_data_statistics_reports(source, root / "out", existing_summary_path=history, history_rest_mode="pending")
+            book = load_workbook(result.output_file)
+            try:
+                ws = book["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                self.assertNotIn("5月份加班天数", columns)
+                for row, expected in ((3, (0, 1.5, 0.5, 0.5)), (4, (2, 1, 0, 1))):
+                    actual = tuple(ws.cell(row, columns[header]).value or 0 for header in
+                                   ("6月份加班天数", "8月份加班天数", "9月份加班天数", "调休（天）"))
+                    self.assertEqual(actual, expected)
+                    self.assertNotIn("8月备注", ws.cell(row, columns["备注"]).value or "")
+                self.assertFalse(any("待核对" in warning for warning in result.warnings))
+            finally:
+                book.close()
+            self.assertEqual(history.read_bytes(), original)
+
+    def test_expiry_happens_after_settling_previous_month_rest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "九月.xlsx", root / "八月.xlsx"
+            _write_attendance_file(source, month=9)
+            _write_attendance_history(history, month=8, overtime={5: 2, 6: 1}, rest_days=1)
+            result = generate_data_statistics_reports(source, root / "out", existing_summary_path=history, history_rest_mode="pending")
+            book = load_workbook(result.output_file)
+            try:
+                ws = book["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                self.assertEqual(ws.cell(3, columns["6月份加班天数"]).value, 1)
+                self.assertNotIn("5月份加班天数", columns)
+                self.assertTrue(any("2026年5月剩余加班 1 天" in message for message in result.warnings))
+            finally:
+                book.close()
+
+    def test_cross_year_carry_keeps_same_month_in_two_years_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "本次.xlsx", root / "总部2026年12月考勤.xlsx"
+            _write_attendance_history(history, month=12, overtime={1: 1}, rest_days=0)
+            book = load_workbook(history)
+            book.active["A1"] = "12月份考勤异动"  # 年份必须从文件名读取。
+            book.save(history)
+            book.close()
+            _write_attendance_file(source, month=1)
+            book = load_workbook(source)
+            for row in book.active.iter_rows(min_row=2):
+                row[3].value = row[3].value.replace(year=2027)
+            book.save(source)
+            book.close()
+            result = generate_data_statistics_reports(source, root / "january", existing_summary_path=history,
+                                                       history_rest_mode="pending", overtime_valid_months=12)
+            book = load_workbook(result.output_file)
+            try:
+                ws = book["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                self.assertEqual(ws.cell(3, columns["2026年1月份加班天数"]).value, 1)
+                self.assertEqual(ws.cell(3, columns["2027年1月份加班天数"]).value, 0.5)
+            finally:
+                book.close()
+            book = load_workbook(source)
+            for row in book.active.iter_rows(min_row=2):
+                row[3].value = row[3].value.replace(month=2)
+            book.save(source)
+            book.close()
+            following = generate_data_statistics_reports(source, root / "february", existing_summary_path=result.output_file,
+                                                          history_rest_mode="pending", overtime_valid_months=12)
+            book = load_workbook(following.output_file)
+            try:
+                ws = book["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                self.assertNotIn("2026年1月份加班天数", columns)
+                self.assertEqual(ws.cell(3, columns["2027年1月份加班天数"]).value, 0.5)
+            finally:
+                book.close()
+
+    def test_person_overtime_rule_changes_only_overtime_and_rest_units(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, history = root / "本次.xlsx", root / "历史.xlsx"
+            _write_attendance_file(source, month=9)
+            book = load_workbook(source)
+            for row in book.active.iter_rows(min_row=2):
+                for column in (26, 27):
+                    if row[column].value:
+                        row[column].value = 4
+            book.save(source)
+            book.close()
+            _write_attendance_history(history, month=8, overtime={6: 1}, rest_days=0.5)
+            options = [{"people": "王小丽", "valid_months": 6, "hours_per_day": 8}]
+            baseline = generate_data_statistics_reports(source, root / "baseline")
+            result = generate_data_statistics_reports(source, root / "out", existing_summary_path=history, history_rest_mode="pending",
+                                                      overtime_rule_overrides=options, remark_unit="hour")
+            book, base = load_workbook(result.output_file), load_workbook(baseline.output_file)
+            try:
+                ws, before = book["考勤统计"], base["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                old_columns = {cell.value: cell.column for cell in before[2]}
+                self.assertEqual(ws.cell(3, columns["6月份加班小时数"]).value, 4)
+                self.assertEqual(ws.cell(3, columns["9月份加班小时数"]).value, 4)
+                self.assertEqual(ws.cell(3, columns["调休（小时）"]).value, 4)
+                self.assertIn("/8,2)", ws.cell(3, columns["累计剩余加班天数"]).value)
+                for header in ("公司", "部门（片区）", "姓名", "事假（天）", "病假（天）", "带薪休假（天）", "旷工", "漏打卡"):
+                    self.assertEqual(ws.cell(3, columns[header]).value, before.cell(3, old_columns[header]).value)
+            finally:
+                book.close()
+                base.close()
+
     def test_history_rest_matches_hr_examples_in_day_and_hour_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -114,23 +248,46 @@ class DataStatisticsTest(unittest.TestCase):
                     history_rest_mode="mixed", history_deducted_people="填错姓名")
             self.assertFalse((root / "unknown").exists())
 
-    def test_overtime_shortfall_requires_review_without_borrowing_from_new_month(self) -> None:
+    def test_overtime_shortfall_generates_highlighted_review_without_borrowing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source, history = root / "八月.xlsx", root / "七月.xlsx"
             _write_attendance_file(source, month=8)  # 八月有0.5天加班，也不能用来弥补七月欠额。
             _write_attendance_history(history, month=7, overtime={6: 1}, rest_days=1.5)
-            with self.assertRaisesRegex(ValueError, "王小丽.*历史调休超过加班余额.*0.5"):
-                generate_data_statistics_reports(source, root / "shortfall", existing_summary_path=history, history_rest_mode="pending")
-            self.assertFalse((root / "shortfall").exists())
+            result = generate_data_statistics_reports(source, root / "shortfall", existing_summary_path=history, history_rest_mode="pending")
+            self.assertTrue(result.output_file.is_file())
+            self.assertTrue(any("2026年7月调休超过可用加班，差 0.5 天" in text for text in result.warnings))
+            book = load_workbook(result.output_file)
+            try:
+                ws = book["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                self.assertEqual(ws.cell(3, columns["8月份加班天数"]).value, 0.5)
+                self.assertEqual(ws.cell(3, columns["6月份加班天数"]).value or 0, 0)
+                self.assertTrue(ws.cell(3, 4).fill.fgColor.rgb.endswith("FFF2CC"))
+                self.assertIn("2026年7月", ws.cell(3, columns["备注"]).value)
+                self.assertIsNotNone(ws.cell(3, columns["备注"]).comment)
+            finally:
+                book.close()
+            _write_attendance_file(source, month=9)
+            next_result = generate_data_statistics_reports(source, root / "next", existing_summary_path=result.output_file, history_rest_mode="pending")
+            book = load_workbook(next_result.output_file)
+            try:
+                ws = book["考勤统计"]
+                columns = {cell.value: cell.column for cell in ws[2]}
+                self.assertEqual(ws.cell(3, columns["9月份加班天数"]).value, 0.5)
+                self.assertIn("2026年7月", ws.cell(3, columns["备注"]).value)
+                self.assertTrue(ws.cell(3, 4).fill.fgColor.rgb.endswith("FFF2CC"))
+            finally:
+                book.close()
+            _write_attendance_file(source, month=8)
             _write_attendance_history(history, month=7, overtime={6: 0.5}, rest_days=0.5)
             workbook = load_workbook(source)
             workbook.active.cell(4, 27, 7)  # 本月调休1天，超过本月可用的0.5天。
             workbook.save(source)
             workbook.close()
-            with self.assertRaisesRegex(ValueError, "王小丽.*本次调休超过加班余额"):
-                generate_data_statistics_reports(source, root / "current_shortfall", existing_summary_path=history, history_rest_mode="pending")
-            self.assertFalse((root / "current_shortfall").exists())
+            result = generate_data_statistics_reports(source, root / "current_shortfall", existing_summary_path=history, history_rest_mode="pending")
+            self.assertTrue(result.output_file.is_file())
+            self.assertTrue(any("2026年8月调休超过可用加班" in text for text in result.warnings))
 
     def test_manual_history_deduction_requires_disambiguation_for_duplicate_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,11 +401,14 @@ class DataStatisticsTest(unittest.TestCase):
                         self.assertEqual(ws.cell(3, by_header[f"7月份加班{unit}"]).value, 2 * factor)
                         self.assertEqual(ws.cell(3, by_header[f"8月份加班{unit}"]).value, factor)
                         self.assertEqual(ws.cell(3, by_header[f"9月份加班{unit}"]).value, 0.5 * factor)
-                        # 全部其他列（包括调休、余额公式和备注）与只统计本次资料完全一致。
-                        old_month_cols = {by_header[f"7月份加班{unit}"], by_header[f"8月份加班{unit}"]}
-                        for column in range(1, ws.max_column + 1):
-                            if column not in old_month_cols:
-                                self.assertEqual(ws.cell(3, column).value, original["考勤统计"].cell(3, column).value)
+                        # 结转按有效月份展示；其他业务字段按表头比较，避免绑定旧列号。
+                        original_ws = original["考勤统计"]
+                        original_columns = {cell.value: cell.column for cell in original_ws[2]}
+                        for header, column in by_header.items():
+                            if header and "月份加班" not in header and header != "累计剩余加班天数":
+                                self.assertEqual(ws.cell(3, column).value, original_ws.cell(3, original_columns[header]).value)
+                        self.assertEqual(ws.cell(3, by_header["累计剩余加班天数"]).value,
+                                         "=ROUND((SUM(K3:N3)-H3)/7,2)" if new_unit == "hour" else "=SUM(K3:N3)-H3")
                         for name in ("周月报统计", "考勤异常明细", "周月报异常明细"):
                             self.assertEqual(list(combined[name].values), list(original[name].values))
                     finally:
@@ -314,7 +474,7 @@ class DataStatisticsTest(unittest.TestCase):
             ("bad_number", "O3", "待核对", "不是有效数字"),
             ("formula_without_cache", "O3", "=1+1", "公式无计算结果"),
             ("wrong_company", "B3", "其他公司", "公司或部门不一致"),
-            ("wrong_year", "A1", "2025年考勤", "年度与本次数据不一致"),
+            ("wrong_year", "A1", "2025年考勤", "历史汇总月份与表题或文件名不一致"),
             ("duplicate_month", "P2", "7月份加班天数", "月份加班列无效或重复"),
             ("missing_identity", "D2", "未确认", "缺少公司"),
         )

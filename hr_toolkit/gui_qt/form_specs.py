@@ -134,7 +134,7 @@ SPECS: tuple[ToolUiSpec, ...] = (
             {
                 "id": "existing_summary_path", "kind": "file", "default": "",
                 "label": "历史考勤汇总（可选）",
-                "hint": "选择同年度的旧汇总表：按先早后晚抵扣旧表调休，结转各月剩余加班；其他项目和备注只统计本次资料。",
+                "hint": "选择已核对的旧汇总表：先扣旧月调休，再结转未到期的各月余额，支持跨年；其他项目只统计本次资料。余额不足仍生成结果并高亮待核对。",
             },
             {"id": "history_options", "kind": "history_options", "label": "历史调休结转设置", "options": [
                 {"label": "请选择旧表各月加班的抵扣状态", "value": ""},
@@ -142,6 +142,9 @@ SPECS: tuple[ToolUiSpec, ...] = (
                 {"label": "全部已人工抵扣：各月已是余额", "value": "deducted"},
                 {"label": "部分人员已人工抵扣", "value": "mixed"},
             ]},
+            {"id": "overtime_rules", "kind": "overtime_rules", "label": "加班/调休规则",
+             "monthOptions": [{"label": "3 个月", "value": 3}, {"label": "6 个月", "value": 6}, {"label": "12 个月", "value": 12}],
+             "hourOptions": [{"label": "7 小时/天", "value": 7}, {"label": "8 小时/天", "value": 8}]},
             {
                 "id": "week_range",
                 "kind": "date_range",
@@ -348,6 +351,9 @@ def default_values(spec: ToolUiSpec) -> dict[str, Any]:
         if field.get("kind") == "history_options":
             values.update(history_period="", history_rest_mode="", history_deducted_people="")
             continue
+        if field.get("kind") == "overtime_rules":
+            values.update(overtime_valid_months=3, overtime_hours_per_day=7, overtime_rule_overrides=[])
+            continue
         if field.get("kind") == "date_range":
             values[str(field["startId"])] = field.get("startDefault", "")
             values[str(field["endId"])] = field.get("endDefault", "")
@@ -485,11 +491,21 @@ def build_invocation(
             "include_business_trip": bool(values.get("include_business_trip")),
             "include_workday_business_trip": bool(values.get("include_workday_business_trip")),
         }
+        from hr_toolkit.tools.data_statistics import AttendanceOvertimeRules
+        months = values.get("overtime_valid_months", 3)
+        hours = values.get("overtime_hours_per_day", 7)
+        overrides = values.get("overtime_rule_overrides", [])
+        try:
+            rules = AttendanceOvertimeRules(months, hours, overrides)
+        except ValueError as exc:
+            raise FormValidationError("加班调休规则有误", str(exc), "overtime_rules") from exc
+        kwargs.update(overtime_valid_months=rules.default[0], overtime_hours_per_day=rules.default[1],
+                      overtime_rule_overrides=overrides)
         history_text = str(values.get("existing_summary_path") or "").strip()
         if history_text:
             history_path = Path(history_text).expanduser()
             if not history_path.is_file() or history_path.suffix.lower() not in EXCEL_SUFFIXES:
-                raise FormValidationError("历史汇总不可用", "请选择工具生成的 .xlsx 或 .xls 考勤汇总表。", "existing_summary_path")
+                raise FormValidationError("历史汇总不可用", "请选择 .xlsx 或 .xls 考勤汇总表。", "existing_summary_path")
             kwargs["existing_summary_path"] = history_path
             mode = str(values.get("history_rest_mode") or "")
             if mode not in {"pending", "deducted", "mixed"}:

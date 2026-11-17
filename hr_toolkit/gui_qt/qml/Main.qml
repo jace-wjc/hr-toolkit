@@ -1305,6 +1305,7 @@ ApplicationWindow {
                                                        : field.kind === "text" ? textFieldComponent
                                                        : field.kind === "file" ? fileFieldComponent
                                                        : field.kind === "history_options" ? historyOptionsComponent
+                                                       : field.kind === "overtime_rules" ? overtimeRulesComponent
                                                        : field.kind === "choice" ? choiceFieldComponent
                                                        : field.kind === "check" ? checkFieldComponent
                                                        : field.kind === "date_range" ? dateRangeFieldComponent
@@ -1900,6 +1901,111 @@ ApplicationWindow {
             Text {
                 Layout.fillWidth: true
                 property var feedback: controller.selectionFeedback.history_options || ({})
+                visible: !!feedback.text
+                text: Ui.text(feedback.text || ""); textFormat: Text.PlainText
+                color: Ui.color("error"); font.pixelSize: 12; wrapMode: Text.Wrap
+            }
+        }
+    }
+
+    Component {
+        id: overtimeRulesComponent
+        ColumnLayout {
+            id: overtimeRules
+            spacing: 6
+            property var rules: JSON.parse(JSON.stringify(field.rulesValue || []))
+
+            function saveRules() {
+                controller.setFieldValue("overtime_rule_overrides", JSON.stringify(rules))
+            }
+            function changeRule(rowIndex, key, value) {
+                rules[rowIndex][key] = value
+                saveRules()
+            }
+            function addRule() {
+                var updated = JSON.parse(JSON.stringify(rules))
+                updated.push({ "people": "", "valid_months": field.monthOptions[defaultExpiry.currentIndex].value,
+                               "hours_per_day": field.hourOptions[defaultHours.currentIndex].value })
+                rules = updated
+                saveRules()
+            }
+            function removeRule(rowIndex) {
+                var updated = JSON.parse(JSON.stringify(rules))
+                updated.splice(rowIndex, 1)
+                rules = updated
+                saveRules()
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Text { Layout.preferredWidth: 145; text: Ui.text("加班/调休规则"); color: root.textMain; font.pixelSize: 13 }
+                Text { text: Ui.text("有效期"); color: root.textMain; font.pixelSize: 12 }
+                AppComboBox {
+                    id: defaultExpiry
+                    Layout.fillWidth: true
+                    model: field.monthOptions; textRole: "label"
+                    currentIndex: Number(field.monthValue) === 12 ? 2 : Number(field.monthValue) === 6 ? 1 : 0
+                    enabled: controller.selectionEnabled
+                    onActivated: controller.setFieldValue("overtime_valid_months", field.monthOptions[index].value)
+                }
+                AppComboBox {
+                    id: defaultHours
+                    Layout.fillWidth: true
+                    model: field.hourOptions; textRole: "label"
+                    currentIndex: Number(field.hourValue) === 8 ? 1 : 0
+                    enabled: controller.selectionEnabled
+                    onActivated: controller.setFieldValue("overtime_hours_per_day", field.hourOptions[index].value)
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                text: Ui.text("默认南昌：3 个月、7 小时/天。有效期截至月底，未到期可跨年；深圳选 8 小时/天。几维驻南昌仍按南昌规则，其他人员可单独设置。有效期用于历史余额结转。")
+                color: root.textMuted; font.pixelSize: 11; wrapMode: Text.Wrap
+            }
+            Repeater {
+                model: overtimeRules.rules
+                delegate: ColumnLayout {
+                    id: overtimeRuleRow
+                    readonly property int ruleIndex: index
+                    Layout.fillWidth: true
+                    spacing: 5
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { Layout.preferredWidth: 145; text: Ui.text("例外人员"); color: root.textMain; font.pixelSize: 13 }
+                        AppTextField {
+                            Layout.fillWidth: true
+                            text: String(modelData.people || "")
+                            placeholderText: Ui.text("姓名用顿号分隔；重名填公司/部门/姓名")
+                            enabled: controller.selectionEnabled
+                            onTextEdited: overtimeRules.changeRule(overtimeRuleRow.ruleIndex, "people", text)
+                        }
+                        AppButton { text: "删除"; variant: "link"; enabled: controller.selectionEnabled; onClicked: overtimeRules.removeRule(overtimeRuleRow.ruleIndex) }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Item { Layout.preferredWidth: 145 }
+                        AppComboBox {
+                            Layout.fillWidth: true
+                            model: field.monthOptions; textRole: "label"
+                            currentIndex: Number(modelData.valid_months) === 12 ? 2 : Number(modelData.valid_months) === 6 ? 1 : 0
+                            enabled: controller.selectionEnabled
+                            onActivated: overtimeRules.changeRule(overtimeRuleRow.ruleIndex, "valid_months", field.monthOptions[currentIndex].value)
+                        }
+                        AppComboBox {
+                            Layout.fillWidth: true
+                            model: field.hourOptions; textRole: "label"
+                            currentIndex: Number(modelData.hours_per_day) === 8 ? 1 : 0
+                            enabled: controller.selectionEnabled
+                            onActivated: overtimeRules.changeRule(overtimeRuleRow.ruleIndex, "hours_per_day", field.hourOptions[currentIndex].value)
+                        }
+                    }
+                }
+            }
+            AppButton { text: "添加人员例外"; variant: "link"; enabled: controller.selectionEnabled; onClicked: overtimeRules.addRule() }
+            Text {
+                Layout.fillWidth: true
+                property var feedback: controller.selectionFeedback.overtime_rules || ({})
                 visible: !!feedback.text
                 text: Ui.text(feedback.text || ""); textFormat: Text.PlainText
                 color: Ui.color("error"); font.pixelSize: 12; wrapMode: Text.Wrap

@@ -612,6 +612,10 @@ class AppController(QObject):
                 field["value"] = values.get("history_rest_mode", "")
                 field["periodValue"] = values.get("history_period", "")
                 field["peopleValue"] = values.get("history_deducted_people", "")
+            elif field.get("kind") == "overtime_rules":
+                field["monthValue"] = values.get("overtime_valid_months", 3)
+                field["hourValue"] = values.get("overtime_hours_per_day", 7)
+                field["rulesValue"] = values.get("overtime_rule_overrides", [])
             else:
                 field["value"] = values.get(field["id"], field.get("default", ""))
             field["visible"] = self._field_visible(field["id"], values)
@@ -1034,6 +1038,14 @@ class AppController(QObject):
 
     @Slot(str, "QVariant")
     def setFieldValue(self, field_id: str, value: Any) -> None:
+        if field_id == "overtime_rule_overrides" and isinstance(value, str):
+            # JSON crosses Qt5/Qt6 identically; never retain a QJSValue in a worker invocation.
+            try:
+                value = json.loads(value)
+                if not isinstance(value, list):
+                    return
+            except ValueError:
+                return
         state = self._form_states[self._state_key()]
         state[field_id] = value
         if field_id == "use_ocr_cache" and state.get("library_mode") != "flat_ocr":
@@ -1056,6 +1068,8 @@ class AppController(QObject):
             self._bump_form_revision()
         elif field_id in {"history_period", "history_deducted_people"}:
             self._selection_message("history_options", "")
+        elif field_id in {"overtime_valid_months", "overtime_hours_per_day", "overtime_rule_overrides"}:
+            self._selection_message("overtime_rules", "")
 
     @Slot(str, str)
     def normalizeDateField(self, field_id: str, text: str) -> None:
@@ -1282,6 +1296,7 @@ class AppController(QObject):
         feedback.pop("material_types", None)
         feedback.pop("existing_summary_path", None)
         feedback.pop("history_options", None)
+        feedback.pop("overtime_rules", None)
         if self._spec.tool_id == "material_collector" and str(self._form_states[self._state_key()].get("target_input") or "").strip():
             feedback.pop("support", None)
         # The connected environment handler invalidates stale requests and
@@ -4000,7 +4015,7 @@ class AppController(QObject):
                 # Only these controls actually render selectionFeedback in
                 # Main.qml. Text/choice/check fields need the dialog fallback;
                 # otherwise validation stops the run without any visible reason.
-                if error.field in {"input", "support", "week_range", "month_range", "material_types", "existing_summary_path", "history_options"}:
+                if error.field in {"input", "support", "week_range", "month_range", "material_types", "existing_summary_path", "history_options", "overtime_rules"}:
                     return
             self.notificationRequested.emit(title, str(error), "warning")
             return
