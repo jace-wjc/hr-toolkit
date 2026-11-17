@@ -415,6 +415,26 @@ class _FakeOpener:
 
 
 class AiClientTests(unittest.TestCase):
+    def test_saved_http_profile_is_preserved_but_cannot_send_credentials_or_context(self):
+        from unittest.mock import Mock
+        from hr_toolkit.ai.assistant import AiAssistantSession
+
+        endpoint = "http://legacy.example.test/v1/chat/completions"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "settings.json"
+            path.write_text(json.dumps({"providers": {"minimax": {
+                "endpoint": endpoint, "apiKey": "offline-test-key",
+            }}}), encoding="utf-8")
+            settings = load_ai_settings(path)
+        self.assertEqual(settings.provider_config().endpoint, endpoint)
+        opener = Mock()
+        with self.assertRaisesRegex(ai_client.ChatError, "必须使用 HTTPS"):
+            ai_client.test_connection(settings, opener=opener)
+        session = AiAssistantSession(settings, opener=opener)
+        with self.assertRaisesRegex(ai_client.ChatError, "必须使用 HTTPS"):
+            list(session.ask("测试消息"))
+        opener.assert_not_called()
+
     def _messages(self):
         return [
             {"role": "system", "content": "你是测试助手"},

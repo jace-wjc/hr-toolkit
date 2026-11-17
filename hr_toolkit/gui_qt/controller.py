@@ -5377,11 +5377,24 @@ class AppController(QObject):
     def aiConversationTitle(self) -> str:
         return self._ai_conversation.title if self._ai_conversation else ""
 
+    def _ai_validate_service_address(self, settings) -> bool:
+        from hr_toolkit.ai.config import AiConfigError, validate_endpoint
+
+        try:
+            validate_endpoint(settings.provider_config().resolved_endpoint(settings.preset()))
+        except AiConfigError as exc:
+            self.notificationRequested.emit("Sage", str(exc), "warning")
+            return False
+        return True
+
     def _ai_can_replay_saved_context(self, item) -> bool:
+        settings = self._ai_settings_obj()
+        if not self._ai_validate_service_address(settings):
+            return False
         context = item.get("apiContent")
         if not item.get("attachments") and (not context or context == item.get("content")):
             return True
-        if item.get("apiDestination") == self._ai_settings_obj().context_destination():
+        if item.get("apiDestination") == settings.context_destination():
             return True
         self.notificationRequested.emit(
             "Sage", "旧消息的附件未发给当前 AI 服务地址，请重新附加文件后发送。", "warning",
@@ -5595,7 +5608,7 @@ class AppController(QObject):
 
     @Property(bool, notify=aiSettingsChanged)
     def aiReady(self) -> bool:
-        return self._ai_settings_obj().is_ready()
+        return not self._ai_settings_obj().problems()
 
     @Property(str, notify=aiSettingsChanged)
     def aiSetupMessage(self) -> str:
@@ -5782,6 +5795,8 @@ class AppController(QObject):
         settings = self._ai_settings_obj()
         if not settings.is_ready():
             self.aiSettingsChanged.emit()
+            return
+        if not self._ai_validate_service_address(settings):
             return
         # 附件跟着这条消息走：快照进消息行，待发区清空，用户才看得出确实发出去了。
         sent = self._ai_session_obj().consume_pending()

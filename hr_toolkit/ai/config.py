@@ -385,10 +385,10 @@ def validate_model(value: str) -> str:
     return model
 
 
-def validate_endpoint(value: str) -> str:
+def validate_endpoint(value: str, *, allow_legacy_http: bool = False) -> str:
     endpoint = (value or "").strip()
-    if not endpoint.startswith(("https://", "http://")):
-        raise AiConfigError("服务地址必须以 http:// 或 https:// 开头。")
+    if not endpoint.startswith("https://") and not (allow_legacy_http and endpoint.startswith("http://")):
+        raise AiConfigError("AI 服务地址必须使用 HTTPS，请在设置中修改。")
     if len(endpoint) > _MAX_ENDPOINT_LENGTH or _CONTROL_CHARACTER.search(endpoint):
         raise AiConfigError("服务地址不合法。")
     return endpoint
@@ -434,7 +434,9 @@ def load_ai_settings(path: Optional[Path] = None) -> AiSettings:
                     config.model = validate_model(model)
                 endpoint = str(entry.get("endpoint") or "").strip()
                 if endpoint:
-                    config.endpoint = validate_endpoint(endpoint)
+                    # Keep the saved address visible for migration. Dropping an
+                    # HTTP override could send its key to a different preset.
+                    config.endpoint = validate_endpoint(endpoint, allow_legacy_http=True)
                     # Earlier settings dialogs saved the old preset as an
                     # explicit override. Let those installations adopt the
                     # corrected default without changing other custom URLs.

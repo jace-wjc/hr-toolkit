@@ -252,7 +252,7 @@ MESSAGES = {
  'API Key 格式不正确，请重新复制。': 'The API key format is invalid. Copy it again.',
  '模型名称不能为空。': 'Enter a model name.',
  '模型名称不合法。': 'The model name is invalid.',
- '服务地址必须以 http:// 或 https:// 开头。': 'The endpoint must start with http:// or https://.',
+ 'AI 服务地址必须使用 HTTPS，请在设置中修改。': 'AI service addresses must use HTTPS. Update the address in Settings.',
  '服务地址不合法。': 'The endpoint is invalid.',
  '一次最多附加 {0} 个文件，请先移除不需要的。': 'You can attach up to {0} files per message. Remove an attachment first.',
  '一次最多附加 {0} 张图片，请先移除不需要的。': 'You can attach up to {0} images per message. Remove an image first.',

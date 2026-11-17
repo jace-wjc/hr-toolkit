@@ -888,6 +888,28 @@ class QtControllerTests(unittest.TestCase):
                     begin.assert_not_called()
                 self.assertEqual(controller._ai_chat_model.items(), before)
 
+    def test_ai_send_with_legacy_http_address_keeps_input_and_pending_attachment(self):
+        from hr_toolkit.ai.config import AiSettings, ProviderConfig
+
+        controller = self.controller()
+        self.addCleanup(controller.close)
+        controller._ai_settings = AiSettings(providers={"minimax": ProviderConfig(
+            api_key="offline-test-key", endpoint="http://legacy.example.test",
+        )})
+        controller._ai_draft = "分析表格"
+        controller._ai_attachment_model.set_items([{"kind": "sheet", "name": "table.xlsx"}])
+        self.assertFalse(controller.aiReady)
+        self.assertIn("HTTPS", controller.aiSetupMessage)
+        notices = []
+        controller.notificationRequested.connect(lambda *args: notices.append(args))
+        with patch.object(controller, "_ai_session_obj") as session:
+            controller.aiSendMessage("分析表格")
+            session.assert_not_called()
+        self.assertEqual(controller._ai_attachment_model.rowCount(), 1)
+        self.assertEqual(controller.aiDraft, "分析表格")
+        self.assertEqual(len(controller._ai_chat_model), 0)
+        self.assertIn("HTTPS", notices[-1][1])
+
     def test_ai_restores_legacy_stop_notice_as_separate_status(self):
         from hr_toolkit.ai.history import ConversationRecord, ConversationStore
         with tempfile.TemporaryDirectory() as folder:

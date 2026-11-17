@@ -18,6 +18,7 @@ import urllib.request
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from .config import (
+    AiConfigError,
     AiSettings,
     normalize_api_key,
     validate_endpoint,
@@ -190,6 +191,10 @@ def _open_response(
     timeout: float,
     opener,
 ):
+    try:
+        endpoint = validate_endpoint(endpoint)
+    except AiConfigError as exc:
+        raise ChatError(str(exc)) from exc
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -478,7 +483,7 @@ def provider_credentials(
     """Resolve ``(endpoint, api_key, model)`` for a settings profile."""
     preset = settings.preset(provider_id)
     config = settings.provider_config(preset.provider_id)
-    endpoint = validate_endpoint(config.resolved_endpoint(preset))
+    endpoint = config.resolved_endpoint(preset)
     model = validate_model(config.resolved_model(preset))
     api_key = normalize_api_key(config.api_key)
     return endpoint, api_key, model
