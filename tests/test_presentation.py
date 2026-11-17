@@ -215,6 +215,14 @@ print('translation shutdown probe reached exit', flush=True)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn('translation shutdown probe reached exit', completed.stdout)
 
+    def test_calendar_year_editing_has_no_grouping_or_binding_loops(self):
+        completed = subprocess.run(
+            [sys.executable, '-X', 'faulthandler', str(ROOT / "tests/qt_date_field_probe.py")], cwd=str(ROOT),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("localized year editing, bounds and warning-free bindings OK", completed.stdout)
+
     def test_real_ui_themes_languages_dialogs_and_persistence(self):
         completed = subprocess.run(
             [sys.executable, '-X', 'faulthandler', str(ROOT / "tests/qt_presentation_probe.py")], cwd=str(ROOT),

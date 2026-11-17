@@ -124,6 +124,8 @@ AppTextField {
                     Layout.preferredWidth: 116; Layout.minimumWidth: 0
                     font.pixelSize: 13
                     from: 1; to: 9999; editable: true
+                    // 年份不分组；校验器与 String/Number 必须使用相同的数字格式。
+                    locale: Qt.locale("C")
                     value: calendarPopup.viewYear
                     textFromValue: function(value, locale) { return String(value) }
                     valueFromText: function(text, locale) { return Number(text) }

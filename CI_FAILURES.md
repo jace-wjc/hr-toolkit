@@ -85,3 +85,14 @@
 - 实际验证：临时隔离的 Python 3.9.25 环境中，原用例复现相同失败，修复后单独运行通过；本机 Python 3.13 同一用例也通过。临时环境未安装现代 OCR 包，因此通过结果不依赖本机恰好存在该包。
 - 未验证：修复后的远程 CI、Windows 和 Win7 实机；未执行全量测试、构建、打包或发布。
 - 防复发：混用 `patch.dict(sys.modules)` 与模块补丁时，先加载被模拟模块，再保存模块快照，并在项目支持的旧版 Python 上检查懒加载路径。
+
+## 2026-11-17：Qt 6.6 年份输入的数字格式冲突
+
+- CI：[44057831559](https://github.com/jace-wjc/hr-toolkit/actions/runs/44057831559)，提交 `97458b2b4663c9bf829eda4b0e73a5e30a592c89`；失败 job：Windows Python 3.12（`133951793714`），单元测试步骤。
+- 最终报错：`tests.test_presentation.PresentationTests.test_real_ui_themes_languages_dialogs_and_persistence` 的 QML 告警断言失败，多次报告 `SpinBox.qml:27:18: QML QQuickTextInput: Binding loop detected for property "text"`。
+- 已确认根因：`AppDateField.qml` 年份使用 `String/Number` 格式化和解析，但 SpinBox 默认整数校验器在英文和中文区域设置下将 `2026` 修正为 `2,026`；Qt 6.6 将修正结果回写显示文本时形成绑定循环。使用生产约束中的 `PySide6-Essentials==6.6.3.1` 已在本机复现相同告警；本机原有 Qt 6.11 不复现。
+- 修复：仅将年份 SpinBox 的数字区域设置固定为 `C`，使校验器与现有格式一致；日期范围、语言显示和日期选择逻辑不变，不升级 Qt 或 Python，不使用 Qt 6 专用 API。
+- 回归覆盖：新增 `tests/qt_date_field_probe.py`，由 `tests/test_presentation.py` 调用，在英文、中文区域设置下真实输入 `1`、`9999`、`2027`，检查边界增减、无分隔符、未选择日期时不修改原值，以及无 QML 告警。`scripts/ci_scope.py` 现有 `tests/qt_` 路由已覆盖 presentation 和 Win7 目标，无需改动。
+- 实际验证：临时 Python 3.12.16 / Qt 6.6.3 环境中，原失败 UI 用例修复后通过；新年份输入用例在该环境及本机 Python 3.13 / Qt 6.11.2 均通过。新探针通过 Python 3.8 语法解析。
+- 未验证：修复后的远程 Windows CI、Qt 5.15 / Win7 实机；未执行全量测试、构建、打包或发布。
+- 防复发：自定义数字控件的文本转换时，同时核对校验器区域设置；QML 回归使用 CI 固定的生产 Qt 版本，不能以较新 Qt 的通过结果替代。
