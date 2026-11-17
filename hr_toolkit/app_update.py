@@ -180,7 +180,9 @@ def _update_url_scheme(url: str, *, allow_local_file: bool = False) -> str:
     if _is_github_url(url):
         raise UpdateError("客户端更新仅使用 Gitee，不会访问 GitHub。")
     scheme = urllib.parse.urlparse(url).scheme.lower()
-    if scheme not in {"https", "http"} and not (allow_local_file and scheme == "file"):
+    if scheme == "http":
+        raise UpdateError("更新地址必须使用 HTTPS，请修改 update_url.txt 或 HR_TOOLKIT_UPDATE_URL。")
+    if scheme != "https" and not (allow_local_file and scheme == "file"):
         raise UpdateError(f"不支持的更新地址协议：{scheme or '空'}。")
     return scheme
 
@@ -189,12 +191,22 @@ def _require_https_hop(source_url: str, target_url: str) -> None:
     if (urllib.parse.urlparse(source_url).scheme.lower() == "https"
             and urllib.parse.urlparse(target_url).scheme.lower() != "https"):
         raise UpdateError("HTTPS 更新源不能跳转或引用非 HTTPS 地址。")
+    if any(urllib.parse.urlparse(url).scheme.lower() == "http" for url in (source_url, target_url)):
+        raise UpdateError("更新地址必须使用 HTTPS，请重新检查更新或修改更新源。")
+
+
+def _migrate_update_source(url: str) -> str:
+    # Only the shipped legacy discovery address has a known replacement.
+    # Never guess an HTTPS counterpart for an arbitrary operator endpoint.
+    if url.strip() == "http://hr.seedlingintl.com/hr-toolkit/latest.json":
+        return DEFAULT_UPDATE_MANIFEST_URL
+    return url
 
 
 class _UpdateRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        _update_url_scheme(newurl)
         _require_https_hop(req.full_url, newurl)
+        _update_url_scheme(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -226,13 +238,13 @@ def update_manifest_urls() -> tuple[str, ...]:
     )
     if env_urls:
         diagnostics.event("configuration", source="environment", count=len(env_urls))
-        return env_urls
+        return _dedupe_urls(_migrate_update_source(url) for url in env_urls)
     config_urls = tuple(
         url for url in _read_update_url_files() if not _is_github_url(url)
     )
     if config_urls:
         diagnostics.event("configuration", source="update_url_file", count=len(config_urls))
-        return config_urls
+        return _dedupe_urls(_migrate_update_source(url) for url in config_urls)
     diagnostics.event("configuration", source="default", count=len(DEFAULT_UPDATE_MANIFEST_URLS))
     return DEFAULT_UPDATE_MANIFEST_URLS
 
@@ -288,6 +300,7 @@ def fetch_update_manifest(manifest_url: str, timeout: int = 10) -> dict[str, Any
 
 @diagnostics.operation("manifest")
 def load_update_manifest(manifest_url: str, timeout: int = 10) -> tuple[dict[str, Any], str]:
+    manifest_url = _migrate_update_source(manifest_url)
     diagnostics.event("stage", stage="release_discovery" if _is_release_discovery_url(manifest_url) else "manifest_fetch")
     data = _fetch_json_object(manifest_url, timeout=timeout)
     if _is_release_discovery_url(manifest_url):

@@ -605,6 +605,8 @@ Win7 发布验收在干净的 Windows 7 SP1 x64 虚拟机中运行 `scripts/smok
 
 客户端的公开更新入口是 [Gitee 最新 Release 接口](https://gitee.com/api/v5/repos/optimistic-little-sunspot/hr-toolkit/releases/latest)，由它查找 `latest.json` 和对应的安装包。HTTPS 更新链路要求清单、包地址及重定向继续使用 HTTPS。Windows 仅在默认接口遇到特定 WAF 响应时用 WinHTTP 读取发布元数据。证书失败会报告错误，包下载仍由 Python 处理。
 
+旧配置中的 `http://hr.seedlingintl.com/hr-toolkit/latest.json` 会在请求前迁移到上述 Gitee HTTPS 入口。其他 HTTP 更新源和由 HTTP 清单产生的旧下载缓存不再使用，请将 `update_url.txt` 或 `HR_TOOLKIT_UPDATE_URL` 改为有效的 HTTPS 地址。显式本地 `file:` 清单仍可用于离线验收，远程清单不能引用本机文件。
+
 Gitee 资产未上传或连接失败时，可从正式 GitHub Release 手动下载对应的 EXE，并对照同版本 `SHA256SUMS.txt`。下载弹窗可以用右上角 `×` 或 `Esc` 取消，程序会清理未完成的临时文件。
 
 ---

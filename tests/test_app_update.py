@@ -443,12 +443,12 @@ class AppUpdateTests(unittest.TestCase):
 
         update = parse_update_manifest(
             manifest,
-            manifest_url="http://hr.seedlingintl.com/hr-toolkit/latest.json",
+            manifest_url="https://example.test/hr-toolkit/latest.json",
             platform="windows",
         )
 
         self.assertEqual(update.version, "0.2.0")
-        self.assertEqual(update.file_url, "http://hr.seedlingintl.com/hr-toolkit/releases/HRToolkit-0.2.0-win.zip")
+        self.assertEqual(update.file_url, "https://example.test/hr-toolkit/releases/HRToolkit-0.2.0-win.zip")
         self.assertEqual(update.sha256, "abc123")
         self.assertEqual(update.notes, ("修复问题",))
         self.assertEqual(update.update_mode, "auto")
@@ -861,15 +861,25 @@ class AppUpdateTests(unittest.TestCase):
         self.assertTrue(context.check_hostname)
         self.assertGreater(len(context.get_ca_certs()), 0)
 
-    def test_legacy_http_manifest_does_not_receive_tls_context(self) -> None:
-        response = io.BytesIO(b'{"version": "0.2.1"}')
-        with patch("hr_toolkit.app_update.urllib.request.build_opener") as builder, patch(
-            "hr_toolkit.app_update.create_https_context",
-        ) as create_context:
-            builder.return_value.open.return_value = response
-            fetch_update_manifest("http://hr.seedlingintl.com/hr-toolkit/latest.json")
+    def test_unknown_http_update_source_is_rejected_before_network(self) -> None:
+        with patch("hr_toolkit.app_update.urllib.request.build_opener") as builder:
+            with self.assertRaisesRegex(UpdateError, "必须使用 HTTPS"):
+                fetch_update_manifest("http://example.test/latest.json")
+            builder.assert_not_called()
 
-        create_context.assert_not_called()
+    def test_shipped_legacy_http_source_migrates_to_gitee_before_fetch(self) -> None:
+        _manifest, release = self._gitee_uploaded_release()
+        with patch("hr_toolkit.app_update._fetch_json_object", side_effect=[release, _manifest]) as fetcher:
+            load_update_manifest("http://hr.seedlingintl.com/hr-toolkit/latest.json")
+        self.assertEqual(fetcher.call_args_list[0].args[0], GITEE_LATEST_RELEASE_API_URL)
+        self.assertTrue(all(call.args[0].startswith("https://") for call in fetcher.call_args_list))
+
+    def test_plain_http_manifest_cannot_supply_even_an_https_package(self) -> None:
+        with self.assertRaisesRegex(UpdateError, "必须使用 HTTPS"):
+            parse_update_manifest(
+                {"version": "0.2.1", "sha256": "f" * 64, "file_url": "https://example.test/setup.exe"},
+                "http://example.test/latest.json", "windows",
+            )
 
     def test_oversized_manifest_is_rejected_with_bounded_read(self) -> None:
         response = io.BytesIO(b'{"version":"0.2.1","padding":"xxxxxxxx"}')
