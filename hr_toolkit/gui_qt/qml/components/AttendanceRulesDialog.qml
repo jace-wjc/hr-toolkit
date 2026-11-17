@@ -41,6 +41,7 @@ AppDialog {
         search.text = ""
         viewMode.currentIndex = 0
         company.editText = ""
+        location.selectedRawValue = ""
         location.editText = ""
         keyword.text = ""
         customRule.checked = false
@@ -50,16 +51,30 @@ AppDialog {
     }
     function showData(value) { initialize(value, true) }
     function showSettings(value) { initialize(value, false) }
+    function locationLabel(value) { return value === "公司默认" ? Ui.text("公司默认") : value }
+    function locationValue(combo) {
+        var value = combo.editText.trim(), index = combo.currentIndex
+        // Translate the reserved option's label, never a stored location name.
+        if (combo.selectedRawValue && value === locationLabel(combo.selectedRawValue)) return combo.selectedRawValue
+        return index >= 0 && index < combo.rawValues.length && value === locationLabel(combo.rawValues[index])
+            ? combo.rawValues[index] : value
+    }
+    function assignmentLabel(item) {
+        var suffix = " / 全组人员", label = String(item.label || "")
+        return !item.name && label.slice(-suffix.length) === suffix
+            ? label.slice(0, -suffix.length) + " / " + Ui.text("全组人员") : label
+    }
     function ruleText(row) {
-        if (row.problem) return (row.company || "未指定公司") + " / " + (row.location || "未指定驻地") + "：" + row.problem
-        return (row.company || "未指定公司") + " / " + (row.location || "旧表已确认")
-            + " · " + row.valid_months + " 个月 · " + row.hours_per_day + " 小时/天"
+        if (row.problem) return (row.company || Ui.text("未指定公司")) + " / "
+            + (locationLabel(row.location) || Ui.text("未指定驻地")) + ": " + Ui.text(row.problem)
+        return (row.company || Ui.text("未指定公司")) + " / " + (locationLabel(row.location) || Ui.text("旧表已确认"))
+            + " · " + Ui.text(row.valid_months + " 个月") + " · " + Ui.text(row.hours_per_day + " 小时/天")
     }
     function buildRows() {
         var groups = {}, result = [], needle = String(search.text || "").toLowerCase()
         for (var i = 0; i < rows.length; ++i) {
             var row = rows[i]
-            var haystack = [row.name, row.department, row.file, row.sheet, row.company, row.location].join(" ").toLowerCase()
+            var haystack = [row.name, row.department, row.file, row.sheet, row.company, row.location, locationLabel(row.location)].join(" ").toLowerCase()
             if (needle && haystack.indexOf(needle) < 0) continue
             var key = viewMode.currentIndex === 1 ? row.id : JSON.stringify([row.source, row.sheet, row.raw_company, row.raw_location, row.kind])
             if (!groups[key]) {
@@ -93,7 +108,7 @@ AppDialog {
     function applySelection() {
         var ids = Object.keys(selected)
         if (!ids.length) { errorText = "请先勾选要设置的文件组或人员。"; return }
-        var choice = {company: company.editText.trim(), location: location.editText.trim(), keyword: keyword.text.trim(),
+        var choice = {company: company.editText.trim(), location: locationValue(location), keyword: keyword.text.trim(),
             valid_months: customRule.checked ? monthOptions[batchMonths.currentIndex] : 0,
             hours_per_day: customRule.checked ? hourOptions[batchHours.currentIndex] : 0}
         if (!choice.company || !choice.location) { errorText = "请选择或填写公司和驻地。"; return }
@@ -126,7 +141,9 @@ AppDialog {
         editAssignmentIndex = index
         var item = config.assignments[index]
         savedCompany.text = item.company
-        savedLocation.text = item.location
+        savedLocation.selectedRawValue = item.location
+        savedLocation.currentIndex = savedLocation.rawValues.indexOf(item.location)
+        savedLocation.editText = locationLabel(item.location)
         savedKeyword.text = item.keyword
         savedMonths.currentIndex = Math.max(0, monthOptions.indexOf(Number(item.valid_months || 0)))
         savedHours.currentIndex = Math.max(0, hourOptions.indexOf(Number(item.hours_per_day || 0)))
@@ -134,7 +151,7 @@ AppDialog {
     function saveAssignment() {
         var value = copy(config), item = value.assignments[editAssignmentIndex]
         item.company = savedCompany.text.trim()
-        item.location = savedLocation.text.trim()
+        item.location = locationValue(savedLocation)
         item.keyword = savedKeyword.text.trim()
         item.source = item.keyword ? "" : (item.original_source || item.source)
         item.valid_months = monthOptions[savedMonths.currentIndex]
@@ -181,9 +198,9 @@ AppDialog {
                             AppCheckBox { checked: dialog.allSelected(modelData.ids); enabled: !dialog.working; onClicked: dialog.selectRows(modelData.ids, checked) }
                             ColumnLayout {
                                 Layout.fillWidth: true; spacing: 3
-                                Text { Layout.fillWidth: true; text: modelData.title + "（" + modelData.ids.length + " 人，" + (modelData.kind === "history" ? "历史汇总" : "本次考勤") + "）"; elide: Text.ElideMiddle; color: Ui.color("text"); font.pixelSize: 13 }
-                                Text { Layout.fillWidth: true; text: modelData.rules.length === 1 ? modelData.rules[0] : "组内人员规则不同，请切换“按人员”查看"; elide: Text.ElideRight; color: modelData.problem ? Ui.color("warning") : Ui.color("muted"); font.pixelSize: 12 }
-                                Text { Layout.fillWidth: true; text: modelData.labels.slice(0, 5).join("、") + (modelData.labels.length > 5 ? "等" : ""); elide: Text.ElideRight; color: Ui.color("muted"); font.pixelSize: 11 }
+                                Text { Layout.fillWidth: true; text: modelData.title + Ui.text("（" + modelData.ids.length + " 人，" + (modelData.kind === "history" ? "历史汇总" : "本次考勤") + "）"); textFormat: Text.PlainText; elide: Text.ElideMiddle; color: Ui.color("text"); font.pixelSize: 13 }
+                                Text { Layout.fillWidth: true; text: modelData.rules.length === 1 ? modelData.rules[0] : Ui.text("组内人员规则不同，请切换“按人员”查看"); textFormat: Text.PlainText; elide: Text.ElideRight; color: modelData.problem ? Ui.color("warning") : Ui.color("muted"); font.pixelSize: 12 }
+                                Text { Layout.fillWidth: true; text: modelData.labels.slice(0, 5).join(Ui.language === "en_US" ? ", " : "、") + (modelData.labels.length > 5 ? Ui.text("等") : ""); textFormat: Text.PlainText; elide: Text.ElideRight; color: Ui.color("muted"); font.pixelSize: 11 }
                             }
                         }
                     }
@@ -200,14 +217,17 @@ AppDialog {
                     Text { text: Ui.text("驻地"); color: Ui.color("text") }
                     ComboBox {
                         id: location; implicitHeight: 36; font.pixelSize: 13
-                        Layout.fillWidth: true; editable: true; model: dialog.names("location"); currentIndex: -1
+                        property var rawValues: dialog.names("location")
+                        property string selectedRawValue: ""
+                        Layout.fillWidth: true; editable: true; model: rawValues.map(dialog.locationLabel); currentIndex: -1
+                        onActivated: selectedRawValue = rawValues[index]
                         palette.text: Ui.color("text"); palette.base: Ui.color("input")
                         palette.button: Ui.color("input"); palette.buttonText: Ui.color("text")
                     }
                 }
                 Text {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; color: Ui.color("muted")
-                    property var suggested: backend ? backend.suggestAttendanceRule(company.editText, location.editText, JSON.stringify(dialog.config)) : ({})
+                    property var suggested: backend ? backend.suggestAttendanceRule(company.editText, dialog.locationValue(location), JSON.stringify(dialog.config)) : ({})
                     text: Ui.text(suggested.valid_months && suggested.hours_per_day ? "匹配规则：" + suggested.valid_months + " 个月，" + suggested.hours_per_day + " 小时/天。驻地按公司安排时，可明确选择“公司默认”。" : "未能完整匹配规则，可在“公司/驻地规则”中维护，或勾选下方的单独指定。")
                 }
                 RowLayout {
@@ -232,7 +252,7 @@ AppDialog {
                     ScrollBar.vertical: ScrollBar {}
                     delegate: RowLayout {
                         width: ListView.view.width; height: 48
-                        Text { Layout.fillWidth: true; text: (modelData.company || "所有公司") + " / " + (modelData.location || "公司默认") + "：" + (modelData.valid_months ? modelData.valid_months + " 个月" : "有效期沿用") + "，" + (modelData.hours_per_day ? modelData.hours_per_day + " 小时/天" : "工时沿用"); elide: Text.ElideRight; color: Ui.color("text"); font.pixelSize: 12 }
+                        Text { Layout.fillWidth: true; text: (modelData.company || Ui.text("所有公司")) + " / " + dialog.locationLabel(modelData.location || "公司默认") + ": " + Ui.text(modelData.valid_months ? modelData.valid_months + " 个月" : "有效期沿用") + ", " + Ui.text(modelData.hours_per_day ? modelData.hours_per_day + " 小时/天" : "工时沿用"); textFormat: Text.PlainText; elide: Text.ElideRight; color: Ui.color("text"); font.pixelSize: 12 }
                         AppButton { text: "修改"; variant: "link"; onClicked: dialog.editRule(index) }
                         AppButton { text: "删除"; variant: "link"; onClicked: { var value = dialog.copy(dialog.config); value.rules.splice(index, 1); if (dialog.checkConfig(value)) dialog.editRule(-1) } }
                     }
@@ -260,8 +280,8 @@ AppDialog {
                         width: ListView.view.width; height: 64
                         ColumnLayout {
                             Layout.fillWidth: true
-                            Text { Layout.fillWidth: true; text: modelData.label; elide: Text.ElideMiddle; color: Ui.color("text"); font.pixelSize: 12 }
-                            Text { Layout.fillWidth: true; text: modelData.company + " / " + modelData.location + (modelData.keyword ? " · 文件名含“" + modelData.keyword + "”" : " · 当前文件") + (modelData.valid_months || modelData.hours_per_day ? " · 含单独指定规则" : ""); elide: Text.ElideRight; color: Ui.color("muted"); font.pixelSize: 11 }
+                            Text { Layout.fillWidth: true; text: dialog.assignmentLabel(modelData); textFormat: Text.PlainText; elide: Text.ElideMiddle; color: Ui.color("text"); font.pixelSize: 12 }
+                            Text { Layout.fillWidth: true; text: modelData.company + " / " + dialog.locationLabel(modelData.location) + " · " + Ui.text(modelData.keyword ? "文件名含“" + modelData.keyword + "”" : "当前文件") + (modelData.valid_months || modelData.hours_per_day ? " · " + Ui.text("含单独指定规则") : ""); textFormat: Text.PlainText; elide: Text.ElideRight; color: Ui.color("muted"); font.pixelSize: 11 }
                         }
                         AppButton { text: "修改"; variant: "link"; onClicked: dialog.editAssignment(index) }
                         AppButton { text: "删除"; variant: "link"; onClicked: { var value = dialog.copy(dialog.config); value.assignments.splice(index, 1); if (dialog.checkConfig(value)) dialog.editAssignmentIndex = -1 } }
@@ -273,7 +293,16 @@ AppDialog {
                     RowLayout {
                         Layout.fillWidth: true
                         AppTextField { id: savedCompany; Layout.fillWidth: true; placeholderText: Ui.text("公司") }
-                        AppTextField { id: savedLocation; Layout.fillWidth: true; placeholderText: Ui.text("驻地或公司默认") }
+                        ComboBox {
+                            id: savedLocation; implicitHeight: 36; font.pixelSize: 13
+                            property var rawValues: dialog.names("location")
+                            property string selectedRawValue: ""
+                            Layout.fillWidth: true; editable: true; model: rawValues.map(dialog.locationLabel); currentIndex: -1
+                            onActivated: selectedRawValue = rawValues[index]
+                            Accessible.name: Ui.text("驻地或公司默认")
+                            palette.text: Ui.color("text"); palette.base: Ui.color("input")
+                            palette.button: Ui.color("input"); palette.buttonText: Ui.color("text")
+                        }
                         AppTextField { id: savedKeyword; Layout.fillWidth: true; placeholderText: Ui.text("文件名关键词；留空限定原文件") }
                     }
                     RowLayout {
@@ -285,6 +314,6 @@ AppDialog {
                 }
             }
         }
-        Text { Layout.fillWidth: true; visible: !!dialog.errorText; text: dialog.errorText; color: Ui.color("error"); wrapMode: Text.Wrap; font.pixelSize: 12 }
+        Text { Layout.fillWidth: true; visible: !!dialog.errorText; text: Ui.text(dialog.errorText); textFormat: Text.PlainText; color: Ui.color("error"); wrapMode: Text.Wrap; font.pixelSize: 12 }
     }
 }
