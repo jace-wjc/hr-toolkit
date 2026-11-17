@@ -6,6 +6,7 @@ import tarfile
 import tempfile
 import unittest
 import zipfile
+from calendar import monthrange
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,7 +113,10 @@ class DataStatisticsTest(unittest.TestCase):
                                    ("6月份加班天数", "8月份加班天数", "9月份加班天数", "调休（天）"))
                     self.assertEqual(actual, expected)
                     self.assertNotIn("8月备注", ws.cell(row, columns["备注"]).value or "")
-                self.assertFalse(any("待核对" in warning for warning in result.warnings))
+                    self.assertNotIn("【加班调休待核对】", ws.cell(row, columns["备注"]).value or "")
+                    self.assertIsNone(ws.cell(row, columns["备注"]).comment)
+                # 通用结转说明也含“待核对”，实际人员异常带有完整标记。
+                self.assertFalse(any("【加班调休待核对】" in warning for warning in result.warnings))
             finally:
                 book.close()
             self.assertEqual(history.read_bytes(), original)
@@ -161,7 +165,9 @@ class DataStatisticsTest(unittest.TestCase):
                 book.close()
             book = load_workbook(source)
             for row in book.active.iter_rows(min_row=2):
-                row[3].value = row[3].value.replace(month=2)
+                day = row[3].value
+                # 一月样本含 30 日；切到二月时按目标月末生成合法日期。
+                row[3].value = day.replace(month=2, day=min(day.day, monthrange(day.year, 2)[1]))
             book.save(source)
             book.close()
             following = generate_data_statistics_reports(source, root / "february", existing_summary_path=result.output_file,
@@ -1298,6 +1304,8 @@ class DataStatisticsTest(unittest.TestCase):
                 for use_week, use_month in ((False, False), (True, False), (False, True), (True, True)):
                     spec = spec_for("data_statistics")
                     values = default_values(spec)
+                    # 本例验证日期范围，简化考勤样本不含公司/驻地，明确使用统一规则。
+                    values["attendance_auto_rules"] = False
                     for enabled, prefix in ((use_week, "week"), (use_month, "month")):
                         if enabled:
                             values.update({f"{prefix}_start": f"{year}-09-06", f"{prefix}_end": f"{year}-10-24"})
