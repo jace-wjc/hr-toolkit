@@ -117,3 +117,14 @@
 - 实际验证：该探针修复前复现用户同一异常，修复后通过；非 Windows 与 headless 平台的两个相关用例也通过，共 3 项。修改的 Python 文件通过 Python 3.8 语法解析。
 - 未验证：用户另一台 Mac 的具体环境、修复后的远程 CI、真实 Windows GDI 和 Win7 实机；未执行全量测试、构建、打包或发布。
 - 防复发：验证 Qt 启动时保留生产导入顺序并实际触发信号；不能只凭窗口出现或进程退出 0 判断回调无异常。
+
+## 2026-11-17：本地交互回归——下拉框使用隐式信号参数
+
+- 来源：用户本地 Qt 日志；不是新增远程 CI 失败，用户提交号未提供。本地可复现主题、语言和考勤选项三个处理函数的警告。
+- 报错：`Parameter "index" is not declared. Injection of parameters into signal handlers is deprecated.`，对应 `AppearanceDialog.qml` 两处及 `AttendanceChoiceField.qml` 一处 `onActivated`。
+- 根因：处理函数直接使用隐式注入的 `index`；只创建控件或直接调用 Python 的主题/语言设置不会触发该警告，必须执行 ComboBox 的 `activated(index)` 信号。
+- 修复：三个处理函数均改为 `function(index) { ... }`，保留原来的模型索引、主题/语言值及公司/地点原始值；语法沿用项目 Qt 5.15/Qt 6 共用的显式信号参数写法。
+- 回归：新增 `tests/qt_choice_activation_probe.py`，激活生产外观与考勤控件，检查深浅主题、两种语言和“公司默认”/“杭州”的原值，并将参数弃用警告列为失败条件。
+- 实际验证：本机 Python 3.13 / Qt 6.11.2 中，修复前用例捕获三个相同警告并失败，修复后通过；修改的 Python 文件通过 Python 3.8 语法解析，现有路由覆盖 presentation 和 Win7 兼容栈。
+- 未验证：用户另一台 Mac、修复后的远程 CI、Qt 5.15 / Win7 实机；未执行全量测试、构建、打包或发布。
+- 防复发：涉及信号参数的 UI 测试需实际触发控件信号，并检查标准错误中的 Qt 告警，不能仅检查后端字段值。

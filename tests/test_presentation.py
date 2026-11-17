@@ -215,6 +215,15 @@ print('translation shutdown probe reached exit', flush=True)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn('translation shutdown probe reached exit', completed.stdout)
 
+    def test_choice_signals_preserve_values_without_implicit_parameters(self):
+        completed = subprocess.run(
+            [sys.executable, '-X', 'faulthandler', str(ROOT / "tests/qt_choice_activation_probe.py")], cwd=str(ROOT),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("choice activation: theme, language and raw attendance values OK", completed.stdout)
+        self.assertNotIn("Injection of parameters into signal handlers is deprecated", completed.stdout + completed.stderr)
+
     def test_calendar_year_editing_has_no_grouping_or_binding_loops(self):
         completed = subprocess.run(
             [sys.executable, '-X', 'faulthandler', str(ROOT / "tests/qt_date_field_probe.py")], cwd=str(ROOT),

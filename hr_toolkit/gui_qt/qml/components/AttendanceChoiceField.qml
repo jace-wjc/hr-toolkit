@@ -136,6 +136,6 @@ Item {
                 text: optionDelegate.text
             }
         }
-        onActivated: field.value = field.choices[index]
+        onActivated: function(index) { field.value = field.choices[index] }
     }
 }

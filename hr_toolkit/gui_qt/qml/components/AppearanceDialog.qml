@@ -23,7 +23,7 @@ AppDialog {
             model: dialog.backend ? dialog.backend.themeOptions : []
             textRole: "label"
             currentIndex: dialog.optionIndex(model, dialog.backend ? dialog.backend.theme : "light")
-            onActivated: dialog.backend.setTheme(model[index].value)
+            onActivated: function(index) { dialog.backend.setTheme(model[index].value) }
         }
         Label { text: Ui.text("语言"); color: Ui.color("text") }
         AppComboBox {
@@ -32,7 +32,7 @@ AppDialog {
             model: dialog.backend ? dialog.backend.languageOptions : []
             textRole: "label"
             currentIndex: dialog.optionIndex(model, dialog.backend ? dialog.backend.language : "zh_CN")
-            onActivated: dialog.backend.setLanguage(model[index].value)
+            onActivated: function(index) { dialog.backend.setLanguage(model[index].value) }
         }
         Label {
             Layout.fillWidth: true; wrapMode: Text.Wrap
