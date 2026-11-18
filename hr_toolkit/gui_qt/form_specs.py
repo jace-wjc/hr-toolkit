@@ -153,7 +153,7 @@ SPECS: tuple[ToolUiSpec, ...] = (
                 "endId": "week_end",
                 "startPlaceholder": "YYYY-MM-DD",
                 "endPlaceholder": "YYYY-MM-DD",
-                "hint": "两项均留空按整月统计",
+                "hint": "两项留空时按周报资料推算范围",
                 "presetGroup": "week",
                 "presets": [
                     {"label": "本月", "value": "this_month"},

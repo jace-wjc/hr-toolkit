@@ -1,6 +1,78 @@
 """US English display catalog. Numbered placeholders preserve source data."""
 
 MESSAGES = {
+ "默认“按公司和驻地自动匹配”。点“查看本次分配”核对，点“管理识别规则”维护规则或修改已保存的选择。南昌内置规则为 3 个月、每天 7 小时，深圳为每天 8 小时。": "The default is Match by company and work location. Click Review Assignments to check the current batch. Open Manage Rules to edit rules and saved choices. The built-in Nanchang rule is three months and seven hours per day. Shenzhen uses eight hours per day.",
+ "如果这一批用相同规则，可选“统一设置，可添加人员例外”，填写有效期和每天工时，为个别人另设规则。还可选择加班和调休备注按天或按小时显示，按需增加公出、出差列。": "If the batch shares one rule, select Use common rules with individual exceptions. Set the validity period and hours per day, then add any staff exceptions. Attendance remarks can use days or hours. Columns for off-site work and business trips are optional.",
+ "点“开始打包”，结果按员工归类。需要发送压缩包时勾选“生成 ZIP 压缩包”。打开“《员工资料提取汇总与缺失清单》.xlsx”核对找到和缺少的材料。": "Click Package Materials. Results are grouped by employee. Select Create ZIP Archive to make an archive to share. Open 《员工资料提取汇总与缺失清单》.xlsx to see which materials were found or are missing.",
+ "如果生成“资料待确认.xlsx”，先打开同目录的“资料待确认预览.html”核对原图。启用 OCR 缓存时，每组填一行确认员工，必要时补工号或证件尾号，在核对列填“是”。保存关闭后重新打包。": "If 资料待确认.xlsx is generated, open 资料待确认预览.html in the same folder to review the original images. With OCR caching enabled, fill in the employee on one row per group, add an employee number or ID suffix if needed, and enter 是 in the confirmation column. Save and close the workbook, then run packaging again.",
+ "新批次只保存结果。要复用项目中的文件，在右侧选中它，点“带入当前工具”。以前批次已有的上传资料仍可查看，升级前单独归档的资料可在“旧版记录”中查找。": "New batches save results. To reuse a project file, select it on the right and choose Use in Current Tool. Inputs kept in older batches remain available. For material archived separately before upgrading, open Legacy History.",
+ "输入问题，可粘贴或拖入表格、截图。Enter 发送，Shift+Enter 换行。生成时可以停止，回复完成后可点“重新生成”。要接着以前的问题问，打开“历史对话”选回那次对话。": "Type a question or paste or drag in a spreadsheet or screenshot. Enter sends the message and Shift+Enter adds a line. You can stop a response, regenerate it after completion, or reopen a previous conversation in Chat History.",
+ "例如月报选 9 月 6 日到 10 月 24 日，9 月 1 日提交的记录不计入。月报按起始月份确定截止日，这次核对的是 9 月月报，截止到 10 月 2 日 17:00。": "For example, a monthly range from September 6 to October 24 excludes a September 1 submission. The start month sets the deadline, so this run checks September reports, due October 2 at 17:00.",
+ "同一个人上一期周报已交，周二至周四又交一份，这份算提前交的下一期周报，下一期记为已交。": "If someone already submitted the previous weekly report, a second submission on Tuesday through Thursday counts as an early submission for the next week. That week is marked as submitted.",
+ "归属期超出范围的周报本次不统计。例如 6 月 26 日（周五）提交的周报属于 6 月 29 日截止那期。范围选到 6 月 24 日时不计入。下次要计入这份提前提交的周报，开始日要在 6 月 26 日或以前，并包含 6 月 29 日这个截止日。": "A weekly report is excluded if its deadline falls outside the selected range. For example, a report submitted on Friday, June 26 is due Monday, June 29. A range ending June 24 excludes it. To count it in the next run, start on or before June 26 and include the June 29 deadline.",
+ "需要查哪份文件或哪张工作表被跳过时，查看页面下方的“运行记录”。可以选中相关记录复制，也可以点“复制全部”。": "To find out which file or worksheet was skipped, check the Run Log at the bottom of the page. Select the relevant entries to copy them or click Copy All.",
+ "通用操作": "General Guides",
+ "项目、资料与结果": "Project Files and Results",
+ "确认列名和工作表": "Columns and Worksheets",
+ "使用 Sage 助手": "Using Sage",
+ "设置、更新与下载": "Settings and Updates",
+ "历史加班结转": "Overtime Carryover",
+ "工具按身份证号码关联花名册。费用所属期优先取明细行，缺失时再看表头注明的期间、文件名和外层目录名。": "Staff are matched to the roster by ID number. The contribution period comes from the detail row first, then the period above the column headers, the filename, or the enclosing folder.",
+ "源表已经注明缴费性质时，以源表为准。其余记录默认将大于 0 且低于 500 的基数按补差处理。当地没有这项规则时，请取消“基数低于 500 按补差处理”。": "An explicit payment type in the source takes priority. Otherwise, a contribution base greater than 0 and less than 500 counts as an adjustment by default. Clear the low-base adjustment option for locations that use a different rule.",
+ "在“社保明细表.xlsx”查看每人的缴费。各险种分开显示补差期间，例如“医疗2026年7月-8月补差”。该险种没有补差或无法识别期间时，表头只显示险种和“补差”。": "Open 社保明细表.xlsx for contributions by person. Each insurance type shows its own adjustment period. For example, 医疗2026年7月-8月补差 means a medical insurance adjustment for July–August 2026. If there is no adjustment or its period is unknown, the heading has no date.",
+ "按单位核对时，打开“按参保单位参保地拆分明细”文件夹。查看总数或查找未匹配人员时，打开“社保汇总表.xlsx”及其中的“异常提醒”。": "For separate details by employer and location, open the 按参保单位参保地拆分明细 folder. For totals and unmatched staff, open 社保汇总表.xlsx and check the 异常提醒 worksheet.",
+ "公积金、残保金、管理费没有数据时留空。请核对账单与花名册不一致的记录，以及标为“待确认历史缴费”的金额。": "Housing fund contributions, disability fund fees, and management fees are left blank when no data is available. Review discrepancies with the roster and any amounts flagged as historical payments needing confirmation.",
+ "把各保单的人员清单与人力资源分析表中的花名册对照，找出需要加保或减保的人员。": "Compare staff on each policy with the roster in the HR analysis workbook to find who needs to be added to or removed from coverage.",
+ "花名册中在职、保单中没有的人列为“需加保”。有这类人员时，还会生成“人力资源分析表_保险预警.xlsx”，可在花名册副本中逐人核对。": "Active employees listed in the roster but missing from the policies are flagged for coverage. If any are found, a copy named 人力资源分析表_保险预警.xlsx marks them in the roster for review.",
+ "保单中有、花名册中没有或已标记离职的人列为“需减保”。加减保名单供人事核对。": "Policyholders missing from the roster or marked as having left are flagged for removal. Review both lists before changing coverage.",
+ "先选择考勤、周报或月报原始文件，也可以选文件夹或压缩包。上传“应汇报人员名单”时，三项都只统计名单内人员，考勤按名单顺序展示。留空时，处理所选原始资料中出现的全部人员。": "Select the attendance, weekly report, or monthly report exports, or their folder or archive. An Expected Reporter List limits all three statistics to those people and sets the attendance display order. Leave it empty to process everyone found in the selected data.",
+ "需要查谁从未交过周报或月报时，请上传应报的完整名单。只凭提交记录，工具无法知道还有哪些人应交。": "To find people who have never submitted a weekly or monthly report, supply the full list of expected reporters. Submission records alone cannot identify everyone who was expected to report.",
+ "周报和月报分别选择起止日期。可以点日历、手动输入，或点“本月”“上月”。周报还可选“本周”“上周”。每组要么填齐两端，要么点“清空”。": "Set the weekly and monthly ranges separately. Pick dates on the calendar, type them, or use This Month or Last Month. The weekly range also offers This Week and Last Week. Enter both dates for a range or use Clear.",
+ "周报日期留空时，先取文件名上的日期范围。文件名没有范围时，从最早提交所在月的 1 日取到最后提交日。要核对完整月份，请选“本月”“上月”或手动选齐整月。": "With no weekly range, the tool first looks for a date range in the filename. Otherwise it uses the first day of the earliest submission month through the last submission date. To check an entire month, choose This Month or Last month, or enter the full range.",
+ "设置周报范围后，只统计截止周一落在范围内的各期，开始日期以前的提交也会排除。月报留空使用全部月报记录，填写范围则按实际提交日期筛选，包含首尾两天。": "With a weekly range, only periods whose Monday deadline falls inside it count, and submissions before the start are excluded. Monthly reports use all submissions by default. A monthly range filters by the actual submission date and includes both end dates.",
+ "此页上方也能打开“地区编号维护”。编号用于当前项目的档案入库，设置方法见左侧“档案入库”。": "You can also open Region Codes at the top of this page. These codes are used when importing archives into the current project. See the archive import guide on the left for instructions.",
+ "请在左侧选择要查看的教程。": "Choose a guide on the left.",
+ "周报截止次周一 17:00，月报截止次月 2 日 17:00，均从 17:01 起记超时。周二至周四补上一期算超时，周五起算下一期。": "Weekly reports are due the following Monday at 17:00. Monthly reports are due on the second of the following month at 17:00. Submissions are late from 17:01. A Tuesday–Thursday catch-up counts as late for the previous week. Friday starts the next period.",
+ "多家公司可以一起导入。出现“补充考勤人员信息”时，选中同公司、同驻地的人，填写所属公司和实际工作地点，核对规则。同一文件里有不同驻地时切到“按人员”。有多组就逐组点“应用到这组人员”，最后点“使用以上设置并继续”。": "You can import several companies together. In Complete Attendance Details, select people with the same employer and work location, enter those details, and check the rule. Use By person for different locations in one file. If several groups need attention, choose Apply to This Group for each, then Apply and Continue.",
+ "只做本次考勤可留空“历史考勤汇总”。要接着上月的加班余额做，请选上月已核对的汇总表，抵扣状态的选法和示例见左侧“历史加班结转”。": "For current attendance only, leave Previous attendance summary empty. To carry over overtime, select last month's verified summary. See Overtime Carryover on the left for deduction options and an example.",
+ "点“生成统计”后打开“考勤周月报汇总表.xlsx”。“考勤统计”和“周月报统计”看汇总，两张异常明细表可追查原始记录。漏打卡时段无法确定时请人工核对。周月报只统计次数。": "Click Generate Statistics and open 考勤周月报汇总表.xlsx. The 考勤统计 and 周月报统计 sheets show totals. Use the two exception sheets to trace individual records. Check missed punches manually if their time is unclear. Report exceptions are counted without calculating deductions.",
+ "做 9 月考勤时，把 9 月原始考勤放在主输入区，再在“历史考勤汇总”选已核对的 8 月汇总表。工具会结转有效加班和待核对事项，事假、病假、调休和日常备注只取本次资料。": "For September attendance, select the original September exports as inputs and August's verified workbook as the Previous attendance summary. Eligible overtime and unresolved flags carry over. Personal leave, sick leave, compensatory leave, and routine remarks come from the current inputs.",
+ "在“旧表抵扣状态”中，看旧表各月的加班列。只有最后的“累计剩余加班”按公式减少，各月加班列还没扣时，选“尚未抵扣”。": "For Previous deduction status, inspect the monthly overtime columns in the old workbook. Choose Not deducted if only the cumulative balance formula accounts for leave and the monthly figures are still unchanged.",
+ "各月加班列已经人工改成余额，选“全部已人工抵扣”。只有部分人改过，选“部分人员已人工抵扣”并填写这些人的姓名，多人用顿号分隔，重名时填公司/部门/姓名。": "Choose All deducted manually if the monthly figures already show remaining balances. If this was done for only some people, choose Deducted manually for some people and list their names separated by 、. For duplicate names, enter company/department/name.",
+ "工具先从最早仍有效的月份抵扣旧月调休。例如 6 月和 7 月各剩 0.5 天、7 月调休 0.5 天，做 8 月汇总时先扣 6 月，结转 7 月的 0.5 天。已人工扣过的人员直接结转余额。": "The oldest eligible overtime covers the previous month's leave first. If June and July each have 0.5 days and July has 0.5 days of leave, the August summary uses June's balance and carries over July's 0.5 days. Manually adjusted balances carry over as entered.",
+ "加班有效期可选 3、6 或 12 个月，每天按 7 或 8 小时换算，按人员适用的公司和驻地规则计算。有效期截至月底，未到期余额可跨年。旧表年月不清楚时填写“历史汇总月份”，例如 2026-12。": "Company and location rules set a 3-, 6-, or 12-month validity period and a 7- or 8-hour day. Overtime expires at month-end, so eligible balances can carry into the next year. If the old workbook's period is unclear, enter the Previous summary month, such as 2026-12.",
+ "旧月调休超过可用余额时，仍会生成结果，并在“考勤统计”中高亮标为待核对。请回查该人的旧表，不会借用以后月份的加班。": "If previous leave exceeds the available balance, results are still generated. The attendance sheet, 考勤统计, highlights the entry for review. Check the old summary for that employee. Future overtime cannot cover the shortfall.",
+ "工资表需要有汇总页和明细页。页名或列名不同时，按提示选择实际工作表，再对照样例确认入职公司、姓名和身份证号码等对应列。": "The workbook needs a summary sheet and a detail sheet. If sheet or column names differ, select the actual worksheets when prompted, then use sample values to identify the hiring company, name, and ID columns.",
+ "点“打开结果目录”查看各公司的文件。核对明细只包含该公司员工，汇总表引用拆分后的分段小计。": "Click Open Results Folder to see the company workbooks. Check that each detail sheet contains only that company's employees and that the summary references its section subtotals.",
+ "点“开始合并”。遇到不同模板，按原表样例选择姓名、身份证号码和应发工资所在列。已有汇总表只需对应姓名、身份证号码。同一类模板确认一次即可，可记住当前项目的选择。": "Click Merge. For unfamiliar templates, use the sample values to choose the name, ID, and gross pay columns. An existing summary only needs name and ID mappings. Confirm each type of template once and optionally save the mappings for this project.",
+ "要重选工资列，先选工资表，再进“模板设置”→“本次文件确认”，点“开始检查并处理”。可以改选列或点“恢复自动识别”。确实要排除整类工资明细时，勾选“本次不合并这一类文件”，在结果的“未合并文件”页核对。": "To remap payroll columns, select the workbook, open Template Settings, choose Review Current Files, then Check and Process. Change the column or restore automatic recognition. To exclude a whole type of payroll detail, select the option to skip that template and review the 未合并文件 sheet in the result.",
+ "在“个人薪资汇总表.xlsx”中按身份证号码查人、按月份查金额。本次同人同月的多条明细会累加并提醒。旧汇总已有非零金额会保留，空白或 0 可补入。": "In 个人薪资汇总表.xlsx, find employees by ID and amounts by month. Multiple new entries for the same person and month are added together and flagged. Existing nonzero amounts are preserved. Blank or zero amounts can be filled.",
+ "工资月份优先取文件名，缺失时取表内日期。若提示应发工资公式没有可用结果，请在 Excel 或 WPS 中重新计算、保存原工资表，再导入。": "The payroll month comes from the filename first, then dates inside the workbook. If a gross pay formula has no usable result, recalculate and save the original in Excel or WPS, then import it again.",
+ "追加前按人员和异动记录核对。已匹配记录只补空白字段，避免重复追加同一条异动。": "Employees and change records are matched before appending. Only empty fields in a matching record are filled, so the same change is not added twice.",
+ "读取增补表、离职、转正和调整。出现“确认工作表”时，选出相应业务所在页。其他页会在日志中列为未处理，可据此检查是否选对。": "The tool reads additions, departures, regularizations, and transfers. If asked to confirm worksheets, choose the sheet for each type. Other sheets are listed as unprocessed in the log so you can check your selection.",
+ "公司简称无法唯一对应时，点“管理对应规则”保存简称与全称。遇到地市、所属专业或项目写法不同时，只勾选确实同义的项目，例如“南昌”和“南昌市”。以后可在“管理名称规则”中修改或删除。": "If a company abbreviation is ambiguous, save it with the full name in Manage Company Mappings. Confirm city, specialty, or project names only when they mean the same thing, such as 南昌 and 南昌市. Edit or remove the mappings later in Manage Name Mappings.",
+ "勾选高亮后，汇总表副本用浅绿标出补入值，浅黄标出双方已有值的差异。打开核对报告中的“核对说明”看颜色含义，再到“预警明细”查具体原因。": "With highlighting enabled, light green marks newly filled fields and light yellow marks differences between existing values in the summary copy. See 核对说明 in the reconciliation report for the legend and 预警明细 for individual issues.",
+ "需要改编号时，打开页面上方的“地区编号维护”。当前项目内，同地区或同编号优先用自定义设置。可以添加、修改、删除，删除后恢复对应的内置设置。": "Open Region Codes at the top of the page to add, edit, or remove project-specific codes. A custom entry takes priority for the same region or number. Removing it restores the corresponding built-in mapping.",
+ "在“档案表汇总表.xlsx”核对编号。工具从文件名、表头标题或公司名识别地区，例如按内置设置“茂名项目部”对应 11。识别不到会留空并提醒。": "Check codes in 档案表汇总表.xlsx. The region is identified from the filename, sheet heading, or company name. For example, the built-in mapping assigns 11 to 茂名项目部. An unrecognized region is left blank and flagged.",
+ "选择员工资料库根目录。在“目标人员”输入姓名或身份证号码，多人用逗号隔开。也可以留空，在“员工名单 Excel”选择名单文件。": "Select the root of the employee material library. In Target Employees, enter names or ID numbers separated by commas. Alternatively, leave the field empty and choose an Employee Roster Excel file.",
+ "资料已经按人分文件夹时，选“按人员文件夹查找”。勾选“全部”会复制匹配人员的整个文件夹。只要合同或证件时，取消“全部”，勾选所需材料。常用组合可保存为预设，也可添加自定义材料。": "Use Employee Folders if there is a folder for each person. All copies the entire matched folder. For specific items such as contracts or IDs, clear All and select the materials. Save frequent combinations as presets or add custom materials.",
+ "资料混放时选“无序平铺资料库（OCR 索引）”。首次在本机建立索引，以后复用未变化文件的识别结果。索引默认保存在当前用户的缓存目录。": "For mixed files, select Unorganized Flat Library (OCR Index). The first run builds a local index. Later runs reuse recognition results for unchanged files. The default index is in the current user's cache directory.",
+ "点“预览”核对清单，再点“确认并执行此方案”。改好的文件夹和清单在本批“处理结果”中，电脑上的原目录保留原名。": "Click Preview to check the list, then Confirm and Run This Plan. The renamed copy and checklist are in the batch's 处理结果 folder. The original folder keeps its original names.",
+ "先新建或打开工作项目，再选择左侧工具。同一项目可以保存不同工具的处理结果。": "Create or open a project, then select a tool on the left. A single project can store results from several tools.",
+ "从电脑选择资料，或把本地文件拖进对应区域。“最近使用”可重新选择本工具用过的文件或文件夹。要核对原件，在已选资料上点右键打开文件或所在文件夹。": "Choose files from your computer or drag local files into the relevant input. Recent lets you reselect files and folders used with this tool. Right-click a selected item to open the original file or its folder.",
+ "工具直接读取原文件，重新处理时仍需找到它。原件改名或移动后，请从新位置重新选择。选错资料可以移除后再选。": "The tool reads the originals directly and needs them again when you rerun it. If you rename or move a file, reselect it from its new location. You can remove an incorrect selection and choose again.",
+ "旧版 .xls 文件若提示无法安全转换，请用 Excel 或 WPS 打开，另存为 .xlsx 后再选新文件。": "If an older .xls file cannot be converted safely, open it in Excel or WPS, save a copy as .xlsx, and select the new file.",
+ "点击工具的处理按钮。若提示确认模板或补充设置，请按提示完成后继续。完成后点“打开结果目录”，或在右侧“项目文件”按工具和批次查找“处理结果”。": "Click the tool's processing button and complete any requested template or setting confirmations. When finished, click Open Results Folder or find 处理结果 under the tool and batch in Project Files.",
+ "开始处理后，工具会先识别所需的工作表和列名。遇到提示时，先看当前文件和要找的业务内容。": "When you start processing, the tool checks the worksheets and columns it needs. If prompted, check which file and type of data it is asking about.",
+ "“确认工作表”问的是数据在 Excel 底部哪个标签页。按预览选实际页名。确实缺少可选页时，选“本次没有这类工作表”。页名固定可勾选记住。所需页都已找到时，多余页只在日志中提示未处理。": "Confirm Worksheets asks which Excel tab holds the data. Use the preview to choose the actual tab. If an optional sheet is absent, choose No worksheet of this type for this run. Save the sheet name if it is consistent. Once all required tabs are found, extra tabs are just noted in the log.",
+ "“确认列名”问的是哪一列装着所需的数据。例如要找“姓名”，就选样例里显示员工姓名的列。预览中的表头行选错时，点正确的行。核对后勾选确认框，点“确认并继续处理”。": "Confirm Columns asks which column contains the requested information. For Name, choose the column whose sample values are employee names. If the wrong header row is selected, click the correct row. Tick the review checkbox and click Confirm and Continue.",
+ "普通列名确认默认仅本次使用。像“222”这样可能换含义的列，保留这个默认即可。模板固定时才勾选记住，下次遇到相同工作表和表头可直接处理。": "Regular column selections apply only to this run by default. Keep that setting if a heading such as “222” may mean something different next time. For a stable template, save the choice to reuse it with the same sheet and headers.",
+ "在支持模板设置的工具中，点“模板设置”。用“列名 / 工作表设置”添加、修改或删除常用名称，用“已记住的选择”修改或删除整套对应关系。多月工资合并的已选模板在该工具内单独调整。": "Open Template Settings where available. Use Column & Worksheet Settings to add, edit, or remove aliases and Saved Mappings to edit or delete a set of column selections. Monthly payroll templates are managed inside the payroll merge tool.",
+ "点击 Sage 图标或按 Ctrl+K。首次使用时点“去配置 API Key”，选择 AI 服务并填写密钥。": "Click the Sage icon or press Ctrl+K. On first use, choose Configure API Key, select an AI service, and enter your key.",
+ "发送时，问题、对话上下文及所附内容会发往所选 AI 服务。项目文件只有主动附加才会随消息发送，含个人信息的截图请先自行遮盖。": "Sending shares your question, conversation context, and attachments with the selected AI service. Project files are shared only when you attach them. Cover personal information in screenshots before sending.",
+ "右上角“设置”可切换中文、英文和深浅色外观。点“更新记录”查看各次更新了哪些功能，点左下角“检查更新”检查本机版本。": "Use Settings at the top right to switch between Chinese and English or choose a light or dark theme. Open Release Notes to see changes, or Check for Updates at the bottom left to check your installed version.",
+ "要把工具发给同事，点“更新记录”右侧的“复制下载地址”，按对方电脑的系统选 Windows 7 或 Windows 10/11。复制的是最新版安装包链接，与本机安装版本无关。": "To share the app, click Copy Download Link next to Release Notes. Choose Windows 7 or Windows 10/11 for your colleague's computer. The link always points to the latest installer, regardless of your installed version.",
+ "Windows 7 请选择 Win7 专用包，Windows 10 或 11 请选择 Win10/11 包。Mac 和其他系统请向管理员索取安装包。获取地址失败时，重新点击获取。": "Select the Win7 installer for Windows 7 and the Win10/11 installer for Windows 10 or 11. For Mac or other systems, ask your administrator for an installer. If the link cannot be retrieved, try again.",
  "已选": "Selected",
  "保存设置": "Save Settings",
  "将应用": "To apply",
@@ -356,7 +428,6 @@ MESSAGES = {
  '月份留空时，增员按汇总表入职日期、减员按离职日期分别确定月份，不按文件名推断。某类无日期记录时请填写核对月份。': 'If the month is blank, onboarding and departures use their respective summary row dates, not the file name. Enter a month if a category has no dated records.',
  '有流程状态列时自动排除未发起、退回；无状态列时按导入记录继续核对，并在运行日志提示未进行状态筛选；办结时间不作为状态依据。': 'When workflow status is available, Not Initiated and Returned are excluded automatically. Otherwise, imported records are checked as provided and the run log notes that status filtering was unavailable. Completion time is not a status.',
  '离职默认读取实际离职日期；若只有预计离职日期，先确认业务口径再切换日期列，工具不会自动替代。': 'Actual departure date is the default. If only an expected date is available, confirm the business rule before switching columns; substitution is never automatic.',
- '公司按全称或唯一的简称关键词对应；不唯一时填写“简称=全称”，多组用分号分隔。': 'Companies match by full name or unique short-name keywords. Resolve ambiguity with short name=full name, separating entries with semicolons.',
  '重复入职流程、姓名或工号冲突、日期缺失均列出核实；身份证脱敏或数字存储时不自动补齐。': 'Duplicate onboarding workflows, conflicting names or employee numbers, and missing dates are listed for review. Masked or numeric-stored IDs do not trigger automatic filling.',
  '结果：单独生成核对报告和汇总表副本。双向缺失、字段差异写入预警明细；仅明确匹配的空白字段从流程补入，不增加或删除人员、不覆盖已有值和公式、不改源文件。': 'Outputs are a check report and a summary copy. Missing records in either direction and field differences are reported. Only unambiguously matched blanks are filled; people, existing values, formulas, and source files are preserved.',
  '学历、学校、专业读取最高学历信息，岗位读取岗位，家庭住址读取户籍地址；补入记录保留字段和来源，关闭高亮也能查看。': 'Education, school, and major use the highest qualification; job and registered address supply the corresponding fields. The fill log records fields and sources even when highlighting is off.',
@@ -662,12 +733,8 @@ MESSAGES = {
                                                  'the HR analysis workbook.',
  '步骤：选择单个异动汇总表、多个汇总表，或包含汇总表的文件夹；再选择人力资源花名册。': 'Select personnel-change summaries or a folder, then select '
                                               'the employee roster.',
- '步骤：选择单个文件、多个文件、常见压缩包，或包含这些文件的文件夹。': 'Select one or more files, archives, or a folder containing them.',
  '步骤：选择单个缴费清单、多个清单、常见压缩包，或包含清单的文件夹；再选择参保人员花名册。': 'Select payment lists, archives, or a folder, then select '
                                                  'the insured employee roster.',
- '步骤：选择员工资料库根目录，在第二行选择员工名单表格（Excel），勾选需要的材料类型后点击“开始打包”。': 'Select the employee library folder and an Excel '
-                                                          'roster, choose material types, then click Package '
-                                                          'Materials.',
  '步骤：选择档案汇总表文件、多个文件、常见压缩包，或包含汇总表的文件夹。': 'Select archive-summary workbooks, archives, or a folder containing '
                                         'them.',
  '每人一行': 'One row per employee',
@@ -683,30 +750,8 @@ MESSAGES = {
  '注意：不会清空原花名册；身份证已存在的增员不会重复写入，找不到的减员会在日志提醒。': 'The existing roster is retained. Additions with existing ID '
                                               'numbers are not duplicated; unmatched departures are reported '
                                               'in the log.',
- '注意：人力资源分析表需包含“花名册”工作表；花名册在职但保单没有会提示需加保，保单有但花名册没有或已标记离职会提示需减保。': 'The HR analysis workbook must contain an '
-                                                                  'employee roster worksheet. Active '
-                                                                  'employees missing from a policy are '
-                                                                  'flagged for enrollment; policyholders '
-                                                                  'missing from the roster or marked as '
-                                                                  'departed are flagged for removal.',
  '注意：公司档案表会自动改公司名，新增行会补边框、居中和公式。': 'Company names are updated automatically in company archives. New rows '
                                    'receive borders, alignment, and formulas.',
- '注意：公积金、残保金、管理费暂无数据时留空；账单识别结果与花名册不一致时会提醒。': 'Housing fund, disability employment fund, and management fees '
-                                             'stay blank when unavailable. Differences between detected '
-                                             'bills and the roster are reported.',
- '注意：只处理增补表、离职、转正、调整；薪酬、产值和同行对比分析暂不处理。': 'Only additions, departures, employment confirmations, and '
-                                         'adjustments are processed. Compensation, output value, and peer '
-                                         'comparisons are not processed.',
- '注意：周月报异常只统计次数和明细，不计算扣款金额。': 'Weekly and monthly report exceptions include counts and details, without '
-                              'calculating deductions.',
- '注意：工资表文件名或表内日期要能识别月份；重复人员或重复月份会在执行结果里提醒。': 'The month must be recognizable from the payroll filename or '
-                                             'workbook dates. Duplicate employees or months are reported in '
-                                             'the results.',
- '注意：源工资表不会被修改；如果模板列名或表结构变化，先发给开发确认。': 'Source payroll workbooks are unchanged. Contact the developer before '
-                                       'using a changed header layout or template structure.',
- '注意：编号会从文件名或表头标题识别项目地区，如“茂名项目部”自动填 11；识别不到会留空并提醒。': 'Region codes are detected from filenames or header '
-                                                     'titles. If the region cannot be detected, the code '
-                                                     'stays blank and a notice is shown.',
  '浅色': 'Light',
  '浏览文件 · 选择文件夹': 'Browse Files · Select Folder',
  '深色': 'Dark',
@@ -724,11 +769,8 @@ MESSAGES = {
                              'reuse it.',
  '点击“下载更新”后会打开下载地址，请按安装提示完成更新。': 'Download Update opens the download page. Follow the installation '
                                  'instructions to update.',
- '点击“开始合并”后，结果会保存到当前工作项目，源文件请自行保管。': 'Click Merge to save results to the current project. Keep your source '
-                                     'files.',
  '点击“开始汇总”后，结果会保存到当前工作项目，源文件请自行保管。': 'Click Consolidate to save results to the current project. Keep your '
                                      'source files.',
- '点击“打开所在文件夹”可直接查看本次生成的结果目录。': "Open the containing folder to view this run's results.",
  '点击“更新花名册”后，结果会保存到当前工作项目，源文件请自行保管。': 'Click Update Roster to save results to the current project. Keep your '
                                       'source files.',
  '点击浏览文件': 'Click to browse files',
@@ -750,11 +792,6 @@ MESSAGES = {
  '留空使用“原文件名”列': 'Leave blank to use the original-name column',
  '留空使用“新名称”列': 'Leave blank to use the new-name column',
  '留空处理所选文件类型的全部项目': 'Leave blank to process all items of the selected type',
- '目前规则：按身份证关联花名册；费用所属期优先读取明细行和原文件名，文件夹或压缩包名称只辅助识别缴纳地和缴纳单位。': 'Employees are matched to the roster by ID '
-                                                             'number. Payment periods come from detail rows '
-                                                             'and original filenames; folder and archive '
-                                                             'names only help identify payment locations and '
-                                                             'organizations.',
  '目标人员': 'Target Employees',
  '相对路径：': 'Relative path:',
  '知道了': 'Got It',
@@ -818,9 +855,6 @@ MESSAGES = {
                                             'are not duplicated; only blank material fields are filled.',
  '结果：按公司生成独立 Excel；已有身份证不重复新增，只补充空白字段。': 'A separate Excel archive is generated for each company. Existing '
                                          'ID numbers are not duplicated; only blank fields are filled.',
- '结果：按姓名、身份证号、月份合并；没有工资的月份填 0；已存在的人员月份不会覆盖。': 'Payroll is merged by name, ID number, and month. Months '
-                                              'without pay are filled with 0; existing employee-month '
-                                              'entries are not overwritten.',
  '前几列': 'Previous Columns',
  '功能不可用': 'Feature Unavailable',
  '功能更新': 'New Features',
@@ -887,30 +921,6 @@ MESSAGES = {
  '员工资料库路径（只读检索）': 'Employee Library Folder (read-only)',
  '员工资料打包': 'Employee Materials',
  '员工资料智能检索与打包': 'Find & Package Employee Materials',
- '周报统计日期（可选）：填写如 2026-06-02 至 2026-06-30，只统计范围内周一截止的周报；留空按整月统计。适合 1 号正好是周一的月份，避免把上月最后一周重复统计。': 'Weekly '
-                                                                                               'report dates '
-                                                                                               '(optional): '
-                                                                                               'enter a date '
-                                                                                               'range to '
-                                                                                               'include only '
-                                                                                               'reports with '
-                                                                                               'Monday '
-                                                                                               'deadlines in '
-                                                                                               'that range. '
-                                                                                               'Leave both '
-                                                                                               'dates blank '
-                                                                                               'for the '
-                                                                                               'whole month. '
-                                                                                               'This helps '
-                                                                                               'avoid '
-                                                                                               'counting the '
-                                                                                               'previous '
-                                                                                               "month's "
-                                                                                               'final week '
-                                                                                               'again when '
-                                                                                               'the month '
-                                                                                               'begins on a '
-                                                                                               'Monday.',
  '周报（可选）': 'Weekly Reports (optional)',
  '回收站': 'Trash',
  '回收站为空，或当前筛选没有匹配结果。': 'Trash is empty, or no items match the current filter.',
@@ -955,19 +965,10 @@ MESSAGES = {
                                                     'built-in blank template.',
  '如果同一文件夹里放了人力资源分析表，工具会自动更新其中的花名册。': 'If the same folder contains an HR analysis workbook, its employee '
                                      'roster is also updated automatically.',
- '如需统计未写周报/月报，请选择“应汇报人员名单”；不选时只能按文件中出现过的人推断。': 'Select an expected reporters roster to identify missing '
-                                               'weekly or monthly reports. Without one, only people '
-                                               'appearing in the source files can be inferred.',
  '姓名': 'Name',
  '姓名/原名称': 'Name / Original Name',
  '姓名/原名称（可选）': 'Name / Original Name (optional)',
  '姓名或身份证，多人用逗号隔开': 'Names or ID numbers, separated by commas',
- '安全说明：确认后会先把所选文件夹复制进当前项目，再在“处理结果”的副本上改名；电脑上的原文件夹不会被修改。': 'The selected folder is copied into the current '
-                                                          'project before renaming the results copy. The '
-                                                          'source folder on your computer is unchanged.',
- '安全说明：纯本地处理、不上传外网；源文件不会修改，OCR 索引模式只会新增隐藏缓存文件。': 'Processing is local and does not upload files. Source '
-                                                 'files are unchanged; OCR indexing adds only a hidden '
-                                                 'cache.',
  '安装更新': 'Install Update',
  '安装程序已启动，正在关闭当前版本…': 'The installer has started. Closing the current version…',
  '完成': 'Done',
@@ -987,20 +988,6 @@ MESSAGES = {
                                                                      'pass validation.',
  '定位': 'Go To',
  '定位问题': 'Show Issues',
- '容易疑惑1：如果某人上一期已经交过周报，周二到周四又交了一份，这份算他提前交的下一期，不记超时，下一期也不会记未写。': 'If someone already submitted the previous '
-                                                               'weekly report, a new submission from Tuesday '
-                                                               'through Thursday counts as an early report '
-                                                               'for the next period, not a late report. The '
-                                                               'next period will not be marked missing.',
- '容易疑惑2：选了统计日期时，归属期超出范围的周报本次不统计、留给下一次。比如范围选到6.24，6.26（周五）交的属于6.29截止那期，本次不会出现。': 'When dates are selected, '
-                                                                                'reports assigned to a '
-                                                                                'deadline outside the range '
-                                                                                'are left for a future run. '
-                                                                                'For example, a June 26 '
-                                                                                'submission assigned to the '
-                                                                                'June 29 deadline is '
-                                                                                'excluded from a range '
-                                                                                'ending June 24.',
  '对应关系未保存': 'Mapping not saved',
  '对应关系未能保存，请重试': 'Could not save the mapping. Try again.',
  '对应列': 'Mapped Column',
@@ -1100,9 +1087,6 @@ MESSAGES = {
  '异动表文件': 'Personnel Changes Files',
  '异动表汇总': 'Consolidate Personnel Changes',
  '异动表汇总与花名册': 'Personnel Changes & Employee Roster',
- '归类方式：支持“按员工归类”（每人建一个文件夹）、“按材料归类”或“平铺输出”，可选自动生成 ZIP 压缩包。': 'Organize by employee (one folder per person), '
-                                                            'by material type, or in a flat folder. ZIP '
-                                                            'output is optional.',
  '当前任务或资料保存尚未结束，请完成后再点击重启以更新。': 'Wait for the current task or file save to finish before restarting to '
                                 'update.',
  '当前功能': 'Current Tool',
@@ -1126,20 +1110,6 @@ MESSAGES = {
  '当前规则：PZDX保额取“每人伤残死亡限额”，按万元显示；PEAC保额固定按60万元。': 'Insurance rules: PZDX coverage uses the per-person '
                                                 'disability/death limit and is shown in units of 10,000 '
                                                 'yuan. PEAC coverage is fixed at 600,000 yuan.',
- '当前规则：考勤公司默认“总部”；周报截止次周一17:00，周二至周四补交算上一期超时（备注写明提交时间），周五起交的算下一期；月报按次月2日17:01及以后算超时。': 'Attendance defaults '
-                                                                                       'to Headquarters. '
-                                                                                       'Weekly reports are '
-                                                                                       'due Monday at 5:00 '
-                                                                                       'PM; late '
-                                                                                       'Tuesday–Thursday '
-                                                                                       'submissions belong '
-                                                                                       'to the previous '
-                                                                                       'period, and Friday '
-                                                                                       'onward to the next. '
-                                                                                       'Monthly reports are '
-                                                                                       'late from 5:01 PM on '
-                                                                                       'the second day of '
-                                                                                       'the next month.',
  '当前选中第 ': 'Selected row: ',
  '当前阶段进度': 'Current Stage Progress',
  '当前项目 / 原名称                         拟用名称（可编辑）                         映射顺序': 'Item / Original '
@@ -1222,8 +1192,6 @@ MESSAGES = {
  '提示': 'Notice',
  '搜索原名称、新名称、路径或问题': 'Search original names, new names, paths, or issues',
  '操作': 'Action',
- '结果：按指定结构导出文件，并自动生成《员工资料提取汇总与缺失清单.xlsx》。': 'Materials are exported in the selected layout, with an employee '
-                                            'extraction summary and missing-materials workbook.',
  '结果：根据汇总表里的增员写入花名册，根据减员在花名册中标记离职。': 'Roster updates add employees from the additions summary and mark '
                                      'departures from the removal summary.',
  '结果：每个入职公司生成一个 Excel，保留表头、格式、公式、小计和底部总计。': 'A separate Excel file is generated for each hiring company, '
@@ -1231,12 +1199,6 @@ MESSAGES = {
                                             'totals.',
  '结果：生成“保险台账.xlsx”，包含保险台账和人员增减预警两个工作表。': 'An insurance workbook is generated with ledger and '
                                          'enrollment-change alert worksheets.',
- '结果：生成“社保明细表.xlsx”和“社保汇总表.xlsx”，汇总表里含基础数据分析和异常提醒。': 'Social insurance detail and summary workbooks are '
-                                                     'generated, including basic analysis and exception '
-                                                     'notices.',
- '结果：生成“考勤周月报汇总表.xlsx”，包含考勤统计、周月报统计、考勤异常明细、周月报异常明细。': 'An attendance and reports workbook is generated with '
-                                                      'statistics and detailed attendance, weekly-report, '
-                                                      'and monthly-report exceptions.',
  '统一各工具的圆角样式，优化更新下载动效，让界面/操作体验更好。': 'Standardized rounded corners and refined update animations for a more '
                                     'consistent interface.',
  '统一更新提示、下载和安装进度窗口；下载、校验、安装分别显示当前状态。': 'Unified update notifications and progress displays, with separate '
@@ -1279,7 +1241,6 @@ MESSAGES = {
  '设置未能保存；可取消勾选记住设置，仅用于本次合并': 'Could not save settings. Uncheck Remember to use them for this run only.',
  '设置立即生效并自动保存。资料名称、Excel 列名和生成结果保持原样。': 'Changes apply immediately and are saved automatically. Filenames, '
                                         'Excel headers, and generated results remain unchanged.',
- '该工具暂未实现。': 'This tool is not implemented yet.',
  '语言': 'Language',
  '说明：上传资料已保存，但本次没有正常生成完整结果。': 'Source files were saved, but this run did not produce complete results.',
  '说明：这次处理没有正常完成，可以再次使用已保存的资料。': 'This run did not finish normally. The saved files can be used again.',
@@ -1362,7 +1323,6 @@ MESSAGES = {
                                                                'the project; keep your originals.',
  '请选择工资表文件，然后点击“开始拆分”。结果会保存在当前项目，源文件请自行保管。': 'Select a payroll workbook and click Split. Results are saved '
                                              'to the project; keep your originals.',
- '请选择左侧已完成的工具：需求1、需求2、需求4、需求5、需求6、需求7、需求8、需求9。': 'Select an available tool from the sidebar.',
  '请选择异动汇总表和人力资源花名册，然后点击“更新花名册”。结果会保存在当前项目，源文件请自行保管。': 'Select personnel-change summaries and an employee '
                                                       'roster, then click Update Roster. Results are saved '
                                                       'to the project; keep your originals.',
@@ -1410,10 +1370,6 @@ MESSAGES = {
                                              'verification states and download cancellation.',
  '资料已带入': 'Files Added to Tool',
  '资料库形式': 'Library Layout',
- '资料库形式：已有姓名文件夹选“原模式”；文件无序混放时选“OCR 索引”，首次建立索引后会复用未变化文件。': 'Use Employee Folders when documents are already '
-                                                          'organized by employee. Use OCR Index for mixed, '
-                                                          'unorganized files. Unchanged files reuse the '
-                                                          'index after the first scan.',
  '资料打包在内存较小的电脑上可自动使用省内存识别方式，减少因内存不足而中断的情况。': 'Material retrieval can use a memory-saving recognition mode on '
                                              'low-memory computers to reduce interruptions.',
  '资料文件夹改名': 'Rename Files & Folders',
@@ -1482,8 +1438,6 @@ MESSAGES = {
  '适用：把 HR 系统导出的考勤结果、周报记录、月报记录自动整理成统计表。': 'Turn attendance, weekly-report, and monthly-report exports into '
                                          'statistics.',
  '适用：把一个或多个档案汇总表写入各公司独立档案表。': 'Write one or more archive summaries into separate company archive files.',
- '适用：把各保单人员清单整理成保险台账，并根据需求6的人力资源分析表做增减预警。': 'Build an insurance ledger from policy lists and compare against '
-                                            'the HR analysis workbook for enrollment changes.',
  '适用：把各社保账户缴费清单整理成社保明细表和社保汇总表。': 'Consolidate payment lists from social insurance accounts into detail and '
                                  'summary workbooks.',
  '适用：把项目异动表按记录日期分到对应月份汇总表。': 'Group project personnel changes into monthly summaries by record date.',
@@ -1871,7 +1825,7 @@ MESSAGES = {
                                               'automatically.',
  '业务核对': 'Business Review',
  '两项均留空不筛选月报': 'Leave both dates blank to include all monthly reports',
- '两项均留空按整月统计': 'Leave both dates blank to include the whole month',
+ '两项留空时按周报资料推算范围': 'Leave both blank to infer the range from the weekly reports',
  '为了保护历史原件，文件夹改名记录不能直接再次处理。': 'Rename batches cannot be rerun directly, to protect historical originals.',
  '主题': 'Theme',
  '人力资源分析表': 'HR Analysis Workbook',

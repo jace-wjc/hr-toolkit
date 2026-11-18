@@ -1978,7 +1978,9 @@ class QtControllerTests(unittest.TestCase):
         self.assertEqual(controller.workspaceModel.item_at(1)["name"], "名单.xlsx")
         controller.close()
 
-    def test_qt_tutorial_uses_the_complete_legacy_tk_content(self) -> None:
+    def test_qt_tutorial_includes_all_tool_modes_and_translated_guides(self) -> None:
+        from hr_toolkit.gui_qt.translations_en import MESSAGES
+
         controller = self.controller()
         groups = controller.tutorialGroups
         items = [item for group in groups for item in group["items"]]
@@ -1988,6 +1990,7 @@ class QtControllerTests(unittest.TestCase):
                 "社保明细与汇总",
                 "保险台账与预警",
                 "考勤与周月报",
+                "历史加班结转",
                 "工资表拆分",
                 "多月工资合并",
                 "异动表汇总",
@@ -1997,12 +2000,26 @@ class QtControllerTests(unittest.TestCase):
                 "档案表生成",
                 "员工资料打包",
                 "资料文件夹改名",
+                "项目、资料与结果",
+                "确认列名和工作表",
+                "使用 Sage 助手",
+                "设置、更新与下载",
             ],
         )
-        statistics = next(item for item in items if item["toolId"] == "data_statistics")
+        routes = {(item["toolId"], item["mode"]): item for item in items}
+        self.assertEqual(len(routes), len(items))
+        for group in groups:
+            self.assertIn(group["name"], MESSAGES)
+        for item in items:
+            with self.subTest(guide=item["label"]):
+                self.assertIn(item["label"], MESSAGES)
+                self.assertTrue(item["lines"])
+                for line in item["lines"]:
+                    self.assertIn(line["text"], MESSAGES)
+        statistics = routes["data_statistics", ""]
         copy = [line["text"] for line in statistics["lines"]]
-        self.assertIn("容易疑惑1：", copy[6])
-        self.assertIn("容易疑惑2：", copy[7])
+        self.assertTrue(any("提前交的下一期" in line for line in copy))
+        self.assertTrue(any("归属期超出范围的周报" in line for line in copy))
         self.assertEqual(statistics["lines"][-1]["style"], "warning")
         controller.close()
 
