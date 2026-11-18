@@ -22,6 +22,7 @@ from hr_toolkit import __version__
 from hr_toolkit.gui_qt.compat import QApplication, QQmlApplicationEngine, QUrl, QT_MAJOR, Qt, QObject, delete_qobject
 from hr_toolkit.gui_qt.controller import AppController, NAV_GROUPS
 from hr_toolkit.gui_qt.form_specs import variants_for
+from hr_toolkit.project_store import CATEGORY_RESULTS, CATEGORY_VISIBLE_NAMES
 from tests.test_rename_review import sample_plan
 if QT_MAJOR == 6:
     from PySide6.QtQml import QQmlExpression, QQmlEngine
@@ -150,7 +151,14 @@ def main():
                         window.grabWindow().save(str(destination / (theme + '-' + locale + '.png')))
 
             controller.presentation.setLanguage('en_US')
-            for dialog in ('helpDialog', 'regionCodeDialog', 'createProjectDialog', 'projectMenu'):
+            controller.selectTool('folder_rename')
+            js('helpDialog.open()'); wait(50)
+            # The tutorial names the on-disk folder verbatim so users can find it.
+            results_folder = f'{CATEGORY_VISIBLE_NAMES[CATEGORY_RESULTS]} folder'
+            assert any(results_folder in text for text in visible_texts()), results_folder
+            english_complete('helpDialog', (results_folder,))
+            js('helpDialog.close()')
+            for dialog in ('regionCodeDialog', 'createProjectDialog', 'projectMenu'):
                 js(dialog + '.open()'); wait(50)
                 english_complete(dialog, ('温州', '杭州', '宁波', '其他地区'))
                 js(dialog + '.close()')

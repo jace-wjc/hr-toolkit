@@ -162,3 +162,12 @@
 - 实际验证：经用户当次授权，在本机 Python 3.13.0 / PySide6 6.11.2 下依次运行附件准备、关闭时取消展示更新、连接测试、跨服务附件编辑与重试四个相关用例，4 项通过，结束后没有遗留 AI 工作线程。在两个异步用例中分别注入断言失败，均保留原始失败并确认线程已经等待退出。配置路径使用临时目录。
 - 语法与范围检查：修改文件通过 Python 3.8 语法解析和 Python 3.13 字节码编译，差异检查通过。Win7 / Qt 5、修复后的远程 CI 及完整模块尚未复验。
 - 防复发：后台函数中的“进入”或“收到结果”事件不代表线程已完全结束。测试释放 Qt 控制器或退出临时目录前，必须等待自己启动的真实线程退出，失败路径同样执行，并保留明确的超时失败。
+
+## 2026-11-18 英文教程的实际目录名被误判为漏译
+
+- 提交 `8f0bba1b2b42b91da03904663c6913a845db195a` 的第 1 次 CI 运行中，Windows Python 3.12（`134530374701`）和 Windows 7 兼容栈 Python 3.8（`134530374700`）均在单元测试步骤失败。 [CI 44223315496](https://github.com/jace-wjc/hr-toolkit/actions/runs/44223315496)
+- 最终失败用例为 `tests.test_presentation.PresentationTests.test_real_ui_themes_languages_dialogs_and_persistence`。`tests/qt_presentation_probe.py:155` 对 `helpDialog` 调用 `english_complete`，第 102 行因英文段落中的 `the batch's 处理结果 folder` 触发 `AssertionError`。两项任务均报告 `FAILED (failures=1)`，退出码为 1。
+- 教程提交 `63c5be4` 在英文批量改名指南中引用了磁盘上的实际目录名「处理结果」。项目存储通过 `CATEGORY_VISIBLE_NAMES[CATEGORY_RESULTS]` 定义该名称。原探针只识别了地区名称等已有例外，把这处目录名当成了未翻译文案。
+- 修复位于 `tests/qt_presentation_probe.py`。明确打开批量改名教程，从项目存储取得结果目录名，要求英文教程确实显示该名称，只在本处允许「目录名 + folder」这一短语，其余中文残留仍会使断言失败。生产教程和项目存储沿用原实现。
+- 本地通过 Python 3.8 语法解析、Python 3.12.14 内存编译和差异检查。原 UI 探针、修复后的远程 CI 和 Win7 实机待复验。
+- 更新英文教程时，按测试场景检查真实目录名、文件名和工作表名。只允许该场景确实需要的原样名称，保留对其他文案的翻译检查。
