@@ -544,13 +544,12 @@ ApplicationWindow {
                     bottomPadding: controller.updateReady ? padding : 15
                     Accessible.name: Ui.text(controller.updateReady ? "重启以更新，版本" + controller.updateVersion : "正在下载更新")
                     onClicked: controller.restartToUpdate()
-                    background: Item {
-                        Rectangle { anchors.fill: parent; anchors.topMargin: 2; anchors.bottomMargin: -2; color: Ui.color("overlay3"); radius: 10 }
-                        Rectangle {
-                            anchors.fill: parent; radius: 10
-                            color: !controller.updateReady ? Ui.color("surface3")
-                                                          : sidebarUpdateCard.down ? Ui.color("selection4") : root.primarySoft
-                        }
+                    background: Rectangle {
+                        radius: 10
+                        color: sidebarUpdateCard.down ? Ui.color("pressed")
+                            : sidebarUpdateCard.enabled && sidebarUpdateCard.hovered ? Ui.color("hover") : Ui.color("surface13")
+                        border.color: sidebarUpdateCard.visualFocus ? Ui.color("link6") : Ui.color("border8")
+
                         Rectangle {
                             id: updateTrack
                             readonly property bool verifying: controller.updatePhase === "verifying"
@@ -559,7 +558,7 @@ ApplicationWindow {
                             anchors.leftMargin: 9; anchors.rightMargin: 9; anchors.bottomMargin: 2
                             height: 3
                             radius: height / 2
-                            color: root.primarySoft
+                            color: Ui.color("border8")
                             visible: !controller.updateReady && (verifying || controller.updateProgress >= 0)
 
                             Rectangle {
@@ -567,35 +566,22 @@ ApplicationWindow {
                                 width: updateTrack.width * updateTrack.fraction
                                 height: parent.height
                                 radius: parent.radius
-                                color: root.primary
+                                color: Ui.color("link3")
                             }
-                        }
-                        Rectangle {
-                            anchors.fill: parent; radius: 10; color: "transparent"
-                            border.color: sidebarUpdateCard.visualFocus ? Ui.color("link6") : root.primary
-                            opacity: sidebarUpdateCard.visualFocus ? 1
-                                : !controller.updateReady ? 0.28 : sidebarUpdateCard.hovered ? 0.62 : 0.45
                         }
                     }
                     contentItem: RowLayout {
                         spacing: 8
-                        Rectangle {
+                        Image {
                             Layout.preferredWidth: 28; Layout.preferredHeight: 28
-                            radius: 7
-                            color: controller.updateReady ? root.primary : root.primarySoft
-                            ToolIcon {
-                                anchors.centerIn: parent
-                                width: 15; height: 15
-                                iconId: controller.updateReady ? "check" : "arrow_down"
-                                strokeColor: controller.updateReady ? Ui.color("onAccent") : root.primary
-                                lineWidth: 1.6
-                            }
+                            source: Qt.resolvedUrl("components/update-feather.png")
+                            fillMode: Image.PreserveAspectFit; smooth: true
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 1
                             Text {
                                 Layout.fillWidth: true; font.pixelSize: 13; font.weight: Font.DemiBold
-                                color: controller.updateReady ? root.primary : root.textMain
+                                color: controller.updateReady ? Ui.color("updateReadyText") : root.textMain
                                 text: Ui.text(controller.updateReady ? (controller.updateRestarting ? "正在重启…" : "重启以更新") : controller.updatePhase === "verifying" ? "正在检查更新文件…" : "正在下载更新")
                                 elide: Text.ElideRight
                             }
@@ -614,10 +600,12 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        ToolIcon {
+                        ThemedImage {
                             visible: controller.updateReady
                             Layout.preferredWidth: 14; Layout.preferredHeight: 14
-                            iconId: "chevron_right"; strokeColor: root.primary; lineWidth: 1.55
+                            source: Qt.resolvedUrl("components/arrow-right.png")
+                            sourceSize.width: 28; sourceSize.height: 28
+                            opacity: 0.45
                         }
                     }
                 }
