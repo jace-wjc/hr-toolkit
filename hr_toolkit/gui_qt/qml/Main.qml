@@ -2859,9 +2859,17 @@ ApplicationWindow {
                     anchors.margins: 8
                     clip: true
                     contentWidth: availableWidth
+                    contentHeight: tutorialGroupsColumn.implicitHeight
                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
+                    Binding {
+                        target: tutorialNavigation.contentItem
+                        property: "boundsBehavior"
+                        value: Flickable.StopAtBounds
+                    }
+
                     Column {
+                        id: tutorialGroupsColumn
                         width: tutorialNavigation.availableWidth
                         spacing: 8
                         Repeater {
@@ -2940,9 +2948,17 @@ ApplicationWindow {
                     anchors.margins: 18
                     clip: true
                     contentWidth: availableWidth
+                    contentHeight: tutorialTextColumn.implicitHeight
                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
+                    Binding {
+                        target: tutorialContentScroll.contentItem
+                        property: "boundsBehavior"
+                        value: Flickable.StopAtBounds
+                    }
+
                     Column {
+                        id: tutorialTextColumn
                         width: tutorialContentScroll.availableWidth
                         spacing: 11
                         Text {
